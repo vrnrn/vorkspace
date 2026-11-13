@@ -297,7 +297,7 @@ mod tests {
         cx: &mut gpui::TestAppContext,
     ) {
         let store = Arc::new(Mutex::new(
-            vorkspace_core::store::Store::open(Path::new(":memory:")).unwrap(),
+            vorkspace_core::store::Store::test(Path::new(":memory:")).unwrap(),
         ));
         cx.update(|cx| crate::accounts::install(store, cx));
         let center = cx.update(|cx| crate::accounts::get(cx).unwrap());

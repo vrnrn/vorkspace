@@ -132,7 +132,7 @@ fn ordinary_bot_work_survives_its_owning_window_closing_after_save(cx: &mut Test
     let peer = peer_window(&s, cx);
     let manager = peer.update(cx, |shell, _, _| shell.bot_manager()).unwrap();
     s.manager.update(cx, |bots, cx| {
-        bots.chats[&s.id].update(cx, |view, _| view.busy = true)
+        bots.chats[&s.id].update(cx, |view, _| view.set_running_for_test(true))
     });
     manager.update(cx, |bots, cx| {
         bots.enqueue_held(
@@ -217,6 +217,38 @@ fn confirming_reset_does_not_replace_a_chat_that_opened_in_another_window(cx: &m
 }
 
 #[gpui::test]
+fn detaching_a_chat_drops_its_subscriptions_even_if_a_pane_still_holds_it(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    close_bot_pane(&s, cx);
+    let old = s.manager.read_with(cx, |bots, _| bots.chats[&s.id].clone());
+    let weak = old.downgrade();
+    s.manager.update(cx, |bots, cx| {
+        bots.stop_chat(&s.id, cx);
+        bots.ensure_chat(&s.id, cx);
+    });
+    cx.run_until_parked();
+    let new = s.manager.read_with(cx, |bots, _| bots.chats[&s.id].clone());
+    assert_ne!(old.entity_id(), new.entity_id());
+
+    let transcript = old.read_with(cx, |chat, _| chat.transcript.clone());
+    transcript.update(cx, |_, cx| {
+        cx.emit(crate::transcript::BotResponseAction::Quote {
+            text: "Stale quote".into(),
+            window: s.window.into(),
+        });
+    });
+    cx.run_until_parked();
+    for chat in [&old, &new] {
+        chat.read_with(cx, |chat, cx| {
+            assert!(chat.input.read(cx).content.is_empty())
+        });
+    }
+    drop(old);
+    cx.run_until_parked();
+    assert!(weak.upgrade().is_none());
+}
+
+#[gpui::test]
 fn retiring_a_minion_revokes_the_permit_and_stops_its_chat_in_the_peer_window(
     cx: &mut TestAppContext,
 ) {
@@ -249,7 +281,7 @@ fn retiring_a_minion_revokes_the_permit_and_stops_its_chat_in_the_peer_window(
             .minion_permit(id, std::slice::from_ref(&s.project))
             .unwrap()
     });
-    view.update(cx, |view, _| view.busy = true);
+    view.update(cx, |view, _| view.set_running_for_test(true));
     let retired = call_as(
         &s,
         s.session,
@@ -261,7 +293,7 @@ fn retiring_a_minion_revokes_the_permit_and_stops_its_chat_in_the_peer_window(
     .unwrap();
     assert_eq!(retired["retired"], true);
     assert!(permit.run(|| Ok(())).is_err());
-    view.read_with(cx, |view, _| assert!(!view.busy));
+    view.read_with(cx, |view, _| assert!(!view.responding()));
 }
 
 #[gpui::test]
@@ -383,8 +415,8 @@ fn paged_chat(s: &Setup, cx: &mut TestAppContext, card: bool) -> Database {
     });
     cx.run_until_parked();
     assert!(chat.read_with(cx, |v, cx| v.bot_row_origin(cx) > 0));
-    s.manager.update(cx, |m, _| {
-        m.chats.insert(s.id.clone(), chat);
+    s.manager.update(cx, |m, cx| {
+        m.attach_chat(s.id.clone(), chat, cx);
     });
     store
 }
@@ -451,7 +483,7 @@ fn paged_visible_card_restores_then_refreshes_without_losing_history(cx: &mut Te
         assert_eq!(m.chats[&s.id].read(cx).bot_row_origin(cx), 0);
         m.refresh_cards(cx);
     });
-    cx.update(|cx| vorkspace_runtime::runtime::card_persistence::finish_for_test(cx));
+    cx.update(|cx| crate::card_saves::finish_for_test(cx));
     cx.run_until_parked();
     let db = locked(&store).unwrap();
     let session = db.sessions().unwrap()[0].id;
@@ -476,11 +508,11 @@ fn peer_delivery_is_durable_replies_once_and_accepts_the_next_message(cx: &mut T
         });
         m.save(cx);
         m.ensure_chat("peer-beta", cx);
-        m.chats[&s.id].update(cx, |v, _| v.busy = true);
+        m.chats[&s.id].update(cx, |v, _| v.set_running_for_test(true));
     });
     cx.run_until_parked();
     s.manager.update(cx, |m, cx| {
-        m.chats["peer-beta"].update(cx, |v, _| v.busy = true);
+        m.chats["peer-beta"].update(cx, |v, _| v.set_running_for_test(true));
     });
     let input = json!({"to":"Beta","message":"Review the approach"});
     let first = call(&s, "peer-one", "bots.send", input.clone(), cx)
@@ -501,7 +533,7 @@ fn peer_delivery_is_durable_replies_once_and_accepts_the_next_message(cx: &mut T
         assert_eq!(sent.peer.as_ref().unwrap().hop, 1);
         let recipient = m.chats["peer-beta"].clone();
         recipient.update(cx, |v, cx| {
-            v.busy = false;
+            v.complete_turn_for_test();
             v.bot_post("bot-system", sent.text.clone(), cx).unwrap();
             v.bot_post("assistant", "The approach is sound.".into(), cx)
                 .unwrap();
@@ -515,7 +547,7 @@ fn peer_delivery_is_durable_replies_once_and_accepts_the_next_message(cx: &mut T
         assert!(reply.text.ends_with("The approach is sound."));
         assert!(!reply.peer.as_ref().unwrap().expect_reply);
         assert_eq!(reply.peer.as_ref().unwrap().hop, 2);
-        recipient.update(cx, |v, _| v.busy = true);
+        recipient.update(cx, |v, _| v.set_running_for_test(true));
     });
     cx.run_until_parked();
     call(
@@ -571,7 +603,7 @@ fn submitted_peer_messages_pause_after_reopening_instead_of_replaying(cx: &mut T
         let message = &m.roster.get(&s.id).unwrap().outbox[0];
         assert!(message.error.as_deref().unwrap().contains("Interrupted"));
         assert_eq!(message.peer.as_ref().unwrap().hop, 2);
-        assert!(!m.chats[&s.id].read(cx).busy);
+        assert!(!m.chats[&s.id].read(cx).responding());
         assert!(!m.inflight.contains_key(&s.id));
     });
 }
@@ -660,7 +692,7 @@ fn cold_peer_recovery_loads_inactive_recipients_and_pauses_submitted_work(cx: &m
                 !m.chats.contains_key("unrelated-idle"),
                 "idle Bots need no new owner"
             );
-            assert!(!m.chats[&s.id].read(cx).busy);
+            assert!(!m.chats[&s.id].read(cx).responding());
             assert!(!m.inflight.contains_key(&s.id));
             let message = m
                 .roster
@@ -749,7 +781,7 @@ fn usage_resume_preserves_uncertain_peer_requests_until_explicit_retry(cx: &mut 
             sent_at: None,
             attachments: Vec::new(),
         });
-        m.chats[&s.id].update(cx, |v, _| v.busy = true);
+        m.chats[&s.id].update(cx, |v, _| v.set_running_for_test(true));
         m.save(cx);
         result
     });
@@ -783,10 +815,10 @@ fn usage_resume_preserves_uncertain_peer_requests_until_explicit_retry(cx: &mut 
     s.manager.update(cx, |m, cx| {
         m.chats[&s.id].update(cx, |v, cx| {
             v.settings.usage_limit = Some(Default::default());
-            v.busy = false;
+            v.set_running_for_test(false);
             v.resume_usage(cx);
             // Hold execution before deferred recovery events are delivered.
-            v.busy = true;
+            v.set_running_for_test(true);
         })
     });
     cx.run_until_parked();
@@ -859,7 +891,11 @@ fn peer_history_app_calls_page_public_text_without_loading_a_peer_conversation(
                 },
                 vorkspace_core::transcript::Row {
                     role: "tool".into(),
-                    text: "Private output".repeat(100_000),
+                    text: serde_json::to_string(&vorkspace_core::tool::ToolCall {
+                        output: "Private output".repeat(10_000),
+                        ..vorkspace_core::tool::ToolCall::new("private", "Read")
+                    })
+                    .unwrap(),
                     first: true,
                     sent_at: None,
                 },
@@ -936,7 +972,7 @@ fn stopped_peer_turn_keeps_its_request_and_never_forwards_a_late_partial_reply(
             v.bot_post("bot-system", sent.text.clone(), cx).unwrap();
             v.bot_post("assistant", "Unfinished answer".into(), cx)
                 .unwrap();
-            v.busy = true;
+            v.set_running_for_test(true);
         });
         m.inflight.insert(s.id.clone(), sent);
         m.save(cx);
@@ -1034,10 +1070,8 @@ fn bot_errors_use_cards_without_moving_content(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn saved_desktop_bot_opens_in_actual_manager_without_replacing_its_conversation(
-    cx: &mut TestAppContext,
-) {
-    let db = Store::open_vorkspace(std::path::Path::new(":memory:")).unwrap();
+fn saved_bot_opens_in_actual_manager_without_replacing_its_conversation(cx: &mut TestAppContext) {
+    let db = Store::test(std::path::Path::new(":memory:")).unwrap();
     let session = db.create("codex", "/saved-project").unwrap();
     let original = db.persisted_session_id(session.id).unwrap();
     let settings = Settings {
@@ -1293,7 +1327,7 @@ fn setup_bot(cx: &mut TestAppContext) -> Setup {
     let dir = std::env::temp_dir().join(format!("native-bots-{}", bot::new_id()));
     std::fs::create_dir_all(&dir).unwrap();
     let project = dir.to_string_lossy().to_string();
-    let store = Arc::new(Mutex::new(Store::open(&dir.join("native.sqlite")).unwrap()));
+    let store = Arc::new(Mutex::new(Store::test(&dir.join("native.sqlite")).unwrap()));
     let db = store.clone();
     let cwd = project.clone();
     let saved: Option<String> = None;
@@ -1306,7 +1340,6 @@ fn setup_bot(cx: &mut TestAppContext) -> Setup {
     cx.run_until_parked();
     let manager = window
         .update(cx, |shell, _, cx| {
-            shell.workspace.right_panel_open = true;
             cx.notify();
             shell.bot_manager()
         })
@@ -1376,13 +1409,20 @@ fn send_after_recovery_choice(cx: &mut TestAppContext, recovered: bool) {
             .unwrap();
     });
     cx.run_until_parked();
-    let source = chat.read_with(cx, |view, cx| view.bot_rows(cx).to_vec());
+    let source = locked(&s.store).unwrap().load(s.session).unwrap().rows;
     let mut settings = chat.read_with(cx, |view, _| view.settings.clone());
     // Exercise admission and acknowledgement without starting a provider.
     settings.usage_limit = Some(Default::default());
     {
         let db = locked(&s.store).unwrap();
         db.configure_agent(s.session, "claude", &settings).unwrap();
+        assert!(
+            db.agent_settings(s.session)
+                .unwrap()
+                .unwrap()
+                .usage_limit
+                .is_some()
+        );
         let mut payload = json!({
             "cwd": s.project, "text": "saved input", "selectionStart": 11, "selectionEnd": 11,
             "attachments": [], "mcpTags": [],
@@ -1464,8 +1504,15 @@ fn send_after_recovery_choice(cx: &mut TestAppContext, recovered: bool) {
         assert_eq!(outbox[0].id == "recovered-send", recovered);
         assert_eq!(outbox[0].text, expected);
     });
-    let db = Store::open(&PathBuf::from(&s.project).join("native.sqlite")).unwrap();
+    let db = Store::test(&PathBuf::from(&s.project).join("native.sqlite")).unwrap();
     assert!(db.composer_recoveries(s.session).unwrap().is_empty());
+    assert!(
+        db.agent_settings(s.session)
+            .unwrap()
+            .unwrap()
+            .usage_limit
+            .is_some()
+    );
     assert_eq!(db.load(s.session).unwrap().rows, source);
     let roster = Roster::load(&db).unwrap();
     assert_eq!(
@@ -1525,7 +1572,7 @@ fn saved_draft_outbox_identity_survives_restart_and_is_not_enqueued_twice(cx: &m
     });
     cx.run_until_parked();
     assert!(!s.manager.read_with(cx, |m, _| m.chats.contains_key(&s.id)));
-    let db = Store::open(Path::new(&s.project).join("native.sqlite").as_path()).unwrap();
+    let db = Store::test(Path::new(&s.project).join("native.sqlite").as_path()).unwrap();
     let roster = Roster::load(&db).unwrap();
     let queued: Vec<_> = roster
         .get(&s.id)
@@ -1548,7 +1595,7 @@ fn saved_draft_outbox_identity_survives_restart_and_is_not_enqueued_twice(cx: &m
     db.save_setting(&format!("bot-delivered:{}:{}", s.session, draft.id), "1")
         .unwrap();
     drop(db);
-    let reopened = Store::open(Path::new(&s.project).join("native.sqlite").as_path()).unwrap();
+    let reopened = Store::test(Path::new(&s.project).join("native.sqlite").as_path()).unwrap();
     assert!(reopened.follow_ups(s.session).unwrap().draft.is_none());
     s.manager
         .update(cx, |manager, cx| manager.ensure_chat(&s.id, cx));
@@ -1602,8 +1649,9 @@ fn failed_outbox_write_preserves_saved_draft_and_retry_steers_only_once(cx: &mut
             },
         );
     });
-    let conn = rusqlite::Connection::open(Path::new(&s.project).join("native.sqlite")).unwrap();
-    conn.execute_batch("CREATE TRIGGER fail_bot_roster BEFORE UPDATE ON native_settings WHEN NEW.key = 'bot-roster' BEGIN SELECT RAISE(FAIL, 'simulated outbox failure'); END;").unwrap();
+    locked(&s.store)
+        .unwrap()
+        .fail_setting_for_test(Some(("bot-roster", "simulated outbox failure")));
     let submit = |manager: &mut Bots, cx: &mut Context<Bots>| {
         manager.chats[&s.id].update(cx, |_, cx| {
             cx.emit(crate::conversation::BotSubmitted {
@@ -1638,7 +1686,7 @@ fn failed_outbox_write_preserves_saved_draft_and_retry_steers_only_once(cx: &mut
                 .contains("simulated outbox failure")
         )
     });
-    conn.execute_batch("DROP TRIGGER fail_bot_roster").unwrap();
+    locked(&s.store).unwrap().fail_setting_for_test(None);
     s.manager.update(cx, submit);
     cx.run_until_parked();
     let control = received.try_recv().expect("persisted retry should steer");
@@ -2122,8 +2170,7 @@ fn bot_work_disclosure_stays_in_chat_and_leaves_details_on_their_page(cx: &mut T
     let s = setup(cx);
     vorkspace_ui::clock::use_test_clock(cx);
     s.window
-        .update(cx, |shell, window, cx| {
-            shell.workspace.right_panel_open = false;
+        .update(cx, |_, window, cx| {
             s.manager.update(cx, |manager, cx| {
                 manager.settings = None;
                 manager.focus_active(window, cx);
@@ -2169,11 +2216,7 @@ fn bot_work_disclosure_stays_in_chat_and_leaves_details_on_their_page(cx: &mut T
         assert_eq!(visual.debug_bounds("tool-2").is_some(), open);
         assert!(visual.debug_bounds("bot-activity").is_none());
         s.window
-            .update(visual, |shell, _, cx| {
-                assert!(
-                    !shell.workspace.right_panel_open,
-                    "disclosure must not open the sidebar"
-                );
+            .update(visual, |_, _, cx| {
                 let manager = s.manager.read(cx);
                 assert!(manager.open_islands.is_empty());
                 assert!(manager.route.is_none());
@@ -2301,7 +2344,7 @@ fn app_actions_are_project_scoped_and_mutation_retries_are_idempotent(cx: &mut T
         assert_eq!(m.roster.get(&s.id).unwrap().launches.len(), 1);
         let view = m.owner.session_entity(child, cx).unwrap();
         assert_eq!(view.read(cx).input.read(cx).content, "Review the project");
-        assert!(!view.read(cx).busy);
+        assert!(!view.read(cx).responding());
         assert!(m.hidden_session(child));
     });
 }
@@ -2319,7 +2362,6 @@ fn selected_working_session(s: &Setup, cx: &mut TestAppContext) -> i64 {
                     summary,
                     vorkspace_core::agent::Settings::default(),
                     String::new(),
-                    true,
                     cx,
                 )
                 .unwrap();
@@ -2329,8 +2371,8 @@ fn selected_working_session(s: &Setup, cx: &mut TestAppContext) -> i64 {
                 .unwrap()
                 .update(cx, |view, cx| {
                     // Exercise activity projection without starting a provider.
-                    view.busy = true;
-                    cx.emit(SessionChanged);
+                    view.set_running_for_test(true);
+                    cx.emit(SessionChanged::Loaded);
                     cx.notify();
                 });
         })
@@ -2389,10 +2431,16 @@ fn app_group_publication_during_start_preserves_launches_and_idempotent_receipts
             .update(cx, |shell, _, cx| {
                 assert_eq!(shell.bot_groups(&s.project), groups);
                 assert_eq!(shell.workspace.active, Some(working));
-                assert!(shell.bot_session_entity(working).unwrap().read(cx).busy);
+                assert!(
+                    shell
+                        .bot_session_entity(working)
+                        .unwrap()
+                        .read(cx)
+                        .responding()
+                );
                 let view = shell.bot_session_entity(child).unwrap();
                 assert_eq!(view.read(cx).input.read(cx).content, request);
-                assert!(!view.read(cx).busy);
+                assert!(!view.read(cx).responding());
             })
             .unwrap();
     }
@@ -2419,7 +2467,13 @@ fn app_group_publication_during_folder_move_keeps_selected_work(cx: &mut TestApp
         .update(cx, |shell, _, cx| {
             assert_eq!(shell.bot_groups(&s.project), groups);
             assert_eq!(shell.workspace.active, Some(working));
-            assert!(shell.bot_session_entity(working).unwrap().read(cx).busy);
+            assert!(
+                shell
+                    .bot_session_entity(working)
+                    .unwrap()
+                    .read(cx)
+                    .responding()
+            );
         })
         .unwrap();
 }
@@ -2583,7 +2637,7 @@ fn background_delegation_keeps_controls_when_hidden_from_the_sidebar(cx: &mut Te
     );
     // Hold the downstream provider through its existing usage-limit gate; these
     // controls exercise real delegation without starting any external process.
-    assert!(!view.read_with(cx, |view, _| view.busy));
+    assert!(!view.read_with(cx, |view, _| view.responding()));
     assert!(
         call(
             &s,
@@ -2662,11 +2716,7 @@ fn cold_background_delegation_controls_do_not_require_a_visible_or_live_view(
             cwd: child.cwd,
             title: child.title,
             harness: child.provider,
-            model: None,
-            origin_turn: 0,
-            notify_on_complete: false,
-            completed: false,
-            dismissed: false,
+            ..Default::default()
         });
         manager.roster.save(&locked(&s.store).unwrap()).unwrap();
         assert!(manager.hidden_session(id));
@@ -3866,7 +3916,7 @@ fn claimed_outbox_message_is_presented_as_uncertain_before_retry(cx: &mut TestAp
     });
     cx.run_until_parked();
     assert!(!s.manager.read_with(cx, |m, _| m.chats.contains_key(&s.id)));
-    let other = Store::open(&Path::new(&s.project).join("native.sqlite")).unwrap();
+    let other = Store::test(&Path::new(&s.project).join("native.sqlite")).unwrap();
     let queued = Roster::load(&other)
         .unwrap()
         .get(&s.id)
@@ -3894,7 +3944,7 @@ fn claimed_outbox_message_is_presented_as_uncertain_before_retry(cx: &mut TestAp
             .unwrap();
         assert!(message.error.as_deref().unwrap().contains("uncertain"));
     });
-    let reopened = Store::open(&Path::new(&s.project).join("native.sqlite")).unwrap();
+    let reopened = Store::test(&Path::new(&s.project).join("native.sqlite")).unwrap();
     assert!(
         !reopened
             .claim_bot_message(&s.id, &queued, "later-owner")
@@ -4103,14 +4153,8 @@ fn minion_actor_keeps_team_identity_but_uses_parent_storage_and_rejects_foreign_
             .unwrap()
             .paused
     );
-    let saved: vorkspace_core::follow_up::State = serde_json::from_str(
-        &locked(&s.store)
-            .unwrap()
-            .setting(&format!("follow-up:{session}"))
-            .unwrap()
-            .unwrap(),
-    )
-    .unwrap();
+    let path = locked(&s.store).unwrap().database_path().to_owned();
+    let saved = Store::test(&path).unwrap().follow_ups(session).unwrap();
     assert!(saved.paused);
     assert_eq!(saved.messages[0].text, "Preserve this legacy work");
     assert!(

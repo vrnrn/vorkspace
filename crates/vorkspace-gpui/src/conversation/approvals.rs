@@ -34,7 +34,7 @@ impl Conversation {
                 can_remember: false,
             });
         }
-        cx.emit(SessionChanged);
+        cx.emit(SessionChanged::Attention);
         cx.notify();
     }
 

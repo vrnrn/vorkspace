@@ -25,8 +25,6 @@ pub struct CheckpointFile {
     pub status: String,
     pub additions: i64,
     pub deletions: i64,
-    /// True when an exact recorded before/after diff is available.
-    pub exact: bool,
     /// False when restoring could overwrite a change made outside this session.
     pub undoable: bool,
 }
@@ -34,7 +32,63 @@ pub struct CheckpointFile {
 #[derive(Debug, Clone, Default, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct CheckpointStatus {
+    #[serde(skip)]
+    pub turn_id: Option<String>,
     pub files: Vec<CheckpointFile>,
+}
+
+/// A recorded review keeps its original tree pair across later turns.
+pub struct RecordedReview {
+    root: PathBuf,
+    turn: RecordedTurn,
+}
+
+impl RecordedReview {
+    pub fn files(&self) -> Result<Vec<CheckpointFile>, String> {
+        Ok(changes(&self.root, &self.turn, ".")?
+            .into_iter()
+            .filter(|change| self.includes(&change.relative))
+            .map(|change| checkpoint_file(&self.root, change, false))
+            .collect())
+    }
+
+    pub fn file(&self, relative: &str) -> Result<crate::scm::FileDiff, String> {
+        let relative = resolve_turn_path(relative)?;
+        if !self.includes(&relative) {
+            return Err("This file did not change during the recorded turn".into());
+        }
+        self.read_file(&relative)
+    }
+
+    fn read_file(&self, relative: &str) -> Result<crate::scm::FileDiff, String> {
+        let change = changes(&self.root, &self.turn, relative)?
+            .into_iter()
+            .find(|change| change.relative == relative)
+            .ok_or("This file did not change during the recorded turn")?;
+        let original = read_blob(&self.root, change.before.as_ref())?;
+        let current = read_blob(&self.root, change.after.as_ref())?;
+        let too_large =
+            matches!(original, FileState::Skipped) || matches!(current, FileState::Skipped);
+        let binary = state_is_binary(&original) || state_is_binary(&current);
+        let (original, current) = if too_large || binary {
+            (String::new(), String::new())
+        } else {
+            (state_text(original), state_text(current))
+        };
+        Ok(crate::scm::FileDiff {
+            path: path_to_js(&self.root.join(relative)),
+            relative: relative.to_owned(),
+            status: change.status,
+            original,
+            current,
+            binary,
+            too_large,
+        })
+    }
+
+    fn includes(&self, relative: &str) -> bool {
+        !self.turn.shared || self.turn.edited.contains(relative)
+    }
 }
 
 enum FileState {
@@ -44,7 +98,7 @@ enum FileState {
 }
 
 /// Per-session recordings under the app's data directory. Every operation
-/// runs under one lock, as the Tauri `CheckpointStore` did.
+/// runs under one lock.
 #[derive(Clone)]
 pub struct Store {
     root: PathBuf,
@@ -63,7 +117,7 @@ pub fn store() -> Option<&'static Store> {
 }
 
 impl Store {
-    pub fn new(root: PathBuf) -> Self {
+    pub(crate) fn new(root: PathBuf) -> Self {
         Self {
             root,
             gate: Arc::new(Mutex::new(())),
@@ -85,13 +139,23 @@ impl Store {
         self.root.join(session_id)
     }
 
-    /// Successful structured edits by this session's running turn.
+    /// Recover edit evidence for an interrupted turn before admitting its successor.
     pub fn capture(&self, session_id: &str, cwd: &str, paths: &[String]) -> Result<(), String> {
         validate_id(session_id, "session")?;
-        if paths.is_empty() {
-            return Ok(());
-        }
-        self.capture_turn_paths(session_id, cwd, paths).map(|_| ())
+        self.capture_turn_paths(session_id, cwd, None, paths)
+    }
+
+    /// Attach successful structured edits to their admitted turn.
+    pub fn capture_current(
+        &self,
+        session_id: &str,
+        cwd: &str,
+        id: &str,
+        paths: &[String],
+    ) -> Result<(), String> {
+        validate_id(session_id, "session")?;
+        validate_id(id, "turn")?;
+        self.capture_turn_paths(session_id, cwd, Some(id), paths)
     }
 
     pub fn status(&self, session_id: &str, cwd: &str) -> Result<CheckpointStatus, String> {
@@ -99,74 +163,86 @@ impl Store {
         Ok(self.turn_status(session_id, cwd)?.unwrap_or_default())
     }
 
-    /// A presentation-only read, without persisting newly resolved paths.
-    pub fn status_readonly(&self, session_id: &str, cwd: &str) -> Result<CheckpointStatus, String> {
-        validate_id(session_id, "session")?;
-        Ok(self
-            .turn_status_inner(session_id, cwd, false)?
-            .unwrap_or_default())
-    }
-
-    /// Native UI handles and desktop UUIDs can name the same conversation.
-    /// Read its newest recording in place, without migrating either directory.
-    pub fn status_readonly_aliases(
-        &self,
-        session_ids: &[String],
-        cwd: &str,
-    ) -> Result<CheckpointStatus, String> {
-        for id in session_ids {
-            validate_id(id, "session")?;
-        }
-        let latest = session_ids
-            .iter()
-            .enumerate()
-            .filter_map(|(index, id)| {
-                let modified = std::fs::metadata(self.session_dir(id).join("turn-review.json"))
-                    .ok()?
-                    .modified()
-                    .ok()?;
-                Some((modified, std::cmp::Reverse(index), id))
-            })
-            .max_by_key(|(modified, index, _)| (*modified, *index));
-        latest.map_or_else(
-            || Ok(CheckpointStatus::default()),
-            |(_, _, id)| self.status_readonly(id, cwd),
-        )
-    }
-
+    /// Reads the complete saved tree pair. Review surfaces use the attributed
+    /// paths exposed by `RecordedReview`.
     pub fn file_diff(
         &self,
         session_id: &str,
         cwd: &str,
         relative: &str,
     ) -> Result<crate::scm::FileDiff, String> {
+        let relative = resolve_turn_path(relative)?;
+        self.open_recorded_review(session_id, cwd, None)?
+            .read_file(&relative)
+    }
+
+    pub fn open_recorded_review(
+        &self,
+        session_id: &str,
+        cwd: &str,
+        expected: Option<&str>,
+    ) -> Result<RecordedReview, String> {
         validate_id(session_id, "session")?;
-        self.turn_file_diff(session_id, cwd, relative)?
-            .ok_or_else(|| "Session changes are no longer available".into())
+        if let Some(id) = expected {
+            validate_id(id, "turn")?;
+            let path = self
+                .session_dir(session_id)
+                .join("turns")
+                .join(format!("{id}.json"));
+            match std::fs::read(path) {
+                Ok(bytes) => {
+                    let saved: SavedTurn =
+                        serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+                    let root =
+                        std::fs::canonicalize(project_root(cwd)?).map_err(|e| e.to_string())?;
+                    if saved.cwd != path_to_js(&root) || saved.turn.id != id {
+                        return Err("The recording belongs to a different checkout or turn".into());
+                    }
+                    validate_completed_turn(&saved.turn)?;
+                    return Ok(RecordedReview {
+                        root,
+                        turn: saved.turn,
+                    });
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error.to_string()),
+            }
+        }
+        let review = self
+            .matching_turn_review(session_id, cwd)?
+            .ok_or("Session changes are no longer available")?;
+        let turn = completed_turn(&review)?;
+        if expected.is_some_and(|id| turn.id != id) {
+            return Err("Session changes are no longer available".into());
+        }
+        Ok(RecordedReview {
+            root: PathBuf::from(review.cwd),
+            turn: review.latest.expect("completed turn"),
+        })
     }
 
     pub fn undo(
         &self,
         session_id: &str,
         cwd: &str,
+        expected: &str,
         relative: Option<&str>,
     ) -> Result<CheckpointStatus, String> {
         validate_id(session_id, "session")?;
-        Ok(self
-            .undo_turn(session_id, cwd, relative)?
-            .unwrap_or_default())
+        validate_id(expected, "turn")?;
+        self.exclusive(|store| store.undo_turn(session_id, cwd, expected, relative))
     }
 
     pub fn keep(
         &self,
         session_id: &str,
         cwd: &str,
+        expected: &str,
         relative: Option<&str>,
     ) -> Result<CheckpointStatus, String> {
         validate_id(session_id, "session")?;
-        Ok(self
-            .keep_turn(session_id, cwd, relative)?
-            .unwrap_or_default())
+        validate_id(expected, "turn")?;
+        self.exclusive(|store| store.keep_turn(session_id, cwd, expected, relative))
     }
 
     pub fn forget(&self, session_id: &str) -> Result<(), String> {
@@ -305,14 +381,21 @@ impl Store {
         &self,
         session_id: &str,
         cwd: &str,
+        expected: Option<&str>,
         paths: &[String],
-    ) -> Result<bool, String> {
+    ) -> Result<(), String> {
+        if paths.is_empty() {
+            return Ok(());
+        }
         let Some(mut review) = self.matching_turn_review(session_id, cwd)? else {
-            return Ok(false);
+            return Ok(());
         };
-        let Some(active) = review.active.as_mut() else {
-            // Late tool events must not change the last completed turn.
-            return Ok(true);
+        let Some(active) = review
+            .active
+            .as_mut()
+            .filter(|turn| expected.is_none_or(|id| turn.id == id))
+        else {
+            return Ok(());
         };
         let workspace = project_root(cwd)?;
         let mut dirty = false;
@@ -323,100 +406,6 @@ impl Store {
         }
         if dirty {
             write_review(&self.session_dir(session_id), &review)?;
-        }
-        Ok(true)
-    }
-
-    /// Repair the interrupted-turn state left by versions that replaced its
-    /// baseline on Continue. Only transcript-confirmed edits can be recovered.
-    pub fn recover_orphaned_turn(
-        &self,
-        session_id: &str,
-        cwd: &str,
-        paths: &[String],
-    ) -> Result<(), String> {
-        if paths.is_empty() {
-            return Ok(());
-        }
-        let Some(mut review) = self.matching_turn_review(session_id, cwd)? else {
-            return Ok(());
-        };
-        if review.active.is_some() {
-            return Ok(());
-        }
-        let turn = completed_turn(&review)?;
-        let root = Path::new(&review.cwd);
-        if !turn.edited.is_empty() || !changes(root, turn)?.is_empty() {
-            return Ok(());
-        }
-        let workspace = project_root(cwd)?;
-        let edited: BTreeSet<_> = paths
-            .iter()
-            .filter_map(|path| resolve_edit_path(&workspace, root, path).ok())
-            .collect();
-        if edited.is_empty() {
-            return Ok(());
-        }
-        let prefix = format!("refs/vorkspace/checkpoints/{session_id}/");
-        let refs = run_git(
-            root,
-            &[
-                "for-each-ref",
-                "--sort=-committerdate",
-                "--format=%(refname) %(objectname)",
-                &prefix,
-            ],
-        )?;
-        let refs: Vec<_> = String::from_utf8_lossy(&refs)
-            .lines()
-            .filter_map(|line| {
-                line.split_once(' ')
-                    .map(|(name, oid)| (name.to_string(), oid.to_string()))
-            })
-            .collect();
-        let names: HashSet<_> = refs.iter().map(|(name, _)| name.as_str()).collect();
-        let dir = self.session_dir(session_id);
-        for (reference, before) in &refs {
-            let Some(id) = reference
-                .strip_prefix(&prefix)
-                .and_then(|name| name.strip_suffix("/before"))
-            else {
-                continue;
-            };
-            if id == turn.id
-                || names.contains(turn_ref(session_id, id, "after").as_str())
-                || dir.join("turns").join(format!("{id}.json")).exists()
-            {
-                continue;
-            }
-            validate_id(id, "turn")?;
-            let mut recovered = turn.clone();
-            recovered.before = Some(before.clone());
-            recovered.edited = edited.clone();
-            // The orphan lost its original HEAD and overlap metadata. Review
-            // remains available, but recovery must never make Undo available.
-            recovered.head = None;
-            recovered.shared = true;
-            if !changes(root, &recovered)?
-                .iter()
-                .any(|change| edited.contains(&change.relative))
-            {
-                continue;
-            }
-            let mut archived = recovered.clone();
-            archived.id = id.into();
-            for saved in [archived, recovered.clone()] {
-                write_json(
-                    &dir.join("turns").join(format!("{}.json", saved.id)),
-                    &SavedTurn {
-                        cwd: review.cwd.clone(),
-                        repo: review.repo.clone(),
-                        turn: saved,
-                    },
-                )?;
-            }
-            review.latest = Some(recovered);
-            return write_review(&dir, &review);
         }
         Ok(())
     }
@@ -475,7 +464,7 @@ impl Store {
         let head = run_git(&root, &["rev-parse", "--verify", "HEAD"])
             .ok()
             .map(|bytes| String::from_utf8_lossy(&bytes).trim().to_string());
-        let recorded = changes(&root, turn)?;
+        let mut recorded = changes(&root, turn, ".")?;
         let resolved = resolved_turn_paths(&root, turn, &recorded, head.as_deref())?;
         if !resolved.is_empty() {
             // Dismiss accepted work durably so later edits cannot resurrect
@@ -486,62 +475,24 @@ impl Store {
             }
         }
         let turn = completed_turn(&review)?;
-        let can_restore =
-            !turn.shared && head == turn.head && self.active_turns(&root, session_id)?.is_empty();
+        recorded.retain(|change| {
+            !turn.dismissed.contains(&change.relative)
+                && (!turn.shared || turn.edited.contains(&change.relative))
+        });
+        let can_restore = !recorded.is_empty()
+            && !turn.shared
+            && head == turn.head
+            && self.active_turns(&root, session_id)?.is_empty();
         let files = recorded
             .into_iter()
-            .filter(|change| !turn.dismissed.contains(&change.relative))
-            .filter(|change| !turn.shared || turn.edited.contains(&change.relative))
             .map(|change| {
                 let undoable = can_restore && restorable(&root, &change);
-                CheckpointFile {
-                    path: path_to_js(&root.join(&change.relative)),
-                    relative: change.relative,
-                    status: change.status,
-                    additions: change.additions,
-                    deletions: change.deletions,
-                    exact: true,
-                    undoable,
-                }
+                checkpoint_file(&root, change, undoable)
             })
             .collect();
-        Ok(Some(CheckpointStatus { files }))
-    }
-
-    fn turn_file_diff(
-        &self,
-        session_id: &str,
-        cwd: &str,
-        relative: &str,
-    ) -> Result<Option<crate::scm::FileDiff>, String> {
-        let Some(review) = self.matching_turn_review(session_id, cwd)? else {
-            return Ok(None);
-        };
-        let turn = completed_turn(&review)?;
-        let root = Path::new(&review.cwd);
-        let relative = resolve_turn_path(relative)?;
-        let change = changes(root, turn)?
-            .into_iter()
-            .find(|change| change.relative == relative)
-            .ok_or("This file did not change during the recorded turn")?;
-        let original = read_blob(root, change.before.as_ref())?;
-        let current = read_blob(root, change.after.as_ref())?;
-        let too_large =
-            matches!(original, FileState::Skipped) || matches!(current, FileState::Skipped);
-        let binary = state_is_binary(&original) || state_is_binary(&current);
-        let (original, current) = if too_large || binary {
-            (String::new(), String::new())
-        } else {
-            (state_text(original), state_text(current))
-        };
-        Ok(Some(crate::scm::FileDiff {
-            path: path_to_js(&root.join(&relative)),
-            relative,
-            status: change.status,
-            original,
-            current,
-            binary,
-            too_large,
+        Ok(Some(CheckpointStatus {
+            turn_id: Some(turn.id.clone()),
+            files,
         }))
     }
 
@@ -549,35 +500,41 @@ impl Store {
         &self,
         session_id: &str,
         cwd: &str,
+        expected: &str,
         relative: Option<&str>,
-    ) -> Result<Option<CheckpointStatus>, String> {
-        let Some(mut review) = self.matching_turn_review(session_id, cwd)? else {
-            return Ok(None);
-        };
-        let recorded = completed_turn(&review)?;
+    ) -> Result<CheckpointStatus, String> {
+        let mut review = self
+            .matching_turn_review(session_id, cwd)?
+            .ok_or("This checkpoint is no longer current")?;
+        let recorded = expected_turn(&review, expected)?;
         let root = Path::new(&review.cwd);
         let dismissed = match relative {
             Some(relative) => vec![resolve_turn_path(relative)?],
-            None => changes(root, recorded)?
+            None => changes(root, recorded, ".")?
                 .into_iter()
                 .map(|change| change.relative)
                 .collect(),
         };
         review.latest.as_mut().unwrap().dismissed.extend(dismissed);
         write_review(&self.session_dir(session_id), &review)?;
-        self.turn_status(session_id, cwd)
+        self.status(session_id, cwd)
     }
 
     fn undo_turn(
         &self,
         session_id: &str,
         cwd: &str,
+        expected: &str,
         relative: Option<&str>,
-    ) -> Result<Option<CheckpointStatus>, String> {
-        let Some(review) = self.matching_turn_review(session_id, cwd)? else {
-            return Ok(None);
-        };
-        let status = self.turn_status(session_id, cwd)?.unwrap();
+    ) -> Result<CheckpointStatus, String> {
+        let review = self
+            .matching_turn_review(session_id, cwd)?
+            .ok_or("This checkpoint is no longer current")?;
+        let turn = expected_turn(&review, expected)?;
+        let status = self.status(session_id, cwd)?;
+        if status.turn_id.as_deref() != Some(expected) {
+            return Err("This checkpoint is no longer current".into());
+        }
         let root = Path::new(&review.cwd);
         let relative = relative.map(resolve_turn_path).transpose()?;
         let selected: Vec<_> = status
@@ -592,9 +549,8 @@ impl Store {
         if selected.iter().any(|file| !file.undoable) {
             return Err("Cannot safely undo this turn: the workspace was shared, the branch moved, or a recorded file changed afterward".into());
         }
-        let turn = completed_turn(&review)?;
         let selected: HashSet<_> = selected.iter().map(|file| file.relative.as_str()).collect();
-        let changes: Vec<_> = changes(root, turn)?
+        let changes: Vec<_> = changes(root, turn, ".")?
             .into_iter()
             .filter(|change| selected.contains(change.relative.as_str()))
             .collect();
@@ -620,7 +576,7 @@ impl Store {
                 std::fs::remove_file(root.join(&change.relative)).map_err(|e| e.to_string())?;
             }
         }
-        self.keep_turn(session_id, cwd, relative.as_deref())
+        self.keep_turn(session_id, cwd, expected, relative.as_deref())
     }
 
     fn forget_turns(&self, session_id: &str) -> Result<(), String> {
@@ -666,16 +622,32 @@ fn completed_turn(review: &TurnReview) -> Result<&RecordedTurn, String> {
         .as_ref()
         .or(review.latest.as_ref())
         .ok_or("No recorded turn is available")?;
+    if review.active.is_some() {
+        if let Some(error) = &turn.error {
+            return Err(format!("Could not record workspace changes: {error}"));
+        }
+        return Err("The turn ended without a final workspace checkpoint".into());
+    }
+    validate_completed_turn(turn)?;
+    Ok(turn)
+}
+
+fn expected_turn<'a>(review: &'a TurnReview, expected: &str) -> Result<&'a RecordedTurn, String> {
+    let turn = completed_turn(review)?;
+    if turn.id != expected {
+        return Err("This checkpoint is no longer current".into());
+    }
+    Ok(turn)
+}
+
+fn validate_completed_turn(turn: &RecordedTurn) -> Result<(), String> {
     if let Some(error) = &turn.error {
         return Err(format!("Could not record workspace changes: {error}"));
-    }
-    if review.active.is_some() {
-        return Err("The turn ended without a final workspace checkpoint".into());
     }
     if turn.before.is_none() || turn.after.is_none() {
         return Err("The turn's workspace checkpoints are incomplete".into());
     }
-    Ok(turn)
+    Ok(())
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -723,6 +695,17 @@ struct Change {
     status: String,
     additions: i64,
     deletions: i64,
+}
+
+fn checkpoint_file(root: &Path, change: Change, undoable: bool) -> CheckpointFile {
+    CheckpointFile {
+        path: path_to_js(&root.join(&change.relative)),
+        relative: change.relative,
+        status: change.status,
+        additions: change.additions,
+        deletions: change.deletions,
+        undoable,
+    }
 }
 
 fn turn_ref(session: &str, turn: &str, side: &str) -> String {
@@ -795,14 +778,6 @@ fn run_git(root: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
     checked_output(&mut git_command(root, args))
 }
 
-struct PrivateIndex(PathBuf);
-impl Drop for PrivateIndex {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.0);
-        let _ = std::fs::remove_file(self.0.with_extension("lock"));
-    }
-}
-
 fn capture_workspace(root: &Path, reference: &str) -> Result<String, String> {
     if run_git(root, &["config", "--bool", "core.sparseCheckout"])
         .ok()
@@ -810,12 +785,15 @@ fn capture_workspace(root: &Path, reference: &str) -> Result<String, String> {
     {
         return Err("Workspace checkpoints are unavailable for sparse checkouts".into());
     }
-    let index =
-        PrivateIndex(std::env::temp_dir().join(format!("vorkspace-checkpoint-{}", unique_id())));
+    let index_dir = tempfile::Builder::new()
+        .prefix("vorkspace-checkpoint-")
+        .tempdir()
+        .map_err(|error| error.to_string())?;
+    let index = index_dir.path().join("index");
     let run = |args: &[&str]| {
         checked_output(
             git_command(root, args)
-                .env("GIT_INDEX_FILE", &index.0)
+                .env("GIT_INDEX_FILE", &index)
                 .env("GIT_AUTHOR_NAME", "vorkspace")
                 .env("GIT_AUTHOR_EMAIL", "checkpoint@vorkspace.local")
                 .env("GIT_COMMITTER_NAME", "vorkspace")
@@ -855,7 +833,7 @@ fn capture_workspace(root: &Path, reference: &str) -> Result<String, String> {
     Ok(commit.trim().to_string())
 }
 
-fn changes(root: &Path, turn: &RecordedTurn) -> Result<Vec<Change>, String> {
+fn changes(root: &Path, turn: &RecordedTurn, pathspec: &str) -> Result<Vec<Change>, String> {
     let before = turn.before.as_deref().ok_or("Missing turn baseline")?;
     let after = turn.after.as_deref().ok_or("Missing turn result")?;
     let args = [
@@ -869,11 +847,15 @@ fn changes(root: &Path, turn: &RecordedTurn) -> Result<Vec<Change>, String> {
     ];
     let raw = run_git(
         root,
-        &[args.as_slice(), &["--raw", before, after, "--", "."]].concat(),
+        &[args.as_slice(), &["--raw", before, after, "--", pathspec]].concat(),
     )?;
     let numstat = run_git(
         root,
-        &[args.as_slice(), &["--numstat", before, after, "--", "."]].concat(),
+        &[
+            args.as_slice(),
+            &["--numstat", before, after, "--", pathspec],
+        ]
+        .concat(),
     )?;
     let mut stats = BTreeMap::new();
     for row in numstat
@@ -1064,13 +1046,11 @@ fn write_review(dir: &Path, review: &TurnReview) -> Result<(), String> {
 fn write_json(path: &Path, value: &impl Serialize) -> Result<(), String> {
     let parent = path.parent().ok_or("Invalid checkpoint metadata path")?;
     std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    let tmp = path.with_extension("json.tmp");
-    let mut file = std::fs::File::create(&tmp).map_err(|e| e.to_string())?;
+    let mut file = tempfile::NamedTempFile::new_in(parent).map_err(|e| e.to_string())?;
     file.write_all(&serde_json::to_vec(value).map_err(|e| e.to_string())?)
         .map_err(|e| e.to_string())?;
-    file.sync_all().map_err(|e| e.to_string())?;
-    drop(file);
-    std::fs::rename(tmp, path).map_err(|e| e.to_string())?;
+    file.as_file().sync_all().map_err(|e| e.to_string())?;
+    file.persist(path).map_err(|e| e.to_string())?;
     std::fs::File::open(parent)
         .and_then(|dir| dir.sync_all())
         .map_err(|e| e.to_string())?;

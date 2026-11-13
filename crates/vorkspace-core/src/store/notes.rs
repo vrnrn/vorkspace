@@ -1,11 +1,11 @@
-//! Desktop-compatible note persistence, deliberately separate from session handles.
+//! Note persistence, deliberately separate from session handles.
+mod read;
+
 use super::Store;
-use crate::notes::{Note, NoteImageAsset, NoteUpsert, MAX_BODY};
+use crate::notes::{normalize_tags, Note, NoteImageAsset, NoteUpsert, MAX_BODY, MAX_TITLE};
 use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
+use sha2::{Digest, Sha256};
 use std::path::{Component, Path, PathBuf};
-const TITLE_MAX: usize = 200;
-const TAG_MAX: usize = 48;
-const TAGS_MAX: usize = 20;
 
 /// A recording retains its note identity after deletion so recovery never
 /// imports it into a new note. A live link may precede its first saved note.
@@ -19,7 +19,7 @@ pub struct NoteRecording {
 fn now_millis() -> i64 {
     crate::time::now_ms().min(i64::MAX as u64) as i64
 }
-pub fn ensure_notes_table(conn: &Connection) -> rusqlite::Result<()> {
+pub(crate) fn ensure_notes_table(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS notes (
            id TEXT PRIMARY KEY,
@@ -333,32 +333,9 @@ fn read_note(row: &rusqlite::Row<'_>) -> rusqlite::Result<Note> {
     })
 }
 
-fn normalize_tags(tags: &[String]) -> Vec<String> {
-    let mut normalized = Vec::new();
-    for input in tags {
-        let tag = input
-            .trim()
-            .trim_start_matches('#')
-            .split_whitespace()
-            .collect::<Vec<_>>()
-            .join("-")
-            .to_lowercase();
-        let tag: String = tag.chars().take(TAG_MAX).collect();
-        let tag = tag.trim_end_matches('-').to_string();
-        if tag.is_empty() || normalized.contains(&tag) {
-            continue;
-        }
-        normalized.push(tag);
-        if normalized.len() == TAGS_MAX {
-            break;
-        }
-    }
-    normalized
-}
-
 fn normalize_title(title: &str) -> String {
     let trimmed = title.trim();
-    let sliced: String = trimmed.chars().take(TITLE_MAX).collect();
+    let sliced: String = trimmed.chars().take(MAX_TITLE).collect();
     let sliced = sliced.trim().to_string();
     if sliced.is_empty() {
         "Untitled".into()
@@ -441,18 +418,26 @@ fn valid_id(id: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn valid_recording_id(id: &str) -> Result<(), String> {
-    if id.len() != 32 || !id.bytes().all(|ch| ch.is_ascii_hexdigit()) {
-        return Err("Invalid recording ID".into());
-    }
-    Ok(())
+fn generated_recording_id(id: &str) -> bool {
+    id.len() == 32 && id.bytes().all(|ch| ch.is_ascii_hexdigit())
+}
+
+fn legacy_recording_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 80
+        && id
+            .bytes()
+            .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || b"-._".contains(&ch))
+        && !id.starts_with('.')
+        && !id.ends_with('.')
+        && !id.contains("..")
 }
 
 impl Store {
     /// Durable links, including deletion tombstones and unsaved reservations.
     /// Reading older databases never creates or migrates their schema.
     pub fn note_recordings(&self) -> Result<Vec<NoteRecording>, String> {
-        if !super::shared::has_table(&self.conn, "note_recordings")? {
+        if !super::sessions::has_table(&self.conn, "note_recordings")? {
             return Ok(Vec::new());
         }
         self.conn
@@ -467,14 +452,29 @@ impl Store {
             .map_err(|e| e.to_string())
     }
 
+    pub fn note_recording(&self, note_id: &str) -> Result<Option<NoteRecording>, String> {
+        valid_id(note_id)?;
+        if !super::sessions::has_table(&self.conn, "note_recordings")? {
+            return Ok(None);
+        }
+        self.conn
+            .query_row(
+                "SELECT note_id, recording_id, deleted FROM note_recordings WHERE note_id=?1",
+                [note_id],
+                read_note_recording,
+            )
+            .optional()
+            .map_err(|error| error.to_string())
+    }
+
     /// Reserve the identity before capture starts, even when the note is still
     /// ephemeral. An existing or deleted identity cannot be transferred.
     pub fn attach_note_recording(&self, note_id: &str, recording_id: &str) -> Result<(), String> {
         valid_id(note_id)?;
-        valid_recording_id(recording_id)?;
-        if self.shared.is_some() {
-            self.shared_writable()?;
+        if !generated_recording_id(recording_id) {
+            return Err("Invalid recording ID".into());
         }
+        self.shared_writable()?;
         let tx = Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)
             .map_err(|e| e.to_string())?;
         ensure_notes_table(&tx).map_err(|e| e.to_string())?;
@@ -490,10 +490,11 @@ impl Store {
         title: &str,
         created_at: i64,
     ) -> Result<Option<Note>, String> {
-        valid_recording_id(recording_id)?;
-        if self.shared.is_some() {
-            self.shared_writable()?;
+        let generated = generated_recording_id(recording_id);
+        if !generated && !legacy_recording_id(recording_id) {
+            return Err("Invalid recording ID".into());
         }
+        self.shared_writable()?;
         let tx = Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)
             .map_err(|e| e.to_string())?;
         ensure_notes_table(&tx).map_err(|e| e.to_string())?;
@@ -510,9 +511,18 @@ impl Store {
             tx.commit().map_err(|e| e.to_string())?;
             return Ok(None);
         }
-        let note_id = link
-            .map(|link| link.note_id)
-            .unwrap_or_else(|| format!("meeting-{recording_id}"));
+        let note_id = link.map(|link| link.note_id).unwrap_or_else(|| {
+            if generated {
+                format!("meeting-{recording_id}")
+            } else {
+                // Legacy recording keys can contain dots. Keep their filename
+                // exact in the link while giving Notes an ordinary stable ID.
+                format!(
+                    "meeting-legacy-{:x}",
+                    Sha256::digest(recording_id.as_bytes())
+                )
+            }
+        });
         valid_id(&note_id)?;
         attach_note_recording(&tx, &note_id, recording_id)?;
         let note =
@@ -545,82 +555,6 @@ impl Store {
         Ok(Some(note))
     }
 
-    /// Full-fidelity desktop notes. Artifacts in the same table are excluded.
-    pub fn list_notes(&self) -> Result<Vec<Note>, String> {
-        let mut notes = if super::shared::has_table(&self.conn, "notes")? {
-            let columns = self
-                .conn
-                .prepare("PRAGMA table_info(notes)")
-                .map_err(|e| e.to_string())?
-                .query_map([], |row| row.get::<_, String>(1))
-                .map_err(|e| e.to_string())?
-                .collect::<rusqlite::Result<std::collections::HashSet<_>>>()
-                .map_err(|e| e.to_string())?;
-            let pending = if columns.contains("slug_pending") {
-                "slug_pending"
-            } else {
-                "0"
-            };
-            let tags = if columns.contains("tags_json") {
-                "tags_json"
-            } else {
-                "'[]'"
-            };
-            let kind = if columns.contains("content_kind") {
-                "WHERE content_kind='note'"
-            } else {
-                ""
-            };
-            let mut query = self.conn.prepare(&format!("SELECT id,slug,title,body,source_session_id,source_cwd,{tags},created_at,updated_at,{pending} FROM notes {kind} ORDER BY updated_at DESC,id ASC")).map_err(|e| e.to_string())?;
-            let rows = query.query_map([], read_note).map_err(|e| e.to_string())?;
-            rows.collect::<rusqlite::Result<Vec<_>>>()
-                .map_err(|e| e.to_string())?
-        } else {
-            Vec::new()
-        };
-        // Keep early native prototype notes accessible without modifying data on read.
-        if self.shared.is_none() {
-            for note in self.legacy_notes()? {
-                let id = format!("gpui-note-{}", note.id);
-                if notes.iter().any(|saved| saved.id == id) {
-                    continue;
-                }
-                notes.push(Note {
-                    id,
-                    slug: format!("note-{}", note.id),
-                    title: note.title,
-                    body: note.body,
-                    tags: note.tags,
-                    source_session_id: (note.source_session != 0)
-                        .then(|| note.source_session.to_string()),
-                    source_cwd: (!note.source_cwd.is_empty()).then_some(note.source_cwd),
-                    slug_pending: false,
-                    created_at: note.id.min(i64::MAX as u64) as i64,
-                    updated_at: note.id.min(i64::MAX as u64) as i64,
-                });
-            }
-        }
-        notes.sort_by(|a, b| b.updated_at.cmp(&a.updated_at).then(a.id.cmp(&b.id)));
-        Ok(notes)
-    }
-
-    pub fn get_note(&self, id: &str) -> Result<Option<Note>, String> {
-        valid_id(id)?;
-        Ok(self.list_notes()?.into_iter().find(|note| note.id == id))
-    }
-
-    pub fn create_note(&self, cwd: Option<String>) -> Result<Note, String> {
-        self.upsert_note(&NoteUpsert {
-            id: format!(
-                "note-{}-{:016x}",
-                crate::time::now_ms(),
-                rand::random::<u64>()
-            ),
-            source_cwd: cwd.filter(|cwd| crate::notes::is_project(cwd)),
-            ..Default::default()
-        })
-    }
-
     pub fn upsert_note(&self, note: &NoteUpsert) -> Result<Note, String> {
         self.prepare_note_upsert(note)?;
         upsert_note(&self.conn, note).map_err(|e| e.to_string())
@@ -636,10 +570,8 @@ impl Store {
         self.prepare_note_upsert(note)?;
         let tx = Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)
             .map_err(|e| e.to_string())?;
-        let mut current = get_content(&tx, &note.id, "note").map_err(|e| e.to_string())?;
-        if current.is_none() && self.shared.is_none() && note.id.starts_with("gpui-note-") {
-            current = self.get_note(&note.id)?;
-        }
+        let current = get_content(&tx, &note.id, "note").map_err(|e| e.to_string())?;
+
         if current.as_ref() != expected {
             return Ok(None);
         }
@@ -758,35 +690,28 @@ impl Store {
         {
             valid_id(id)?;
         }
-        if self.shared.is_some() {
-            self.shared_writable()?;
-        }
+        self.shared_writable()?;
         ensure_notes_table(&self.conn).map_err(|e| e.to_string())
     }
 
-    /// Update an existing note without changing its artifact subtype or
-    /// finalizing a pending slug. The legacy numeric note facade may resolve
-    /// to a native note whose identity and metadata must stay intact.
-    pub fn update_note_preserving_artifact(&self, note: &NoteUpsert) -> Result<Note, String> {
-        valid_id(&note.id)?;
-        if note.body.len() > MAX_BODY {
-            return Err("Content is too large".into());
-        }
-        if let Some(id) = note
-            .source_session_id
-            .as_deref()
-            .filter(|id| !id.is_empty())
-        {
-            valid_id(id)?;
-        }
-        if self.shared.is_some() {
-            self.shared_writable()?;
-        }
-        ensure_notes_table(&self.conn).map_err(|e| e.to_string())?;
-        // The existence check and update share one write transaction so a
-        // concurrent delete cannot turn this update into a new note.
+    /// Update only the note the caller authorized, preserving its artifact
+    /// subtype and any pending slug. Scope and content may change between
+    /// reading the note and beginning this write.
+    pub fn update_note_preserving_artifact(
+        &self,
+        mut note: NoteUpsert,
+        expected: &Note,
+    ) -> Result<Note, String> {
+        self.prepare_note_upsert(&note)?;
         let tx = Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)
             .map_err(|e| e.to_string())?;
+        let current = get_content(&tx, &note.id, "note").map_err(|e| e.to_string())?;
+
+        if current.as_ref() != Some(expected) {
+            return Err(
+                "The note changed before it could be saved. Read it again and retry.".into(),
+            );
+        }
         let subtype: Option<Option<String>> = tx
             .query_row(
                 "SELECT artifact_kind FROM notes WHERE id = ?1 AND content_kind = 'note'",
@@ -795,11 +720,10 @@ impl Store {
             )
             .optional()
             .map_err(|e| e.to_string())?;
-        let subtype = subtype.ok_or("Note no longer exists")?;
-        let mut update = note.clone();
-        update.finalize_slug = false;
+        let subtype = subtype.flatten();
+        note.finalize_slug = false;
         let saved =
-            upsert_content(&tx, &update, "note", subtype.as_deref()).map_err(|e| e.to_string())?;
+            upsert_content(&tx, &note, "note", subtype.as_deref()).map_err(|e| e.to_string())?;
         tx.commit().map_err(|e| e.to_string())?;
         Ok(saved)
     }
@@ -822,47 +746,35 @@ impl Store {
         expected: Option<Option<&Note>>,
     ) -> Result<bool, String> {
         valid_id(id)?;
-        if self.shared.is_some() {
-            self.shared_writable()?;
-        }
+        self.shared_writable()?;
         let tx = Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)
             .map_err(|e| e.to_string())?;
         if let Some(expected) = expected {
-            let mut current = if super::shared::has_table(&tx, "notes")? {
+            let current = if super::sessions::has_table(&tx, "notes")? {
                 ensure_notes_table(&tx).map_err(|e| e.to_string())?;
                 get_content(&tx, id, "note").map_err(|e| e.to_string())?
             } else {
                 None
             };
-            if current.is_none() && self.shared.is_none() && id.starts_with("gpui-note-") {
-                current = self.get_note(id)?;
-            }
+
             if current.as_ref() != expected {
                 return Ok(false);
             }
         }
         // Reservations have no note row yet, so the delete trigger alone is
         // insufficient. Keep this mutation in the same transaction as deletion.
-        if super::shared::has_table(&tx, "note_recordings")? {
+        if super::sessions::has_table(&tx, "note_recordings")? {
             tx.execute(
                 "UPDATE note_recordings SET deleted = 1 WHERE note_id = ?1 AND deleted = 0",
                 [id],
             )
             .map_err(|e| e.to_string())?;
         }
-        if super::shared::has_table(&tx, "notes")? {
+        if super::sessions::has_table(&tx, "notes")? {
             ensure_notes_table(&tx).map_err(|e| e.to_string())?;
             delete_note(&tx, id).map_err(|e| e.to_string())?;
         }
-        if self.shared.is_none() {
-            if let Some(id) = id.strip_prefix("gpui-note-") {
-                tx.execute(
-                    "DELETE FROM native_settings WHERE key=?1",
-                    [format!("note:{id}")],
-                )
-                .map_err(|e| e.to_string())?;
-            }
-        }
+
         tx.commit().map_err(|e| e.to_string())?;
         // A deleted row stays deleted even if best-effort asset cleanup fails.
         if let Some(root) = self.data_dir() {
@@ -871,39 +783,25 @@ impl Store {
         Ok(true)
     }
 
-    pub fn note_source_session(&self, note: &Note) -> Option<i64> {
+    pub(crate) fn note_source_session(&self, note: &Note) -> Option<i64> {
         note.source_session_id
             .as_deref()
             .and_then(|id| self.resolve_existing_session_id(id))
-    }
-
-    /// Resolves @note/slug mentions in the same order as the desktop composer.
-    pub fn apply_notes_to_turn(&self, text: &str) -> Result<String, String> {
-        let slugs = crate::notes::slugs_in_text(text);
-        if slugs.is_empty() {
-            return Ok(text.into());
-        }
-        let notes = self.list_notes()?;
-        let picked = slugs
-            .iter()
-            .filter_map(|slug| notes.iter().find(|note| &note.slug == slug).cloned())
-            .collect::<Vec<_>>();
-        Ok(crate::notes::inject_prompt(text, &picked))
     }
 
     pub(super) fn save_response_note(&self, note: &crate::response::Note) -> Result<(), String> {
         if note.body.len() > MAX_BODY {
             return Err("Content is too large".into());
         }
-        let existing = self.list_notes()?.into_iter().find(|saved| {
-            saved.id == format!("gpui-note-{}", note.id)
-                || super::shared::handle(&saved.id) as u64 == note.id
+        let native_id = format!("gpui-note-{}", note.id);
+        let existing = self.list_note_summaries()?.into_iter().find(|saved| {
+            saved.id == native_id || super::sessions::handle(&saved.id) as u64 == note.id
         });
         let update = NoteUpsert {
             id: existing
                 .as_ref()
                 .map(|note| note.id.clone())
-                .unwrap_or_else(|| format!("gpui-note-{}", note.id)),
+                .unwrap_or(native_id),
             title: note.title.clone(),
             body: note.body.clone(),
             tags: note.tags.clone(),
@@ -915,10 +813,8 @@ impl Store {
         };
         // The legacy facade also edits older note rows carrying an artifact
         // subtype. Preserve it instead of reclassifying or duplicating the row.
-        if existing.is_some() && super::shared::has_table(&self.conn, "notes")? {
-            if self.shared.is_some() {
-                self.shared_writable()?;
-            }
+        if existing.is_some() && super::sessions::has_table(&self.conn, "notes")? {
+            self.shared_writable()?;
             ensure_notes_table(&self.conn).map_err(|e| e.to_string())?;
             let subtype: Option<String> = self
                 .conn
@@ -945,9 +841,7 @@ impl Store {
         new_note: Option<&NoteUpsert>,
     ) -> Result<NoteImageAsset, String> {
         valid_id(note_id)?;
-        if self.shared.is_some() {
-            self.shared_writable()?;
-        }
+        self.shared_writable()?;
         let missing = self.get_note(note_id)?.is_none();
         if missing && new_note.is_none_or(|note| note.id != note_id) {
             return Err("Note no longer exists".into());

@@ -52,7 +52,7 @@ fn antigravity_runs_its_native_session_lifecycle() {
     }
 }
 #[test]
-fn resuming_mutes_replay_and_replaces_missing_sessions_like_the_desktop() {
+fn resuming_mutes_replay_and_replaces_missing_sessions() {
     let mut p = protocol(Kind::Antigravity);
     p.request.provider_id = Some("saved".into());
     let mut out = Vec::new();

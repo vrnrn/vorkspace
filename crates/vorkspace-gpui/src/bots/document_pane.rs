@@ -13,7 +13,7 @@ pub(crate) struct BotDocumentPane {
     html: Option<Entity<html::Html>>,
     focus: FocusHandle,
     authorized: bool,
-    desktop: bool,
+    projected: bool,
     active: bool,
     epoch: u64,
     loading: bool,
@@ -45,14 +45,14 @@ impl BotDocumentPane {
             html: None,
             focus: cx.focus_handle(),
             authorized: initial.is_some(),
-            desktop: initial.as_ref().is_some_and(|source| source.desktop),
+            projected: initial.as_ref().is_some_and(|source| source.projected),
             active: false,
             epoch: 0,
             loading: false,
             error: None,
         };
         if let Some(source) = initial {
-            if source.desktop && source.document.body.is_empty() {
+            if source.projected && source.document.body.is_empty() {
                 pane.pending_metadata = Some(source.document);
                 pane.refresh(cx);
             } else {
@@ -81,8 +81,8 @@ impl BotDocumentPane {
             return;
         }
         self.authorized = true;
-        self.desktop = source.desktop;
-        if source.desktop && source.document.body.is_empty() {
+        self.projected = source.projected;
+        if source.projected && source.document.body.is_empty() {
             if self.document.as_ref().is_some_and(|old| {
                 old.updated_at == source.document.updated_at
                     && old.title == source.document.title
@@ -107,7 +107,7 @@ impl BotDocumentPane {
     }
 
     pub(crate) fn refresh(&mut self, cx: &mut Context<Self>) {
-        if !self.authorized || !self.desktop {
+        if !self.authorized || !self.projected {
             return;
         }
         self.epoch = self.epoch.wrapping_add(1);
@@ -157,12 +157,8 @@ impl BotDocumentPane {
             return;
         }
         self.active = active;
-        if let Some(html) = &self.html {
-            if active {
-                html.update(cx, |html, _| html.set_interactive(true));
-            } else {
-                html.read(cx).hide();
-            }
+        if !active && let Some(html) = &self.html {
+            html.read(cx).hide();
         }
         cx.notify();
     }
@@ -276,7 +272,7 @@ mod tests {
 
     fn store() -> Database {
         std::sync::Arc::new(std::sync::Mutex::new(
-            vorkspace_core::store::Store::open(std::path::Path::new(":memory:")).unwrap(),
+            vorkspace_core::store::Store::test(std::path::Path::new(":memory:")).unwrap(),
         ))
     }
 
@@ -296,7 +292,7 @@ mod tests {
         BotDocumentSource {
             bot: "bot".into(),
             document: document(id, body),
-            desktop: false,
+            projected: false,
         }
     }
 
@@ -352,7 +348,7 @@ mod tests {
                 Some(BotDocumentSource {
                     bot: "another-bot".into(),
                     document: document("first", "Wrong Bot"),
-                    desktop: true,
+                    projected: true,
                 }),
                 cx,
             )
@@ -367,7 +363,7 @@ mod tests {
                 BotDocumentSource {
                     bot: "bot".into(),
                     document: document("second", "Wrong document"),
-                    desktop: false,
+                    projected: false,
                 },
                 cx,
             );

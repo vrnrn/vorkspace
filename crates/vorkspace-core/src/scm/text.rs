@@ -1,5 +1,4 @@
-//! Commit-message and PR prompts, ported from gitText.ts and jsonText.ts.
-//! Lengths count UTF-16 code units, like the JavaScript originals.
+//! Commit-message and PR prompts. Lengths count UTF-16 code units.
 pub(crate) use crate::js_text::{js_len, js_slice, js_space, js_trim};
 use serde_json::{Map, Value};
 

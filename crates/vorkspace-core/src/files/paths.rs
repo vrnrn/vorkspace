@@ -1,4 +1,4 @@
-//! Display-path helpers ported from paths.ts and fileTree.ts. Paths use `/`;
+//! Display-path helpers for the explorer and file trees. Paths use `/`;
 //! Windows drive and UNC paths compare without case.
 use super::name::path_segments;
 
@@ -38,12 +38,6 @@ fn trim_slash(path: &str) -> String {
 
 /// Stable comparison key for Windows paths without changing their display case.
 pub fn path_key(path: &str) -> String {
-    if let Some(remote) = crate::remote_path::parse_remote_path(path) {
-        return crate::remote_path::remote_path(
-            &remote.environment_id,
-            &path_key(&remote.host_path),
-        );
-    }
     let normalized = trim_slash(path);
     let drive =
         starts_with_drive(&normalized) && matches!(normalized.as_bytes().get(2), None | Some(b'/'));
@@ -62,12 +56,6 @@ fn skip_chars(text: &str, chars: usize) -> &str {
 }
 
 pub fn parent_path(path: &str) -> String {
-    if let Some(remote) = crate::remote_path::parse_remote_path(path) {
-        return crate::remote_path::remote_path(
-            &remote.environment_id,
-            &parent_path(&remote.host_path),
-        );
-    }
     let trimmed = trim_slash(path);
     if let Some(rest) = trimmed.strip_prefix("//") {
         let parts: Vec<&str> = rest.split('/').collect();
@@ -109,9 +97,13 @@ pub fn rebase_path(path: &str, from: &str, to: &str) -> String {
 }
 
 pub fn is_equal_or_inside(path: &str, root: &str) -> bool {
+    if path.is_empty() || root.is_empty() {
+        return path == root;
+    }
     let key = path_key(path);
     let base_key = path_key(root);
-    key == base_key || key.starts_with(&format!("{base_key}/"))
+    key.strip_prefix(&base_key)
+        .is_some_and(|rest| rest.is_empty() || base_key.ends_with('/') || rest.starts_with('/'))
 }
 
 /// Use for destructive checkout operations, where a symlink must not hide
@@ -125,12 +117,6 @@ pub fn is_resolved_inside(path: &str, root: &str) -> bool {
 }
 
 pub fn join_path(parent: &str, relative: &str) -> String {
-    if let Some(remote) = crate::remote_path::parse_remote_path(parent) {
-        return crate::remote_path::remote_path(
-            &remote.environment_id,
-            &join_path(&remote.host_path, relative),
-        );
-    }
     let mut out = trim_slash(parent);
     let windows = windows_path(parent);
     let parts = relative
@@ -249,6 +235,14 @@ mod tests {
     }
 
     #[test]
+    fn filesystem_roots_match_only_their_own_absolute_descendants() {
+        assert!(is_equal_or_inside("/a/b", "/"));
+        assert!(!is_equal_or_inside("a/b", "/"));
+        assert!(!is_equal_or_inside("/a/b", ""));
+        assert!(!is_equal_or_inside("/alpha", "/a"));
+    }
+
+    #[test]
     fn treats_backslash_and_slash_as_the_same_path() {
         assert!(is_equal_or_inside(
             "C:\\Users\\me\\app\\src",
@@ -291,31 +285,6 @@ mod tests {
         assert_eq!(display_path("/other/a.ts", Some("/repo")), "/other/a.ts");
         assert_eq!(display_path("/repo/a.ts", Some("~")), "/repo/a.ts");
         assert_eq!(display_path("/repo/a.ts", None), "/repo/a.ts");
-    }
-
-    #[test]
-    fn remote_paths_preserve_machine_roots_and_windows_semantics() {
-        assert_eq!(parent_path("remote://linux/"), "remote://linux/");
-        assert_eq!(
-            join_path("remote://linux/", "../../file"),
-            "remote://linux/file"
-        );
-        assert_eq!(
-            parent_path("remote://windows/C:/code"),
-            "remote://windows/C:/"
-        );
-        assert_eq!(
-            join_path("remote://windows/C:/code", "src\\main.rs"),
-            "remote://windows/C:/code/src/main.rs"
-        );
-        assert!(is_equal_or_inside(
-            "remote://windows/c:/CODE/src",
-            "remote://windows/C:/code"
-        ));
-        assert!(!is_equal_or_inside(
-            "remote://other/c:/code/src",
-            "remote://windows/C:/code"
-        ));
     }
 
     #[test]

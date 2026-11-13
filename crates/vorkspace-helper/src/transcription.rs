@@ -111,7 +111,7 @@ impl Recording {
 fn get(cx: &App) -> Entity<Service> {
     cx.global::<Audio>().0.clone()
 }
-pub fn init(cx: &mut App) {
+pub(crate) fn init(cx: &mut App) {
     let service = cx.new(|_| Service::default());
     cx.set_global(Audio(service.clone()));
     let (tx, rx) = async_channel::bounded(64);
@@ -131,7 +131,7 @@ pub fn init(cx: &mut App) {
         .detach();
     });
 }
-pub fn active(cx: &App) -> bool {
+pub(crate) fn active(cx: &App) -> bool {
     cx.try_global::<Audio>()
         .is_some_and(|a| a.0.read(cx).recording.is_some())
 }
@@ -148,15 +148,15 @@ pub(crate) fn active_run(cx: &App) -> Option<&str> {
             .as_str(),
     )
 }
-pub fn start(request: AudioRequest, cx: &mut App) {
+pub(crate) fn start(request: AudioRequest, cx: &mut App) {
     get(cx).update(cx, |s, cx| s.start(request, cx));
 }
-pub fn finish(cx: &mut App) {
+pub(crate) fn finish(cx: &mut App) {
     if active(cx) {
         unsafe { vorkspace_transcription_finish() }
     }
 }
-pub fn finish_owned(id: &str, owner: &str, run: &str, cx: &mut App) {
+pub(crate) fn finish_owned(id: &str, owner: &str, run: &str, cx: &mut App) {
     let matches =
         get(cx).read(cx).recording.as_ref().is_some_and(|r| {
             r.request.id == id && r.request.owner == owner && r.request.run == run

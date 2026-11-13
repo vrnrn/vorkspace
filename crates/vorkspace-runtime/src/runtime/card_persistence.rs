@@ -1,7 +1,6 @@
 //! Application-owned card saves outlive views. Admission never takes the Store
 //! lock. One background consumer serializes CAS writes and coalesces each card.
 use super::{Database, locked};
-use gpui::{App, Global};
 use serde_json::Value;
 use std::{
     collections::{HashMap, VecDeque},
@@ -34,6 +33,12 @@ struct Job {
     desired: Value,
     version: u64,
 }
+
+struct Admission {
+    key: Key,
+    version: u64,
+    receiver: async_channel::Receiver<Reply>,
+}
 impl Job {
     fn save(&self) -> Reply {
         // An unchanged admission is free, including no database mutex wait.
@@ -50,7 +55,7 @@ impl Queue {
         session: i64,
         expected: Value,
         desired: Value,
-    ) -> Result<Option<(u64, async_channel::Receiver<Reply>)>, String> {
+    ) -> Result<Option<Admission>, String> {
         if self.closed {
             return Err("Card persistence is shutting down".into());
         }
@@ -85,7 +90,7 @@ impl Queue {
         } else {
             self.order.push_back(key.clone());
             self.entries.insert(
-                key,
+                key.clone(),
                 Entry {
                     store,
                     origin: expected.clone(),
@@ -97,7 +102,11 @@ impl Queue {
                 },
             );
         }
-        Ok(Some((version, receiver)))
+        Ok(Some(Admission {
+            key,
+            version,
+            receiver,
+        }))
     }
     fn next(&mut self) -> Option<Job> {
         let key = self.order.pop_front()?;
@@ -138,13 +147,14 @@ struct Shared {
     queue: Mutex<Queue>,
     wake: Condvar,
 }
-struct Worker {
+pub struct CardWriter {
     shared: Arc<Shared>,
     finished: async_channel::Receiver<()>,
+    #[cfg(any(test, feature = "test-support"))]
     thread: Mutex<Option<std::thread::JoinHandle<()>>>,
 }
-impl Worker {
-    fn start() -> Result<Arc<Self>, String> {
+impl CardWriter {
+    pub fn start() -> Result<Self, String> {
         let shared = Arc::new(Shared::default());
         let work = shared.clone();
         let (done, finished) = async_channel::bounded(1);
@@ -174,13 +184,18 @@ impl Worker {
                 let _ = done.try_send(());
             })
             .map_err(|_| "Card persistence worker unavailable".to_owned())?;
-        Ok(Arc::new(Self {
+        #[cfg(not(any(test, feature = "test-support")))]
+        drop(thread);
+        Ok(Self {
             shared,
             finished,
+            #[cfg(any(test, feature = "test-support"))]
             thread: Mutex::new(Some(thread)),
-        }))
+        })
     }
-    fn close(&self) -> async_channel::Receiver<()> {
+
+    /// Stop admission and signal when the worker has drained accepted saves.
+    pub fn close(&self) -> async_channel::Receiver<()> {
         self.shared
             .queue
             .lock()
@@ -189,8 +204,45 @@ impl Worker {
         self.shared.wake.notify_one();
         self.finished.clone()
     }
+
+    pub fn admit(
+        &self,
+        store: Database,
+        session: i64,
+        expected: Value,
+        desired: Value,
+    ) -> Result<Option<Ticket>, String> {
+        let admitted = self
+            .shared
+            .queue
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .admit(store, session, expected, desired)?;
+        if admitted.is_some() {
+            self.shared.wake.notify_one();
+        }
+        Ok(admitted.map(|admitted| Ticket {
+            version: admitted.version,
+            key: admitted.key,
+            shared: self.shared.clone(),
+            receiver: admitted.receiver,
+        }))
+    }
+
     #[cfg(any(test, feature = "test-support"))]
-    fn shutdown(&self) {
+    pub fn wait_for_saves_for_test(&self) {
+        let mut queue = self
+            .shared
+            .queue
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        while !queue.order.is_empty() || queue.entries.values().any(|entry| !entry.settled) {
+            queue = self.shared.wake.wait(queue).unwrap();
+        }
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn finish_for_test(&self) {
         let _ = self.close().recv_blocking();
         if let Some(thread) = self
             .thread
@@ -202,46 +254,12 @@ impl Worker {
         }
     }
 }
-impl Drop for Worker {
+impl Drop for CardWriter {
     fn drop(&mut self) {
         self.close();
-        // Dropping a JoinHandle detaches; the consumer owns its queue and can
-        // finish independently. Never wait for storage on the foreground,
-        // including owner destruction after GPUI's quit deadline expires.
-        self.thread
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .take();
+        // The consumer owns its queue and can finish independently. Dropping
+        // the owner must return even while a save waits on storage.
     }
-}
-struct Owner {
-    worker: Arc<Worker>,
-    _quit: gpui::Subscription,
-}
-impl Global for Owner {}
-
-fn install(cx: &mut App) -> Result<(), String> {
-    if cx.try_global::<Owner>().is_some() {
-        return Ok(());
-    }
-    let worker = Worker::start()?;
-    let quitting = Arc::downgrade(&worker);
-    let quit = cx.on_app_quit(move |_| {
-        let finished = quitting.upgrade().map(|worker| worker.close());
-        // Drain within GPUI's existing asynchronous quit budget. A cosmetic
-        // refresh that cannot commit before exit remains unpublished; its
-        // previous durable value survives and can be refreshed next launch.
-        async move {
-            if let Some(finished) = finished {
-                let _ = finished.recv().await;
-            }
-        }
-    });
-    cx.set_global(Owner {
-        worker,
-        _quit: quit,
-    });
-    Ok(())
 }
 
 pub struct Ticket {
@@ -270,59 +288,6 @@ impl Drop for Ticket {
         {
             queue.entries.remove(&self.key);
         }
-    }
-}
-
-pub fn admit(
-    cx: &mut App,
-    store: Database,
-    session: i64,
-    expected: Value,
-    desired: Value,
-) -> Result<Option<Ticket>, String> {
-    install(cx)?;
-    let owner = cx.global::<Owner>();
-    let key = (
-        Arc::as_ptr(&store) as usize,
-        session,
-        expected["id"]
-            .as_str()
-            .ok_or("Card is missing its identity")?
-            .to_owned(),
-    );
-    let admitted = owner
-        .worker
-        .shared
-        .queue
-        .lock()
-        .unwrap()
-        .admit(store, session, expected, desired)?;
-    if admitted.is_some() {
-        owner.worker.shared.wake.notify_one();
-    }
-    Ok(admitted.map(|(version, receiver)| Ticket {
-        version,
-        key,
-        shared: owner.worker.shared.clone(),
-        receiver,
-    }))
-}
-
-#[cfg(any(test, feature = "test-support"))]
-pub fn wait_for_saves_for_test(cx: &App) {
-    if let Some(owner) = cx.try_global::<Owner>() {
-        let shared = &owner.worker.shared;
-        let mut queue = shared.queue.lock().unwrap_or_else(PoisonError::into_inner);
-        while !queue.order.is_empty() || queue.entries.values().any(|entry| !entry.settled) {
-            queue = shared.wake.wait(queue).unwrap();
-        }
-    }
-}
-
-#[cfg(any(test, feature = "test-support"))]
-pub fn finish_for_test(cx: &App) {
-    if let Some(owner) = cx.try_global::<Owner>() {
-        owner.worker.shutdown();
     }
 }
 

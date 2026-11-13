@@ -182,6 +182,33 @@ fn retained_row_measurements_refresh_after_text_resize_and_font_changes(cx: &mut
 }
 
 #[gpui::test]
+fn growing_reply_preserves_unchanged_paragraph_heights(cx: &mut TestAppContext) {
+    let window = chat(cx);
+    probe(window, cx, |view, window, cx| {
+        let first = "First paragraph.";
+        let second = "This paragraph keeps its text and layout.";
+        let third = "A short ending.";
+        let reply = format!("{first}\n\n{second}\n\n{third}");
+        view.patch(1, vec![row("assistant", &reply)], cx);
+        view.motions.clear();
+        view.begin_measurements(window);
+        let middle = answer(view) + 1;
+        let end = middle + 1;
+        let middle_height = view.measure_row_height(middle, window, cx);
+        let end_height = view.measure_row_height(end, window, cx);
+        let expanded = format!("{reply} {}", "More words for the ending.".repeat(45));
+        view.patch(1, vec![row("assistant", &expanded)], cx);
+        view.motions.clear();
+        view.begin_measurements(window);
+        let before = view.measurements.fresh;
+        assert_eq!(view.measure_row_height(middle, window, cx), middle_height);
+        assert_eq!(view.measurements.fresh, before);
+        assert!(view.measure_row_height(end, window, cx) > end_height);
+        assert_eq!(view.measurements.fresh, before + 1);
+    });
+}
+
+#[gpui::test]
 fn retained_row_measurements_keep_height_animation_live(cx: &mut TestAppContext) {
     let window = chat(cx);
     probe(window, cx, |view, window, cx| {

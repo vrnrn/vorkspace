@@ -1,4 +1,4 @@
-//! modeCommands.tsx's inline icon, tinted command name and first-line spacing.
+//! Mode commands' inline icon, tinted command name and first-line spacing.
 //! The editor keeps the original `/command` bytes for clipboard, IME and edits.
 use super::*;
 

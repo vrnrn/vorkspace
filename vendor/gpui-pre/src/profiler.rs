@@ -16,14 +16,39 @@ use std::{
     time::Duration,
 };
 
-mod actions;
 #[cfg(feature = "profiler")]
 pub mod hang;
 #[cfg(feature = "profiler")]
 pub mod journal;
-pub use actions::{ActionStatistics, ActionTiming, take_action_stats};
 
 use serde::{Deserialize, Serialize};
+
+/// An action's inclusive foreground execution time.
+#[derive(Copy, Clone)]
+pub struct ActionTiming {
+    /// Registered action name.
+    pub name: &'static str,
+    /// The handler's admission time.
+    pub start: Instant,
+    /// The handler's completion time.
+    pub end: Instant,
+}
+
+impl core::fmt::Debug for ActionTiming {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ActionTiming")
+            .field("name", &self.name)
+            .field("runtime", &self.duration())
+            .finish()
+    }
+}
+
+impl ActionTiming {
+    /// Time spent inside the handler, including nested handlers.
+    pub fn duration(&self) -> Duration {
+        self.end.saturating_duration_since(self.start)
+    }
+}
 
 #[cfg(feature = "profiler")]
 use crate::{Action, App, WindowId};
@@ -474,14 +499,14 @@ impl TaskStatistics {
             let to_replace = self
                 .longest_poll_times
                 .iter()
-                .position_min_by_key(|task| task.since_spawn())
+                .position_min_by_key(|task| task.poll_duration())
                 .expect("guarded by the comparison with nth_longest_yield_time");
             self.longest_poll_times[to_replace] = task;
 
             self.poll_time_to_beat = self
                 .longest_poll_times
                 .iter()
-                .map(|task| task.since_spawn())
+                .map(TaskTiming::poll_duration)
                 .min()
                 .expect("never empty");
         }
@@ -734,10 +759,10 @@ pub fn set_trace_enabled(enabled: bool) -> bool {
     }
 }
 
-#[cfg(any(feature = "bench-support", all(test, feature = "profiler")))]
+#[cfg(all(test, feature = "profiler"))]
 pub(crate) struct TraceGuard;
 
-#[cfg(any(feature = "bench-support", all(test, feature = "profiler")))]
+#[cfg(all(test, feature = "profiler"))]
 pub(crate) fn trace_scope() -> TraceGuard {
     let incremented = TRACE_STATE.fetch_update(Ordering::AcqRel, Ordering::Acquire, |state| {
         (state & TRACE_SCOPE_COUNT_MASK < TRACE_SCOPE_COUNT_MASK).then_some(state + 1)
@@ -746,7 +771,7 @@ pub(crate) fn trace_scope() -> TraceGuard {
     TraceGuard
 }
 
-#[cfg(any(feature = "bench-support", all(test, feature = "profiler")))]
+#[cfg(all(test, feature = "profiler"))]
 impl Drop for TraceGuard {
     fn drop(&mut self) {
         let previous_state =
@@ -1310,16 +1335,15 @@ impl WindowProfiler {
     /// Records the beginning of an action handler.
     pub fn begin_action_handler(&mut self, action: &(dyn Action + 'static), cx: &mut App) {
         journal::begin_foreground_turn();
-        let name = actions::update_running_action(action, cx);
+        let name = cx
+            .actions
+            .try_resolve_action(&action.type_id())
+            .unwrap_or("un-named");
         self.active_actions.push((name, Instant::now()));
     }
 
     /// Records the end of the current action handler.
     pub fn end_action_handler(&mut self) {
-        // Dual-write to the legacy aggregate store; its single global running
-        // slot misbehaves when tests run actions concurrently, which is why
-        // the journal entry is tracked here on the window instead.
-        actions::save_action_timing();
         let Some((name, start)) = self.active_actions.pop() else {
             debug_assert!(false, "action handler must be begun before it ends");
             journal::end_foreground_turn();

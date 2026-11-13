@@ -5,8 +5,8 @@ use crate::inbox::{run_gh, run_git, timestamp_ms};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
-pub const IN_PROGRESS_LABEL: &str = "vorkspace:in-progress";
-pub const IN_REVIEW_LABEL: &str = "vorkspace:in-review";
+pub(crate) const IN_PROGRESS_LABEL: &str = "vorkspace:in-progress";
+pub(crate) const IN_REVIEW_LABEL: &str = "vorkspace:in-review";
 const ISSUE_FIELDS: &str = "number,title,url,state,body,labels,blockedBy,createdAt,updatedAt";
 const ISSUE_LIMIT: usize = 500;
 
@@ -777,7 +777,7 @@ pub fn update(
     view(root, expected_repo, number)
 }
 
-pub fn token_in_body(body: &str, token: &str) -> bool {
+pub(crate) fn token_in_body(body: &str, token: &str) -> bool {
     body.lines()
         .any(|line| line.trim() == format!("<!-- vorkspace-todo:{token} -->"))
 }

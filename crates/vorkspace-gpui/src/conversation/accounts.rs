@@ -1,5 +1,6 @@
 use super::*;
 use gpui::App;
+use std::time::Duration;
 use vorkspace_core::{
     accounts::Profile,
     usage::{self, Limit},
@@ -7,7 +8,55 @@ use vorkspace_core::{
 use vorkspace_ui::radius;
 pub(crate) struct UsageResumed;
 impl EventEmitter<UsageResumed> for Conversation {}
+
+pub(super) struct UsageWatch {
+    _clock: gpui::Task<()>,
+    _accounts: Option<Subscription>,
+}
+
 impl Conversation {
+    pub(super) fn replace_settings(&mut self, settings: Settings, cx: &mut Context<Self>) {
+        self.settings = settings;
+        self.sync_usage_watch(cx);
+    }
+
+    pub(super) fn set_usage_limit(
+        &mut self,
+        limit: Option<Limit>,
+        cx: &mut Context<Self>,
+    ) -> Option<Limit> {
+        let previous = std::mem::replace(&mut self.settings.usage_limit, limit);
+        self.sync_usage_watch(cx);
+        previous
+    }
+
+    fn sync_usage_watch(&mut self, cx: &mut Context<Self>) {
+        if self.settings.usage_limit.is_none() {
+            self.usage_watch = None;
+            return;
+        }
+        if self.usage_watch.is_some() {
+            return;
+        }
+        // A paused conversation can resume even while its tab is hidden.
+        let clock = cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(Duration::from_secs(30))
+                    .await;
+                if this.update(cx, |this, cx| this.tick_usage(cx)).is_err() {
+                    break;
+                }
+            }
+        });
+        let accounts = crate::accounts::get(cx)
+            .map(|center| cx.observe(&center, |this, _, cx| this.tick_usage(cx)));
+        self.usage_watch = Some(UsageWatch {
+            _clock: clock,
+            _accounts: accounts,
+        });
+    }
+
     /// Update notifications refresh the account-specific picker after a CLI update.
     pub(crate) fn refresh_models_after_harness_update(&mut self, cx: &mut Context<Self>) {
         vorkspace_core::catalog::invalidate(
@@ -21,7 +70,7 @@ impl Conversation {
     pub(super) fn auth_notice(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let kind = Kind::from_id(&self.summary.provider);
         let action = vorkspace_core::accounts::AuthAction::SignIn;
-        if self.busy || vorkspace_core::accounts::login_arguments(kind, action).is_none() {
+        if self.responding() || vorkspace_core::accounts::login_arguments(kind, action).is_none() {
             return None;
         }
         let status = self.status.to_ascii_lowercase();
@@ -75,10 +124,6 @@ impl Conversation {
         )
     }
     pub(crate) fn attach_account(&mut self, cx: &App) {
-        if self.is_remote() {
-            self.settings.account = Default::default();
-            return;
-        }
         if self.settings.account.id == vorkspace_core::accounts::DEFAULT {
             self.settings.account.root = None;
             return;
@@ -91,15 +136,15 @@ impl Conversation {
         self.model.as_deref().or(self.resolved_model.as_deref())
     }
     pub(crate) fn set_blank_account(&mut self, profile: Profile, cx: &mut Context<Self>) {
-        if self.busy || self.summary.has_messages {
+        if self.responding() || self.summary.has_messages {
             return;
         }
         self.settings.account = profile;
-        self.catalog.clear();
+        self.catalog = Default::default();
         self.resolved_model = None;
         self.refresh_catalog(cx);
         self.save_settings(cx);
-        cx.emit(SessionChanged);
+        cx.emit(SessionChanged::Configuration);
         cx.notify();
     }
     pub(super) fn detect_usage_limit(&mut self, cx: &mut Context<Self>) {
@@ -112,7 +157,7 @@ impl Conversation {
             if let Some(pending) = &mut self.settings.pending_provider_switch {
                 pending.skip_outgoing_recap = true;
             }
-            self.settings.usage_limit = Some(limit);
+            self.set_usage_limit(Some(limit), cx);
             self.save_settings(cx);
             self.follow_ups.state.paused = true;
             self.save_follow_ups(cx);
@@ -178,7 +223,7 @@ impl Conversation {
             .settings
             .usage_limit
             .as_ref()
-            .is_some_and(|l| l.resume_due(usage::now_ms(), self.busy))
+            .is_some_and(|l| l.resume_due(usage::now_ms(), self.responding()))
         {
             self.resume_usage(cx);
         }
@@ -193,10 +238,9 @@ impl Conversation {
             self.defer_history_action(|this, cx| this.resume_usage(cx), cx);
             return;
         }
-        if self.busy
-            || self.stopping
+        if self.turn_in_flight()
             || self.account_switching
-            || self.settings.usage_limit.take().is_none()
+            || self.set_usage_limit(None, cx).is_none()
         {
             return;
         }
@@ -204,16 +248,16 @@ impl Conversation {
         self.save_settings(cx);
         if self.settings.bot.is_some() {
             cx.emit(UsageResumed);
-            cx.emit(SessionChanged);
+            cx.emit(SessionChanged::Configuration);
             cx.notify();
             return;
         }
         self.launch_prompt("Continue from where you left off.".into(), cx);
-        cx.emit(SessionChanged);
+        cx.emit(SessionChanged::Turn);
         cx.notify();
     }
     pub(super) fn recover_usage_after_model_change(&mut self, cx: &mut Context<Self>) {
-        if self.busy || self.stopping || self.settings.usage_limit.take().is_none() {
+        if self.turn_in_flight() || self.set_usage_limit(None, cx).is_none() {
             return;
         }
         self.status = "Ready".into();
@@ -226,7 +270,7 @@ impl Conversation {
         if self.settings.bot.is_some() {
             cx.emit(UsageResumed);
         }
-        cx.emit(SessionChanged);
+        cx.emit(SessionChanged::Configuration);
         cx.notify();
     }
     pub(crate) fn switch_usage_account(&mut self, profile: Profile, cx: &mut Context<Self>) {
@@ -237,17 +281,14 @@ impl Conversation {
             self.defer_history_action(move |this, cx| this.switch_usage_account(profile, cx), cx);
             return;
         }
-        if self.busy
-            || self.stopping
-            || self.account_switching
-            || self.settings.account.id == profile.id
+        if self.turn_in_flight() || self.account_switching || self.settings.account.id == profile.id
         {
             return;
         }
         let Some(limit) = self.account_recovery_limit(cx) else {
             return;
         };
-        self.settings.usage_limit = Some(limit);
+        self.set_usage_limit(Some(limit), cx);
         self.attach_account(cx);
         let from = self.settings.account.clone();
         let thread = self.summary.provider_id.clone();
@@ -267,7 +308,7 @@ impl Conversation {
             let transfer = work.await;
             let _ = this.update(cx, |this, cx| {
                 this.account_switching = false;
-                if this.busy
+                if this.responding()
                     || this.settings.usage_limit.is_none()
                     || this.settings.account.id != old
                     || this.summary.provider_id != expected
@@ -326,7 +367,7 @@ impl Conversation {
                     );
                 }
                 this.settings.account = profile;
-                this.catalog.clear();
+                this.catalog = Default::default();
                 this.refresh_catalog(cx);
                 this.save_settings(cx);
                 this.resume_usage(cx);
@@ -341,7 +382,7 @@ impl Conversation {
         self.follow_ups.requested = None;
         self.save_follow_ups(cx);
         self.catalog_epoch += 1;
-        self.catalog.clear();
+        self.catalog = Default::default();
         self.status =
             "This provider account is no longer signed in. Choose another account to continue."
                 .into();
@@ -519,7 +560,7 @@ impl Conversation {
                             .group_hover("dismiss-usage-limit", |s| s.text_color(content(1.))),
                     )
                     .on_click(cx.listener(|this, _, _, cx| {
-                        this.settings.usage_limit = None;
+                        this.set_usage_limit(None, cx);
                         this.save_settings(cx);
                         cx.notify();
                     })),

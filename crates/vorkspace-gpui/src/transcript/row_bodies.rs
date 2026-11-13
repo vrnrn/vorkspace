@@ -160,11 +160,7 @@ impl TranscriptView {
                                 .when(expandable, |i| {
                                     i.group_hover("work-fold", |s| s.opacity(0.))
                                 })
-                                .child(crate::panel_kit::spinner(
-                                    ("live-work-cells", turn),
-                                    "",
-                                    14.,
-                                )),
+                                .child(crate::panel_kit::spinner(("live-work-cells", turn), 14.)),
                         )
                     })
                     .when(!open && !live, |d| {
@@ -410,6 +406,7 @@ impl TranscriptView {
                     markdown::Tone::Normal
                 },
                 self.reveals
+                    .active
                     .get(&message_start)
                     .map(|r| r.births.as_slice()),
                 self.frame_now,
@@ -484,7 +481,7 @@ impl TranscriptView {
                 content(1.)
             })
             .when(user, |d| {
-                // AgentTranscript.tsx: text-sm (14px / 20px), px-3 py-2.
+                // 14px text on a 20px line, 12px / 8px padding.
                 d.line_height(px(20.))
                     .px_3()
                     .pt(px(if first { 8. } else { 0. }))
@@ -493,7 +490,7 @@ impl TranscriptView {
                         canvas(
                             |_, _, _| {},
                             move |bounds, _, window, _| {
-                                // Match React's measured single-line bubble, including
+                                // Round a measured single-line bubble fully, including
                                 // when a window resize makes the same text wrap.
                                 let radius = if first && last && bounds.size.height <= px(37.) {
                                     f32::from(bounds.size.height) * 0.5

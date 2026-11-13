@@ -52,7 +52,7 @@ fn compact_settings_button() -> gpui::Stateful<gpui::Div> {
 
 impl Shell {
     pub(super) fn classic_rail_width(&self) -> f32 {
-        if self.workspace.project_rail_open || self.settings.is_some() {
+        if self.workspace.project_rail_open || self.pages.settings.is_some() {
             self.workspace
                 .project_rail_width
                 .max(self.open_rail_floor())
@@ -69,7 +69,7 @@ impl Shell {
     pub(super) fn open_rail_floor(&self) -> f32 {
         let lights = traffic_light_inset(
             self.workspace.preferences.interface_scale(),
-            self.fullscreen,
+            self.window.fullscreen,
         );
         // Each button rounds to whole device pixels: at most half a pixel more
         // at 1x (`navigation_button_size`).
@@ -80,38 +80,18 @@ impl Shell {
     /// or a left sidebar. The divider turns into that rule rather than
     /// meeting it at a right angle.
     pub(super) fn rail_meets_title_rule(&self) -> bool {
-        self.workspace.classic_layout
-            && !self.workspace.project_rail_open
-            && self.settings.is_none()
+        !self.workspace.project_rail_open
+            && self.pages.settings.is_none()
             && self.classic_rail_width() > 0.
     }
 
     pub(super) fn toggle_project_rail(&mut self, cx: &mut Context<Self>) {
         self.workspace.project_rail_open = !self.workspace.project_rail_open;
-        self.project_rail_drag = None;
+        self.rail.drag = None;
         self.close_menu(cx);
         self.invalidate_chrome(cx);
         self.persist(cx);
         cx.notify();
-    }
-
-    pub(super) fn hide_project_marks(&mut self, cx: &mut Context<Self>) {
-        self.retain_project_marks(|_| false, cx);
-    }
-
-    fn retain_project_marks(
-        &mut self,
-        mut visible: impl FnMut(&str) -> bool,
-        cx: &mut Context<Self>,
-    ) {
-        self.project_marks.retain(|path, mark| {
-            if visible(path) {
-                true
-            } else {
-                mark.update(cx, |mark, _| mark.hide());
-                false
-            }
-        });
     }
 
     pub(super) fn classic_project_rail(
@@ -120,12 +100,11 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let width = self.classic_rail_width();
-        if width <= 0. || self.settings.is_some() || !self.workspace.project_rail_open {
-            self.hide_project_marks(cx);
-        }
         // Early-return layouts must stop the card's presentation clock too.
-        if width <= 0. || self.settings.is_some() {
-            self.live_agents.update(cx, |activity, _| activity.hide());
+        if width <= 0. || self.pages.settings.is_some() {
+            self.sidebar
+                .live_agents
+                .update(cx, |activity, _| activity.hide());
         }
         if width <= 0. {
             return div()
@@ -149,7 +128,7 @@ impl Shell {
                 // Around its neighbour's rounded corners (the pane, or a left
                 // sidebar). Beside the icon rail, navigation overhangs the
                 // pane, so it turns into the title bar's rule instead.
-                let cap_top = if self.workspace.project_rail_open || self.settings.is_some() {
+                let cap_top = if self.workspace.project_rail_open || self.pages.settings.is_some() {
                     Some(0.)
                 } else {
                     self.rail_meets_title_rule().then_some(TITLE_BAR_HEIGHT)
@@ -161,12 +140,12 @@ impl Shell {
 
         self.resources.update(cx, |resources, cx| {
             resources.set_compact(
-                !self.workspace.project_rail_open && self.settings.is_none(),
+                !self.workspace.project_rail_open && self.pages.settings.is_none(),
                 cx,
             )
         });
 
-        if let Some(settings) = &self.settings {
+        if let Some(settings) = &self.pages.settings {
             let section = settings.read(cx).section;
             let select = cx.weak_entity();
             let back = select.clone();
@@ -193,12 +172,12 @@ impl Shell {
             return self.compact_project_rail(rail, cx);
         }
         // Expanded, sessions hang under their projects instead of the Working card.
-        self.live_agents.update(cx, |activity, _| activity.hide());
+        self.sidebar
+            .live_agents
+            .update(cx, |activity, _| activity.hide());
 
-        let _ = self.workspace.migrate_project_rail();
         // The rail lists the vorkspace's sessions rather than its projects;
         // projects are picked from the sidebar header within the vorkspace.
-        self.retain_project_marks(|_| false, cx);
         let bots = self.bots.clone().map(|bots| {
             bots.update(cx, |bots, cx| {
                 div().child(bots.rail(None, cx)).into_any_element()
@@ -271,8 +250,7 @@ impl Shell {
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(|this, event: &MouseDownEvent, _, cx| {
-                            this.project_rail_drag =
-                                Some((event.position.x, this.classic_rail_width()));
+                            this.rail.drag = Some((event.position.x, this.classic_rail_width()));
                             cx.stop_propagation();
                         }),
                     ),
@@ -334,14 +312,14 @@ impl Shell {
                                 s.bg(vorkspace_ui::fluid::hover(0.08))
                                     .text_color(content(1.))
                             })
-                            .child(self.sidebar_options_anchor.probe())
+                            .child(self.sidebar.options_anchor.probe())
                             .child(icon("more-horizontal", 14.))
                             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                             .on_click(cx.listener(|this, _, window, cx| {
                                 cx.stop_propagation();
                                 this.open_menu(
                                     MenuTarget::SidebarOptions,
-                                    Anchor::Slot(this.sidebar_options_anchor.clone()),
+                                    Anchor::Slot(this.sidebar.options_anchor.clone()),
                                     window,
                                     cx,
                                 );
@@ -415,6 +393,7 @@ impl Shell {
             let meta = self.session_metadata(*id, cx);
             meta.responding() || meta.needs_approval()
         });
+        let selected_item = self.selected_sidebar_destination();
         rail.child(
             div()
                 .id("classic-compact-actions")
@@ -459,68 +438,46 @@ impl Shell {
                         })),
                 )
                 .children(
-                    std::iter::once(("Search", "search"))
-                        .chain(
-                            self.visible_sidebar_navigation(cx)
-                                .into_iter()
-                                .map(|item| (item.label(), item.icon())),
-                        )
-                        .map(|(label, glyph)| {
-                            let selected = if label == "Search" {
-                                self.app_search.is_some()
-                            } else {
-                                self.app_view_label() == Some(label)
+                    std::iter::once(None)
+                        .chain(self.visible_sidebar_navigation(cx).into_iter().map(Some))
+                        .map(|item| {
+                            let (label, glyph, selected, unread) = match item {
+                                Some(item) => (
+                                    item.label(),
+                                    item.icon(),
+                                    selected_item == Some(item),
+                                    self.sidebar_destination_unread(item, cx),
+                                ),
+                                None => ("Search", "search", self.pages.search.is_some(), false),
                             };
-                            let connector = Connector::ALL
-                                .into_iter()
-                                .find(|provider| provider.label() == label);
-                            let unread = connector
-                                .is_some_and(|provider| self.connector_unread(provider, cx));
-                            icon_button(
-                                if label == "Terminal" {
-                                    "terminal"
+                            icon_button(label, label, glyph)
+                                .debug_selector(move || format!("sidebar-navigation-{label}"))
+                                .aria_label(if unread {
+                                    format!("{label}, new items")
                                 } else {
-                                    label
-                                },
-                                label,
-                                glyph,
-                            )
-                            .debug_selector(move || format!("sidebar-navigation-{label}"))
-                            .aria_label(if unread {
-                                format!("{label}, new items")
-                            } else {
-                                label.into()
-                            })
-                            .aria_selected(selected)
-                            .focusable()
-                            .tab_stop(true)
-                            .size(px(32.))
-                            .relative()
-                            .when(selected, |d| d.bg(content(0.1)))
-                            .when(unread, |d| {
-                                d.child(
-                                    div()
-                                        .absolute()
-                                        .right(px(3.))
-                                        .top(px(3.))
-                                        .size(px(5.))
-                                        .rounded_full()
-                                        .bg(accent_color()),
-                                )
-                            })
-                            .on_click(cx.listener(
-                                move |this, _, window, cx| match label {
-                                    "Search" => this.focus_search(window, cx),
-                                    "GitHub" => this.open_connector(Connector::Github, window, cx),
-                                    "GitLab" => this.open_connector(Connector::Gitlab, window, cx),
-                                    "Jira" => this.open_connector(Connector::Jira, window, cx),
-                                    "Notes" => this.open_notes(window, cx),
-                                    "Codebase" => this.open_codebase(window, cx),
-                                    "Automations" => this.open_automations(window, cx),
-                                    "To-dos" => this.open_todos(window, cx),
-                                    _ => (),
-                                },
-                            ))
+                                    label.into()
+                                })
+                                .aria_selected(selected)
+                                .focusable()
+                                .tab_stop(true)
+                                .size(px(32.))
+                                .relative()
+                                .when(selected, |d| d.bg(content(0.1)))
+                                .when(unread, |d| {
+                                    d.child(
+                                        div()
+                                            .absolute()
+                                            .right(px(3.))
+                                            .top(px(3.))
+                                            .size(px(5.))
+                                            .rounded_full()
+                                            .bg(accent_color()),
+                                    )
+                                })
+                                .on_click(cx.listener(move |this, _, window, cx| match item {
+                                    Some(item) => this.open_sidebar_destination(item, window, cx),
+                                    None => this.focus_search(window, cx),
+                                }))
                         }),
                 )
                 // Then the vorkspace's Bots and its Sessions, in the expanded
@@ -562,7 +519,7 @@ impl Shell {
                         })),
                 ),
         )
-        .children(self.live_agents_preview(true, cx))
+        .children(self.live_agents_preview(cx))
         .child(compact_footer(
             self.resources.clone(),
             self.workspace

@@ -69,7 +69,7 @@ pub(crate) fn collect(rows: &[Row], from: usize, streaming: bool) -> Phases {
         } else if role == "tool"
             && let Ok(mut call) = serde_json::from_str::<ToolCall>(&rows[at].text)
         {
-            let standalone = match call.panel() {
+            let standalone = match call.panel().as_deref() {
                 Some(Panel::Agent(_))
                     if live_turn.is_some_and(|turn| at >= turn)
                         || matches!(call.state, ToolState::Failed | ToolState::Cancelled) =>
@@ -104,7 +104,7 @@ pub(crate) fn collect(rows: &[Row], from: usize, streaming: bool) -> Phases {
                 flush(end, &mut members, &mut calls, &mut result);
             }
         } else {
-            // React's first assistant message replaces the initial private think.
+            // The first assistant message replaces the initial private think.
             if role == "assistant" && leading && calls.is_empty() {
                 result.hidden.extend(members.drain(..));
             }

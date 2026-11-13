@@ -7,6 +7,7 @@ mod vorkspaces;
 pub(crate) use panes::{AppPane, AppPaneState};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use vorkspace_model::pane_layout::{Edge, PaneNode, SplitDir, leaf};
 pub(crate) use vorkspaces::{VorkspaceDef, move_bot, reconcile_bots};
@@ -216,16 +217,6 @@ pub(crate) struct ProjectRailState {
     pub groups: Vec<ProjectRailGroup>,
     pub assignments: HashMap<String, String>,
     pub pinned: HashSet<String>,
-    #[serde(default)]
-    pub awaiting_legacy_groups: bool,
-    #[serde(default)]
-    pub awaiting_legacy_assignments: bool,
-    #[serde(default)]
-    pub awaiting_legacy_pins: bool,
-    #[serde(default)]
-    pub assignment_overrides: HashMap<String, Option<String>>,
-    #[serde(default)]
-    pub pin_overrides: HashMap<String, bool>,
 }
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
@@ -234,61 +225,6 @@ pub(crate) struct ProjectRailGroup {
     pub name: String,
     pub collapsed: bool,
 }
-impl ProjectRailState {
-    fn from_metadata(metadata: &serde_json::Value) -> Result<Self, String> {
-        fn read<T: serde::de::DeserializeOwned + Default>(
-            metadata: &serde_json::Value,
-            key: &str,
-        ) -> Result<T, String> {
-            match metadata.get(key) {
-                None => Ok(T::default()),
-                Some(value) => serde_json::from_str(
-                    value
-                        .as_str()
-                        .ok_or_else(|| format!("Invalid legacy {key}"))?,
-                )
-                .map_err(|_| format!("Invalid legacy {key}")),
-            }
-        }
-        let groups: Vec<ProjectRailGroup> = read(metadata, "vorkspace.projectGroups")?;
-        let mut seen = HashSet::new();
-        if groups
-            .iter()
-            .any(|g| g.id.is_empty() || g.name.is_empty() || !seen.insert(g.id.clone()))
-        {
-            return Err("Invalid legacy project groups".into());
-        }
-        let assignments: HashMap<String, String> =
-            read(metadata, "vorkspace.projectGroupAssignments")?;
-        let mut normalized = HashMap::new();
-        for (path, group) in assignments {
-            let key = vorkspace_core::files::path_key(&path);
-            if normalized
-                .insert(key, group.clone())
-                .is_some_and(|previous| previous != group)
-            {
-                return Err("Conflicting legacy project assignments".into());
-            }
-        }
-        let pinned: Vec<String> = read(metadata, "vorkspace.projectRailPinned")?;
-        Ok(Self {
-            groups,
-            assignments: normalized,
-            pinned: pinned
-                .into_iter()
-                .map(|p| vorkspace_core::files::path_key(&p))
-                .collect(),
-            awaiting_legacy_groups: metadata.get("vorkspace.projectGroups").is_none(),
-            awaiting_legacy_assignments: metadata
-                .get("vorkspace.projectGroupAssignments")
-                .is_none(),
-            awaiting_legacy_pins: metadata.get("vorkspace.projectRailPinned").is_none(),
-            assignment_overrides: HashMap::new(),
-            pin_overrides: HashMap::new(),
-        })
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub(crate) struct Workspace {
@@ -309,7 +245,7 @@ pub(crate) struct Workspace {
     pub projects: Vec<String>,
     /// Explicit decisions keyed by normalized path; false prevents stale legacy re-import.
     pub project_archive: HashMap<String, bool>,
-    /// Explicit native removals suppress stale desktop project lists.
+    /// Explicit native removals suppress stale project lists.
     pub deleted_projects: HashSet<String>,
     pub project: String,
     /// Last focused open session in each project, independent of tab order.
@@ -317,13 +253,13 @@ pub(crate) struct Workspace {
     pub recent_files: HashMap<String, Vec<String>>,
     pub collapsed: HashSet<String>,
     pub sidebar_visible: bool,
-    /// Retained desktop preference; both current sidebars use right_panel_width.
+    /// Retained earlier preference; both current sidebars use right_panel_width.
     pub sidebar_width: f32,
     pub project_rail_open: bool,
     pub project_rail_width: f32,
-    /// Explicit native group choices override the retained desktop defaults.
+    /// Explicit native group choices override the default collapsed state.
     pub project_group_collapsed: HashMap<String, bool>,
-    /// None means the legacy source has not yet been available for migration.
+    /// None until the project rail is first changed; readers use the defaults.
     pub project_rail_state: Option<ProjectRailState>,
     pub sidebar_tabs: HashMap<String, SidebarTab>,
     pub sidebar_tab_order: Vec<SidebarTab>,
@@ -331,21 +267,16 @@ pub(crate) struct Workspace {
     pub sidebar_navigation_order: Vec<String>,
     /// Sidebar visibility only; connector enablement, polling and tabs are independent.
     pub sidebar_hidden_connectors: HashSet<String>,
-    /// Inert legacy density preference. Session cards use the current default.
-    pub compact_session_cards: bool,
     pub sidebar_notes_visible: bool,
     pub sidebar_automations_visible: bool,
     pub sidebar_todos_visible: bool,
-    pub sidebar_inbox_visible: bool,
     /// Show qualifying running and unseen finished sessions in the project rail.
     pub sidebar_activity_visible: bool,
     pub sidebar_subscriptions_visible: bool,
-    /// The inset right panel: open state, tab, width and tab order.
-    pub right_panel_open: bool,
+    /// The inset right panel: tab and width.
     pub right_panel_tab: crate::panel_kit::RightTab,
     /// Shared width for project tools and Bot details, independent of visibility.
     pub right_panel_width: f32,
-    pub right_panel_tabs: Vec<crate::panel_kit::RightTab>,
     pub changes_view: crate::git_tools::changes::ChangesView,
     /// Each tab's file/review pane beside its chat.
     pub reviews: std::collections::HashMap<i64, crate::git_tools::review::ReviewState>,
@@ -358,35 +289,23 @@ pub(crate) struct Workspace {
     pub focused: HashMap<i64, i64>,
     /// Each project's terminal dock (ProjectTerminalDock), by project path.
     pub docks: HashMap<String, TerminalDock>,
-    /// The original desktop layout. Kept for older serialized workspaces;
-    /// restored state always selects this layout.
-    pub classic_layout: bool,
     pub preferences: vorkspace_ui::preferences::Preferences,
     pub session_filters: vorkspace_core::session_filters::Filters,
-    pub project_appearance: HashMap<String, vorkspace_core::project_appearance::ProjectAppearance>,
-    /// Last desktop source values, used to reconcile subsequent desktop changes
-    /// while retaining deliberate native project and preference edits.
-    pub desktop_project_preferences: Option<serde_json::Value>,
-    /// Unmodified desktop viewport metadata, including pane types and explicit
-    /// tab-group assignments that do not yet have a native representation.
-    pub desktop_workspace_snapshot: Option<serde_json::Value>,
-    /// Exact source strings retained for preferences with no native equivalent.
-    pub desktop_preferences_metadata: Option<serde_json::Value>,
     /// Named sets of projects and Bots. Folders and Bots keep their own data;
     /// a vorkspace only decides what this window lists.
-    pub vorkspaces: Vec<VorkspaceDef>,
+    pub vorkspaces: Arc<Vec<VorkspaceDef>>,
     pub active_vorkspace: String,
     /// The project each vorkspace last showed, so switching back returns there.
     pub vorkspace_project: HashMap<String, String>,
     /// Bots already placed in a vorkspace once; a new one joins the active.
-    pub seen_bots: HashSet<String>,
+    pub seen_bots: Arc<HashSet<String>>,
     /// Folders first discovered during `restore`, carried into `AppCore` when
     /// shared vorkspaces load.
     #[serde(skip)]
     pub restored_new_projects: Vec<String>,
 }
 
-/// Port of src/features/projects/model/projectTerminal.ts.
+/// Where a project's terminal dock sits.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum DockSide {
@@ -487,13 +406,6 @@ impl TerminalDock {
             active
         };
     }
-    /// onCloseOtherProjectTerminals: `keep` is left, and active.
-    pub fn keep_only(&mut self, keep: usize) {
-        if keep < self.terminals.len() {
-            self.terminals = vec![self.terminals.swap_remove(keep)];
-            self.active = 0;
-        }
-    }
     pub fn set_side(&mut self, side: DockSide) {
         if side != self.side {
             // A dock moved across axes starts from that axis's default.
@@ -534,46 +446,60 @@ impl Default for Workspace {
                 .map(|item| item.id().into())
                 .collect(),
             sidebar_hidden_connectors: HashSet::new(),
-            compact_session_cards: true,
             sidebar_notes_visible: true,
             sidebar_automations_visible: true,
             sidebar_todos_visible: true,
-            sidebar_inbox_visible: true,
             sidebar_activity_visible: true,
             sidebar_subscriptions_visible: true,
-            right_panel_open: false,
             right_panel_tab: Default::default(),
             right_panel_width: crate::right_panel::WIDTH_DEFAULT,
-            right_panel_tabs: crate::panel_kit::RightTab::normalize(&[]),
             changes_view: Default::default(),
             reviews: Default::default(),
             review_owners: Default::default(),
             layouts: Default::default(),
             focused: Default::default(),
             docks: Default::default(),
-            classic_layout: true,
             preferences: vorkspace_ui::preferences::Preferences::default(),
             session_filters: Default::default(),
-            project_appearance: Default::default(),
-            desktop_project_preferences: None,
-            desktop_workspace_snapshot: None,
-            desktop_preferences_metadata: None,
-            vorkspaces: Vec::new(),
+            vorkspaces: Arc::default(),
             active_vorkspace: String::new(),
             vorkspace_project: HashMap::new(),
-            seen_bots: HashSet::new(),
+            seen_bots: Arc::default(),
             restored_new_projects: Vec::new(),
         }
     }
 }
 impl Workspace {
+    #[cfg(test)]
     pub fn restore(saved: Option<&str>, sessions: &[(i64, String)], cwd: &str) -> Self {
+        Self::restore_with_sessions(
+            saved,
+            sessions.iter().map(|(id, path)| (*id, path.as_str())),
+            cwd,
+        )
+    }
+
+    pub(crate) fn restore_sessions(
+        saved: Option<&str>,
+        sessions: &[vorkspace_core::store::Session],
+        cwd: &str,
+    ) -> Self {
+        Self::restore_with_sessions(
+            saved,
+            sessions.iter().map(|row| (row.id, row.cwd.as_str())),
+            cwd,
+        )
+    }
+
+    fn restore_with_sessions<'a>(
+        saved: Option<&str>,
+        sessions: impl Iterator<Item = (i64, &'a str)>,
+        cwd: &str,
+    ) -> Self {
         let mut state = saved
             .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
             .and_then(|mut value| {
-                vorkspace_core::desktop_preferences::DesktopPreferences::restore_sidebar_preferences(
-                    &mut value,
-                );
+                restore_sidebar_preferences(&mut value);
                 if let Some(panes) = value.get_mut("app_panes").and_then(|v| v.as_object_mut()) {
                     panes.retain(|_, pane| {
                         serde_json::from_value::<AppPaneState>(pane.clone()).is_ok()
@@ -582,29 +508,6 @@ impl Workspace {
                 serde_json::from_value::<Self>(value).ok()
             })
             .unwrap_or_default();
-        // Recover markers retained by an earlier bridge even when the desktop
-        // source is unavailable. Native decisions, including restore, win.
-        if let Some(raw) = state
-            .desktop_preferences_metadata
-            .as_ref()
-            .and_then(|m| m.get("vorkspace.archivedProjects"))
-            .and_then(|v| v.as_str())
-            .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
-            .and_then(|v| v.as_array().cloned())
-        {
-            for path in raw
-                .iter()
-                .filter_map(|v| v.get("path").and_then(|v| v.as_str()))
-                .filter(|p| !p.is_empty())
-            {
-                state
-                    .project_archive
-                    .entry(vorkspace_core::files::path_key(path))
-                    .or_insert(true);
-            }
-        }
-        let _ = state.migrate_project_rail();
-        state.classic_layout = true;
         state.projects.retain(|p| {
             state
                 .project_archive
@@ -627,26 +530,32 @@ impl Workspace {
         {
             state.project = cwd.into();
         }
-        // Projects are no longer customized: each is a folder in the color
-        // its path hashes to, with its folder name. Old customizations go.
-        state.project_appearance.clear();
-        let mut known: HashSet<_> = sessions.iter().map(|s| s.0).collect();
+        let mut first_in_project = None;
+        let sessions: HashMap<_, _> = sessions
+            .inspect(|&(id, path)| {
+                if path == cwd && first_in_project.is_none() {
+                    first_in_project = Some(id);
+                }
+            })
+            .collect();
         state.review_owners.retain(|id, owner| {
             *id < 0
-                && known.contains(owner)
+                && sessions.contains_key(owner)
                 && state.reviews.get(id).is_some_and(|r| !r.tabs.is_empty())
         });
-        known.extend(state.review_owners.keys().copied());
         state.restore_terminal_tab_ids();
         state.restore_app_panes();
-        known.extend(state.app_panes.keys().copied());
         let mut seen = HashSet::new();
         let mut layouts = std::mem::take(&mut state.layouts);
         let mut focused = std::mem::take(&mut state.focused);
         for tab in std::mem::take(&mut state.tabs) {
             let layout = layouts.remove(&tab).unwrap_or_else(|| leaf(tab));
-            let Some(layout) = layout.retain(&mut |id| known.contains(&id) && seen.insert(id))
-            else {
+            let Some(layout) = layout.retain(&mut |id| {
+                (sessions.contains_key(&id)
+                    || state.review_owners.contains_key(&id)
+                    || state.app_panes.contains_key(&id))
+                    && seen.insert(id)
+            }) else {
                 continue;
             };
             let key = if layout.contains(tab) {
@@ -673,21 +582,6 @@ impl Workspace {
         }
         state.restore_open_app_tabs();
         state.normalize_title_order();
-        if state
-            .desktop_project_preferences
-            .as_ref()
-            .and_then(|source| source.get("projects"))
-            .is_some()
-            && state.active.is_some_and(|id| {
-                sessions.iter().any(|(known, path)| {
-                    Some(*known) == state.session_for_pane(id) && !state.projects.contains(path)
-                })
-            })
-        {
-            // An old native sidecar could focus an internal session folder.
-            // It must not restore that folder as a remembered user project.
-            state.active = None;
-        }
         if state.active.is_none_or(|id| state.tab_of(id).is_none()) {
             state.active = state
                 .project_focus
@@ -695,9 +589,10 @@ impl Workspace {
                 .copied()
                 .filter(|id| {
                     state.tab_of(*id).is_some()
-                        && sessions.iter().any(|(known, path)| {
-                            Some(*known) == state.session_for_pane(*id) && *path == state.project
-                        })
+                        && state
+                            .session_for_pane(*id)
+                            .and_then(|owner| sessions.get(&owner))
+                            .is_some_and(|path| *path == state.project)
                 })
                 .or_else(|| {
                     state
@@ -706,10 +601,10 @@ impl Workspace {
                         .rev()
                         .map(|tab| state.tab_focus(*tab))
                         .find(|id| {
-                            sessions.iter().any(|(known, path)| {
-                                Some(*known) == state.session_for_pane(*id)
-                                    && *path == state.project
-                            })
+                            state
+                                .session_for_pane(*id)
+                                .and_then(|owner| sessions.get(&owner))
+                                .is_some_and(|path| *path == state.project)
                         })
                 })
                 .or_else(|| {
@@ -730,9 +625,9 @@ impl Workspace {
                 });
         }
         if saved.is_none()
-            && let Some((id, _)) = sessions.iter().find(|(_, path)| path == cwd)
+            && let Some(id) = first_in_project
         {
-            state.open(*id);
+            state.open(id);
         }
         state.sidebar_width = state.sidebar_width.clamp(200., 560.);
         state.project_rail_width = if state.project_rail_width.is_finite() {
@@ -750,10 +645,12 @@ impl Workspace {
             .right_panel_width
             .clamp(crate::right_panel::WIDTH_MIN, crate::right_panel::WIDTH_MAX)
             .round();
-        state.right_panel_tabs = crate::panel_kit::RightTab::normalize(&state.right_panel_tabs);
-        state
-            .reviews
-            .retain(|id, review| known.contains(id) && !review.tabs.is_empty());
+        state.reviews.retain(|id, review| {
+            (sessions.contains_key(id)
+                || state.review_owners.contains_key(id)
+                || state.app_panes.contains_key(id))
+                && !review.tabs.is_empty()
+        });
         state.docks.retain(|_, dock| !dock.terminals.is_empty());
         for dock in state.docks.values_mut() {
             dock.active = dock.active.min(dock.terminals.len() - 1);
@@ -792,20 +689,20 @@ impl Workspace {
         let review_owners = &state.review_owners;
         state.project_focus.retain(|project, id| {
             open.contains(id)
-                && sessions.iter().any(|(known, path)| {
-                    *known == review_owners.get(id).copied().unwrap_or(*id) && path == project
-                })
+                && sessions
+                    .get(review_owners.get(id).unwrap_or(id))
+                    .is_some_and(|path| *path == project)
         });
         if let Some(active) = state.active {
-            if let Some((_, project)) = sessions
-                .iter()
-                .find(|(id, _)| state.session_for_pane(active) == Some(*id))
+            if let Some(&project) = state
+                .session_for_pane(active)
+                .and_then(|id| sessions.get(&id))
             {
                 if state.is_project_available(project)
                     && (legacy_vorkspace || state.vorkspace_has_project(project))
                 {
-                    state.project = project.clone();
-                    state.project_focus.insert(project.clone(), active);
+                    state.project = project.to_owned();
+                    state.project_focus.insert(project.to_owned(), active);
                 } else {
                     state.active = None;
                 }
@@ -892,88 +789,8 @@ impl Workspace {
                     .unwrap_or(SidebarTab::Files)
             })
     }
-    pub fn migrate_project_rail(&mut self) -> Result<(), String> {
-        let Some(metadata) = &self.desktop_preferences_metadata else {
-            return Ok(());
-        };
-        let keys = [
-            "vorkspace.projectGroups",
-            "vorkspace.projectGroupAssignments",
-            "vorkspace.projectRailPinned",
-        ];
-        if self.project_rail_state.is_none() {
-            if keys.iter().any(|key| metadata.get(*key).is_some()) {
-                self.project_rail_state = Some(ProjectRailState::from_metadata(metadata)?);
-            }
-            return Ok(());
-        }
-        let rail = self.project_rail_state.as_mut().unwrap();
-        let pending = [
-            rail.awaiting_legacy_groups,
-            rail.awaiting_legacy_assignments,
-            rail.awaiting_legacy_pins,
-        ];
-        let selected: serde_json::Map<String, serde_json::Value> = keys
-            .iter()
-            .zip(pending)
-            .filter_map(|(key, pending)| {
-                pending
-                    .then(|| metadata.get(*key).map(|v| ((*key).to_owned(), v.clone())))
-                    .flatten()
-            })
-            .collect();
-        if selected.is_empty() {
-            return Ok(());
-        }
-        let legacy = ProjectRailState::from_metadata(&serde_json::Value::Object(selected))?;
-        if rail.awaiting_legacy_groups && metadata.get(keys[0]).is_some() {
-            let mut groups = legacy.groups;
-            for group in std::mem::take(&mut rail.groups) {
-                if let Some(existing) = groups.iter_mut().find(|g| g.id == group.id) {
-                    *existing = group;
-                } else {
-                    groups.push(group);
-                }
-            }
-            rail.groups = groups;
-            rail.awaiting_legacy_groups = false;
-        }
-        if rail.awaiting_legacy_assignments && metadata.get(keys[1]).is_some() {
-            let mut assignments = legacy.assignments;
-            for (path, value) in std::mem::take(&mut rail.assignment_overrides) {
-                if let Some(group) = value {
-                    assignments.insert(path, group);
-                } else {
-                    assignments.remove(&path);
-                }
-            }
-            rail.assignments = assignments;
-            rail.awaiting_legacy_assignments = false;
-        }
-        if rail.awaiting_legacy_pins && metadata.get(keys[2]).is_some() {
-            let mut pinned = legacy.pinned;
-            for (path, value) in std::mem::take(&mut rail.pin_overrides) {
-                if value {
-                    pinned.insert(path);
-                } else {
-                    pinned.remove(&path);
-                }
-            }
-            rail.pinned = pinned;
-            rail.awaiting_legacy_pins = false;
-        }
-        Ok(())
-    }
     pub fn project_rail_mut(&mut self) -> &mut ProjectRailState {
-        self.migrate_project_rail()
-            .expect("rail mutations require validated migration");
-        self.project_rail_state
-            .get_or_insert_with(|| ProjectRailState {
-                awaiting_legacy_groups: true,
-                awaiting_legacy_assignments: true,
-                awaiting_legacy_pins: true,
-                ..Default::default()
-            })
+        self.project_rail_state.get_or_insert_with(Default::default)
     }
     pub fn restore_project(&mut self, path: &str) {
         self.deleted_projects
@@ -982,7 +799,7 @@ impl Workspace {
     }
     pub fn add_project(&mut self, path: &str) {
         // A folder the app has never seen joins the vorkspace in view,
-        // however it arrived (a dialog, a remote host, an agent command).
+        // whether it came from a dialog or an agent command.
         if self.register_project(path) {
             let active = self.active_vorkspace.clone();
             self.join_vorkspace(&active, path);
@@ -1015,7 +832,7 @@ impl Workspace {
         self.review_owners
             .get(&id)
             .copied()
-            // Remote sessions also have negative IDs. Only an app descriptor
+            // Only an app descriptor
             // identifies a leaf without a session owner.
             .or_else(|| (!self.app_panes.contains_key(&id)).then_some(id))
     }
@@ -1404,7 +1221,7 @@ fn fresh_terminal_tab_id(used: &HashSet<u64>) -> u64 {
     }
 }
 
-/// Port of src/features/workspace/model/tabVisitHistory.ts. Closed tabs are
+/// Back/Forward history of visited tabs. Closed tabs are
 /// pruned rather than reopened by Back, and a new visit discards Forward.
 #[derive(Default)]
 pub(crate) struct VisitHistory {
@@ -1481,6 +1298,73 @@ pub(crate) fn project_name(path: &str) -> String {
         .filter(|n| !n.is_empty())
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| path.into())
+}
+
+/// Normalize the saved rail and sidebar fields before decoding. A missing or
+/// invalid value takes its default; every other saved field is left alone.
+fn restore_sidebar_preferences(workspace: &mut serde_json::Value) {
+    let Some(target) = workspace.as_object_mut() else {
+        return;
+    };
+    for field in [
+        "project_rail_open",
+        "project_rail_width",
+        "sidebar_tabs",
+        "sidebar_tab_order",
+    ] {
+        let value = target.get(field).cloned().unwrap_or_default();
+        let value = match field {
+            "project_rail_open" => serde_json::json!(value.as_bool().unwrap_or(true)),
+            "project_rail_width" => serde_json::json!(
+                value
+                    .as_f64()
+                    .filter(|width| width.is_finite())
+                    .unwrap_or(200.)
+                    .clamp(180., 360.)
+                    .round()
+            ),
+            "sidebar_tabs" => sidebar_tabs(&value),
+            "sidebar_tab_order" => sidebar_tab_order(&value),
+            _ => unreachable!(),
+        };
+        target.insert(field.into(), value);
+    }
+}
+
+fn sidebar_tabs(value: &serde_json::Value) -> serde_json::Value {
+    serde_json::Value::Object(
+        value
+            .as_object()
+            .into_iter()
+            .flatten()
+            .filter_map(|(project, tab)| {
+                let tab = tab.as_str()?;
+                if project.is_empty()
+                    || project == "~"
+                    || !["sessions", "files", "changes", "graph"].contains(&tab)
+                {
+                    return None;
+                }
+                Some((project.clone(), serde_json::json!(tab)))
+            })
+            .collect(),
+    )
+}
+
+fn sidebar_tab_order(value: &serde_json::Value) -> serde_json::Value {
+    let mut tabs = Vec::new();
+    for tab in value
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        .chain(["sessions", "files", "changes"])
+    {
+        if ["sessions", "files", "changes"].contains(&tab) && !tabs.contains(&tab) {
+            tabs.push(tab);
+        }
+    }
+    serde_json::json!(tabs)
 }
 
 #[cfg(test)]

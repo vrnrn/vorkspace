@@ -212,7 +212,7 @@ for line in sys.stdin:
     request.cwd = dir.path().into();
     for discard_tree in [true, false] {
         let parked = take(&original).unwrap();
-        let binding = Binding::request(&parked.protocol.request);
+        let binding = parked.binding;
         let epoch = *epochs().lock().unwrap().entry(binding.clone()).or_default();
         if discard_tree {
             discard_worktree(&request.cwd);
@@ -221,7 +221,7 @@ for line in sys.stdin:
         }
         // Deterministically deliver the old cancellation's terminal frame
         // after invalidation. It must never publish its lease again.
-        park_cancelled(parked.wire, parked.protocol, &binding, epoch);
+        park_cancelled(parked.wire, Protocol::new(request.clone()), &binding, epoch);
         assert!(take(&original).is_none());
         run(
             request.clone(),

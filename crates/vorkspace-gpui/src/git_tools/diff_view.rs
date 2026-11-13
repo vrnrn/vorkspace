@@ -1,4 +1,4 @@
-//! UnifiedDiffView.tsx and unifiedDiffDocument.ts: every file's hunks in one
+//! The unified diff view: every file's hunks in one
 //! virtualized review, with sticky file headers, a fixed gutter beside code
 //! lanes that scroll horizontally together, hunk navigation, per-file and
 //! per-hunk staging, and line comments for the chat. Highlighting runs off
@@ -12,8 +12,8 @@ use crate::{
 use gpui::{
     AnyElement, App, Bounds, Context, EventEmitter, FocusHandle, Focusable, FontWeight,
     HighlightStyle, Hsla, KeyBinding, ListAlignment, ListOffset, ListState, MouseButton,
-    MouseDownEvent, MouseMoveEvent, Pixels, Role, ScrollWheelEvent, SharedString, StyledText,
-    Subscription, Task, Window, actions, canvas, div, list, prelude::*, px,
+    MouseDownEvent, MouseMoveEvent, Pixels, PromptLevel, Role, ScrollWheelEvent, SharedString,
+    StyledText, Subscription, Task, Window, actions, canvas, div, list, prelude::*, px,
 };
 use std::{
     borrow::Cow,
@@ -93,7 +93,8 @@ impl DiffFile {
         }
     }
     fn same_content(&self, other: &DiffFile) -> bool {
-        Arc::ptr_eq(&self.blocks, &other.blocks)
+        (Arc::ptr_eq(&self.blocks, &other.blocks)
+            || (self.blocks.is_empty() && other.blocks.is_empty()))
             && self.label == other.label
             && self.binary == other.binary
             && self.too_large == other.too_large
@@ -108,7 +109,11 @@ impl DiffFile {
 pub(crate) enum DiffEvent {
     StageFile(SharedString),
     DiscardFile(SharedString),
-    StageHunk(SharedString, usize),
+    StageHunk {
+        file: SharedString,
+        chunk: usize,
+        blocks: Arc<Vec<Block>>,
+    },
     Comment(CommentRequest),
 }
 
@@ -366,8 +371,10 @@ fn highlight_file(path: &str, blocks: &[Block]) -> Option<Vec<Vec<Vec<HighlightS
 }
 
 struct Comment {
+    file_id: SharedString,
     path: String,
     line: Line,
+    old_side: bool,
     anchor: AnchorSlot,
     input: gpui::Entity<Input>,
     pending: Option<Rc<()>>,
@@ -397,9 +404,10 @@ pub(crate) struct DiffView {
     viewport: Rc<Cell<Option<Bounds<Pixels>>>>,
     char_width: Cell<Option<f32>>,
     hovered: Option<usize>,
-    pending: Option<usize>,
+    pending: Option<SharedString>,
     focus_id: Option<SharedString>,
-    pub(crate) busy_id: Option<SharedString>,
+    pub(crate) action_pending: bool,
+    pub(crate) action_error: Option<String>,
     pub(crate) file_count: Option<usize>,
     pub(crate) totals: Option<(u32, u32)>,
     highlights: HashMap<SharedString, (Arc<Vec<Block>>, Option<Tokens>)>,
@@ -412,7 +420,6 @@ pub(crate) struct DiffView {
     wheel_axis: Option<(bool, std::time::Instant)>,
     comment: Option<Comment>,
     retiring_comment_focus: Option<FocusHandle>,
-    action_slots: HashMap<usize, AnchorSlot>,
     focus: FocusHandle,
 }
 impl EventEmitter<DiffEvent> for DiffView {}
@@ -428,7 +435,7 @@ impl DiffView {
         let weak = cx.weak_entity();
         list.set_scroll_handler(move |_, _, cx| {
             let _ = weak.update(cx, |this, cx| {
-                // A wheel or drag ends a pending jump, as React's capture does.
+                // A wheel or drag ends a pending jump.
                 this.pending = None;
                 cx.notify();
             });
@@ -466,7 +473,8 @@ impl DiffView {
             hovered: None,
             pending: None,
             focus_id: None,
-            busy_id: None,
+            action_pending: false,
+            action_error: None,
             file_count: None,
             totals: None,
             highlights: HashMap::new(),
@@ -478,7 +486,6 @@ impl DiffView {
             wheel_axis: None,
             comment: None,
             retiring_comment_focus: None,
-            action_slots: HashMap::new(),
             focus: cx.focus_handle(),
         }
     }
@@ -493,6 +500,7 @@ impl DiffView {
         if unchanged {
             return;
         }
+        let anchor = self.scroll_anchor();
         let ids: HashSet<SharedString> = files.iter().map(|f| f.id.clone()).collect();
         self.open.retain(|id| ids.contains(id));
         for id in &ids {
@@ -502,7 +510,7 @@ impl DiffView {
         }
         self.known = ids;
         self.files = files;
-        self.rebuild(cx);
+        self.rebuild_at(anchor, cx);
     }
     /// The file a review was opened on: expanded and scrolled to the top.
     pub(crate) fn focus_file(&mut self, id: Option<SharedString>, cx: &mut Context<Self>) {
@@ -510,12 +518,12 @@ impl DiffView {
             return;
         }
         self.focus_id = id.clone();
+        self.pending = id.clone();
+        self.action_error = None;
         if let Some(id) = id {
-            if self.open.insert(id.clone()) {
+            if self.open.insert(id) {
                 self.rebuild(cx);
-            }
-            if let Some(&ix) = self.by_id.get(&id) {
-                self.pending = Some(ix);
+            } else {
                 self.apply_pending(cx);
             }
         }
@@ -551,13 +559,17 @@ impl DiffView {
             self.row_key(ix).as_ref() == Some(key)
         }
     }
+    fn scroll_anchor(&self) -> Option<(RowKey, Pixels)> {
+        let top = self.list.logical_scroll_top();
+        self.row_key(top.item_ix)
+            .map(|key| (key, top.offset_in_item))
+    }
+
     fn rebuild(&mut self, cx: &mut Context<Self>) {
-        // Data changes above the reader stay anchored to the row they read.
-        let anchor = {
-            let top = self.list.logical_scroll_top();
-            self.row_key(top.item_ix)
-                .map(|key| (key, top.offset_in_item))
-        };
+        self.rebuild_at(self.scroll_anchor(), cx);
+    }
+
+    fn rebuild_at(&mut self, anchor: Option<(RowKey, Pixels)>, cx: &mut Context<Self>) {
         self.by_id = self
             .files
             .iter()
@@ -568,8 +580,7 @@ impl DiffView {
         let mut hunks = Vec::new();
         let mut file_rows = Vec::with_capacity(self.files.len());
         let (mut columns, mut digits) = (40, 3);
-        let keep: HashSet<_> = self.files.iter().map(|f| f.id.clone()).collect();
-        self.bodies.retain(|id, _| keep.contains(id));
+        self.bodies.retain(|id, _| self.by_id.contains_key(id));
         for (index, file) in self.files.iter().enumerate() {
             let message = file.message();
             let stageable = file.can_stage_hunk;
@@ -620,38 +631,15 @@ impl DiffView {
         self.total = at;
         self.hunks = hunks;
         self.file_rows = file_rows;
-        let comment_anchor = self.comment.as_ref().and_then(|comment| {
-            self.rows.iter().enumerate().find_map(|(ix, row)| {
-                let file = &self.files[row.file];
-                if file.path != comment.path {
-                    return None;
-                }
-                let matches =
-                    |block: usize, line: usize| file.blocks[block].lines()[line] == comment.line;
-                match row.kind {
-                    RowKind::Line { block, line, .. } if matches(block, line) => Some(ix * 2),
-                    RowKind::Split { block, old, new } => {
-                        if new.is_some_and(|line| matches(block, line)) {
-                            Some(ix * 2 + 1)
-                        } else if old.is_some_and(|line| matches(block, line)) {
-                            Some(ix * 2)
-                        } else {
-                            None
-                        }
-                    }
-                    _ => None,
-                }
-            })
-        });
-        if let Some(key) = comment_anchor {
-            let anchor = self.action_slots.entry(key).or_default().clone();
-            self.comment.as_mut().unwrap().anchor = anchor;
-        }
         self.max_columns = columns;
         self.number_width = (digits as f32 * 8. + 12.).max(36.);
         self.hovered = None;
         self.list.reset(self.rows.len());
-        if self.pending.is_some() {
+        if self
+            .pending
+            .as_ref()
+            .is_some_and(|id| self.by_id.contains_key(id))
+        {
             self.apply_pending(cx);
         } else if let Some((key, offset)) = anchor {
             let target = (0..self.rows.len()).find(|&i| self.row_matches(i, &key));
@@ -673,14 +661,11 @@ impl DiffView {
     }
     /// A jump holds until its file has loaded, then lets go.
     fn apply_pending(&mut self, cx: &mut Context<Self>) {
-        let Some(file) = self.pending else {
-            return;
-        };
-        let Some(&row) = self.file_rows.get(file) else {
+        let Some(&file) = self.pending.as_ref().and_then(|id| self.by_id.get(id)) else {
             return;
         };
         self.list.scroll_to(ListOffset {
-            item_ix: row,
+            item_ix: self.file_rows[file],
             offset_in_item: px(0.),
         });
         if self.files[file].empty_message.as_deref() != Some("Loading…") {
@@ -884,8 +869,8 @@ impl DiffView {
     fn clamp_scroll_x(&mut self) {
         self.scroll_x = self.scroll_x.clamp(0., self.max_scroll_x());
     }
-    /// Runs before the list sees the wheel. Any wheel ends a pending jump,
-    /// as React's `stopJump`. Each gesture keeps to the axis it started on:
+    /// Runs before the list sees the wheel. Any wheel ends a pending jump.
+    /// Each gesture keeps to the axis it started on:
     /// a sideways one scrolls the code lanes and never the list, a vertical
     /// one never drifts the lanes. Returns whether it took the event.
     fn wheel(&mut self, event: &ScrollWheelEvent, cx: &mut Context<Self>) -> bool {
@@ -968,13 +953,26 @@ impl DiffView {
 
     fn open_comment(
         &mut self,
-        file: usize,
+        file_id: SharedString,
         line: Line,
+        old_side: bool,
         anchor: AnchorSlot,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let path = self.files[file].path.clone();
+        let Some(&file) = self.by_id.get(&file_id) else {
+            return;
+        };
+        let file = &self.files[file];
+        if !file
+            .blocks
+            .iter()
+            .flat_map(Block::lines)
+            .any(|row| *row == line)
+        {
+            return;
+        }
+        let path = file.path.clone();
         let input = cx.new(|cx| {
             let mut input = Input::commit_message(cx);
             input.set_placeholder("Leave a comment…", cx);
@@ -997,8 +995,10 @@ impl DiffView {
             }),
         ];
         self.comment = Some(Comment {
+            file_id,
             path,
             line,
+            old_side,
             anchor,
             input,
             pending: None,
@@ -1066,7 +1066,14 @@ impl DiffView {
             .find(|line| line.kind == LineKind::Add)
             .unwrap()
             .clone();
-        self.open_comment(0, line, AnchorSlot::default(), window, cx);
+        self.open_comment(
+            self.files[0].id.clone(),
+            line,
+            false,
+            AnchorSlot::default(),
+            window,
+            cx,
+        );
         self.comment.as_ref().unwrap().input.clone()
     }
 
@@ -1250,15 +1257,15 @@ impl DiffView {
     fn file_header(&self, file: usize, sticky: bool, cx: &mut Context<Self>) -> AnyElement {
         let f = &self.files[file];
         let expanded = self.open.contains(&f.id);
-        let busy = self.busy_id.as_ref() == Some(&f.id);
+        let busy = self.action_pending;
         let name = f.path.rsplit('/').next().unwrap_or(&f.path).to_owned();
         let directory = f
             .label
             .strip_suffix(&name)
             .map(|d| d.trim_end_matches('/').to_owned())
             .unwrap_or_default();
-        let id = f.id.clone();
-        let (discard_id, stage_id) = (id.clone(), id.clone());
+        let toggle_id = f.id.clone();
+        let stage_id = f.id.clone();
         div()
             .id(("diff-file", file * 2 + usize::from(sticky)))
             .h(px(FILE_HEADER))
@@ -1321,7 +1328,11 @@ impl DiffView {
                                 .child(directory),
                         )
                     })
-                    .on_click(cx.listener(move |this, _, _, cx| this.toggle(file, cx))),
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if let Some(&file) = this.by_id.get(&toggle_id) {
+                            this.toggle(file, cx);
+                        }
+                    })),
             )
             .child(diff_counts(f.additions, f.deletions))
             .when(f.can_discard, |d| {
@@ -1329,8 +1340,9 @@ impl DiffView {
                     tool_button(("discard-file", file), "Discard file", "undo", !busy).when(
                         !busy,
                         |d| {
-                            d.on_click(cx.listener(move |_, _, _, cx| {
-                                cx.emit(DiffEvent::DiscardFile(discard_id.clone()))
+                            let displayed = f.clone();
+                            d.on_click(cx.listener(move |this, _, window, cx| {
+                                this.confirm_discard(displayed.clone(), window, cx);
                             }))
                         },
                     ),
@@ -1349,6 +1361,36 @@ impl DiffView {
                 )
             })
             .into_any_element()
+    }
+
+    fn confirm_discard(&self, displayed: DiffFile, window: &mut Window, cx: &mut Context<Self>) {
+        let title = format!("Discard changes to {}?", displayed.label);
+        let response = window.prompt(
+            PromptLevel::Warning,
+            &title,
+            Some("This restores the staged version or removes the file if it is untracked."),
+            &[
+                gpui::PromptButton::ok("Discard Changes"),
+                gpui::PromptButton::cancel("Cancel"),
+            ],
+            cx,
+        );
+        cx.spawn(async move |this, cx| {
+            if !matches!(response.await, Ok(0)) {
+                return;
+            }
+            let _ = this.update(cx, |this, cx| {
+                let current = this.by_id.get(&displayed.id).map(|&ix| &this.files[ix]);
+                if current.is_some_and(|file| file.same_content(&displayed)) {
+                    cx.emit(DiffEvent::DiscardFile(displayed.id));
+                } else {
+                    this.action_error =
+                        Some("The diff changed. Review the file before discarding it.".into());
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
     }
 
     fn row(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
@@ -1509,8 +1551,8 @@ impl DiffView {
             None
         };
         let hovered = self.hovered == Some(ix);
-        let busy = self.busy_id.as_ref() == Some(&file.id);
-        let text = expand_tabs(&l.text).into_owned();
+        let busy = self.action_pending;
+        let text: SharedString = expand_tabs(&l.text).into_owned().into();
         let styles: Vec<_> = self
             .tokens(file, block, line)
             .unwrap_or(&[])
@@ -1526,19 +1568,18 @@ impl DiffView {
                 )
             })
             .collect();
-        let number = if removed { l.old_number } else { l.new_number };
-        let comment_line = l.clone();
-        let comment_here = self
+        let old_side = side.unwrap_or(removed);
+        let number = if old_side { l.old_number } else { l.new_number };
+        let slot = self
             .comment
             .as_ref()
-            .is_some_and(|comment| comment.path == file.path && comment.line == *l);
-        let file_ix = file_index;
-        let file_id = file.id.clone();
-        let slot = self
-            .action_slots
-            .entry(ix * 2 + usize::from(side == Some(false)))
-            .or_default()
-            .clone();
+            .filter(|comment| {
+                comment.file_id == file.id
+                    && comment.line == *l
+                    && side.is_none_or(|side| side == comment.old_side)
+            })
+            .map(|comment| comment.anchor.clone())
+            .or_else(|| hovered.then(AnchorSlot::default));
         let gutter_ink = ink.unwrap_or(content(0.4));
         let numbers = |n: Option<u32>, hide: bool| {
             div()
@@ -1608,7 +1649,7 @@ impl DiffView {
                                 ""
                             }),
                     )
-                    .when(hovered || comment_here, |d| {
+                    .when_some(slot.clone(), |d, slot| {
                         d.child(
                             div()
                                 .absolute()
@@ -1619,7 +1660,9 @@ impl DiffView {
                                 .child(slot.probe()),
                         )
                     })
-                    .when(hovered, |d| {
+                    .when_some(slot.filter(|_| hovered), |d, slot| {
+                        let comment_file = file.id.clone();
+                        let comment_line = l.clone();
                         d.child(
                             div()
                                 .id(("diff-comment", ix))
@@ -1642,8 +1685,9 @@ impl DiffView {
                                 .child(icon("comment-add", 12.).text_color(content(1.)))
                                 .on_click(cx.listener(move |this, _, window, cx| {
                                     this.open_comment(
-                                        file_ix,
+                                        comment_file.clone(),
                                         comment_line.clone(),
+                                        old_side,
                                         slot.clone(),
                                         window,
                                         cx,
@@ -1651,6 +1695,8 @@ impl DiffView {
                                 })),
                         )
                         .when_some(stage, |d, chunk| {
+                            let file_id = file.id.clone();
+                            let blocks = file.blocks.clone();
                             d.child(
                                 div()
                                     .id(("diff-stage-hunk", ix))
@@ -1673,7 +1719,11 @@ impl DiffView {
                                     .child(icon("check", 12.).text_color(content(1.)))
                                     .when(!busy, |d| {
                                         d.on_click(cx.listener(move |_, _, _, cx| {
-                                            cx.emit(DiffEvent::StageHunk(file_id.clone(), chunk))
+                                            cx.emit(DiffEvent::StageHunk {
+                                                file: file_id.clone(),
+                                                chunk,
+                                                blocks: blocks.clone(),
+                                            })
                                         }))
                                     }),
                             )
@@ -1689,6 +1739,9 @@ impl DiffView {
                     .overflow_hidden()
                     .child(
                         div()
+                            .id(("diff-code", ix * 2 + usize::from(side == Some(false))))
+                            .role(Role::Label)
+                            .aria_label(text.clone())
                             .absolute()
                             .top_0()
                             .left(px(-scroll_x))
@@ -1874,7 +1927,11 @@ impl Render for DiffView {
                 .py_6()
                 .text_size(px(13.))
                 .text_color(content(0.45))
-                .child("No file changes")
+                .child(
+                    self.action_error
+                        .clone()
+                        .unwrap_or_else(|| "No file changes".into()),
+                )
                 .into_any_element();
         }
         self.char_width(window);
@@ -2075,6 +2132,18 @@ impl Render for DiffView {
             )
             .child(self.layout_control(cx))
             .child(self.toolbar(cx))
+            .when_some(self.action_error.clone(), |d, error| {
+                d.child(
+                    div()
+                        .id("diff-action-error")
+                        .role(Role::Alert)
+                        .px_3()
+                        .py_2()
+                        .text_size(px(12.))
+                        .text_color(status(StatusColor::Danger, 1.))
+                        .child(error),
+                )
+            })
             .child(
                 div()
                     .id("unified-diff")

@@ -1,14 +1,18 @@
 use vorkspace_ui::radius;
-// The pickers that open as flyouts beside a menu row: ModelPicker.tsx's
-// ModelFlyout and SearchableProjectPicker.tsx's ProjectPickerPopover. Each
+// The pickers that open as flyouts beside a menu row: the model flyout and
+// the searchable project picker. Each
 // owns a search field; arrows and Enter in it move and pick in the list.
 use crate::{input, workspace::project_name};
 use gpui::{
     AnyElement, Context, CursorStyle, Entity, EventEmitter, FocusHandle, Focusable, Role,
     SharedString, Subscription, Window, div, prelude::*, px,
 };
-use vorkspace_core::catalog::{self, Model};
+use std::collections::HashMap;
 use vorkspace_core::provider::Kind;
+use vorkspace_core::{
+    accounts::Profile,
+    catalog::{self, ModelRows},
+};
 use vorkspace_ui::theme::*;
 
 /// Friendly names used before a provider's live catalog arrives.
@@ -76,17 +80,15 @@ pub(crate) fn cached_model_name(kind: Kind, id: Option<&str>) -> SharedString {
 }
 /// saveRecentModelChoice: the pick moves to the front of the six recents.
 pub(crate) fn remember_model(kind: Kind, model: Option<String>, cx: &mut gpui::App) {
-    if cx.has_global::<vorkspace_ui::preferences::Preferences>() {
-        cx.update_global::<vorkspace_ui::preferences::Preferences, _>(|prefs, _| {
-            let choice = vorkspace_ui::preferences::ModelChoice {
-                provider: kind.id().into(),
-                model,
-            };
-            prefs.recent_models.retain(|old| old != &choice);
-            prefs.recent_models.insert(0, choice);
-            prefs.recent_models.truncate(6);
-        });
-    }
+    crate::preference_writes::remember(cx, |prefs| {
+        let choice = vorkspace_ui::preferences::ModelChoice {
+            provider: kind.id().into(),
+            model,
+        };
+        prefs.recent_models.retain(|old| old != &choice);
+        prefs.recent_models.insert(0, choice);
+        prefs.recent_models.truncate(6);
+    });
 }
 fn contains_account_id(value: &str) -> bool {
     value.match_indices("account-").any(|(offset, _)| {
@@ -140,11 +142,9 @@ pub(crate) struct ModelPicked(pub Kind, pub Option<String>);
 /// between turns.
 pub(crate) struct ModelList {
     provider: Kind,
-    remote_project: Option<String>,
-    remote_providers: Option<Vec<Kind>>,
+    profiles: HashMap<Kind, Profile>,
     current: Option<String>,
-    profiles: std::collections::HashMap<Kind, vorkspace_core::accounts::Profile>,
-    catalogs: Vec<(Kind, Vec<Model>)>,
+    catalogs: Vec<(Kind, ModelRows)>,
     errors: Vec<(Kind, String)>,
     loading: Vec<Kind>,
     missing: Vec<Kind>,
@@ -161,18 +161,21 @@ impl ModelList {
         provider: Kind,
         current: Option<String>,
         project: &str,
-        profile: vorkspace_core::accounts::Profile,
+        profile: Profile,
         cx: &mut Context<Self>,
     ) -> Self {
-        let mut profiles = crate::accounts::get(cx)
-            .map(|center| {
-                Kind::ALL
-                    .into_iter()
-                    .map(|kind| (kind, center.read(cx).selected(kind, project)))
-                    .collect::<std::collections::HashMap<_, _>>()
-            })
-            .unwrap_or_default();
-        profiles.insert(provider, profile);
+        let profiles = {
+            let mut profiles = crate::accounts::get(cx)
+                .map(|center| {
+                    Kind::ALL
+                        .into_iter()
+                        .map(|kind| (kind, center.read(cx).selected(kind, project)))
+                        .collect::<HashMap<_, _>>()
+                })
+                .unwrap_or_default();
+            profiles.insert(provider, profile);
+            profiles
+        };
         let search = search_field("Search models", "Search models", 0.4, cx);
         let changed = cx.subscribe(&search, |this, _, _: &input::Changed, cx| {
             this.highlighted = this.current_index(cx);
@@ -180,11 +183,8 @@ impl ModelList {
         });
         let mut list = Self {
             provider,
-            remote_project: vorkspace_core::remote::parse_remote_path(project)
-                .map(|_| project.to_owned()),
-            remote_providers: None,
-            current,
             profiles,
+            current,
             catalogs: Vec::new(),
             errors: Vec::new(),
             loading: Vec::new(),
@@ -218,9 +218,6 @@ impl ModelList {
         list
     }
     pub(crate) fn hide_providers(mut self, hidden: Vec<String>) -> Self {
-        if self.remote_project.is_some() {
-            return self;
-        }
         if let ModelTab::Harness(kind) = self.tab
             && kind != self.provider
             && hidden.iter().any(|id| id == kind.id())
@@ -236,7 +233,7 @@ impl ModelList {
     }
 
     fn probe_installed(&mut self, cx: &mut Context<Self>) {
-        if cfg!(test) || self.remote_project.is_some() {
+        if cfg!(test) {
             return;
         }
         let work = cx.background_executor().spawn(async move {
@@ -253,11 +250,8 @@ impl ModelList {
     }
 
     fn apply_installation_probe(&mut self, missing: Vec<Kind>, cx: &mut Context<Self>) {
-        // A remote host owns its inventory. A completed local catalog also
-        // outranks an older filesystem probe that finished out of order.
-        if self.remote_project.is_some() {
-            return;
-        }
+        // A completed catalog outranks an older filesystem probe that finished out of order.
+
         for kind in missing {
             if !self.catalogs.iter().any(|(provider, _)| *provider == kind)
                 && !self.missing.contains(&kind)
@@ -279,64 +273,19 @@ impl ModelList {
 
     fn provider_visible(&self, kind: Kind) -> bool {
         kind == self.provider
-            || if self.remote_project.is_some() {
-                self.remote_providers
-                    .as_ref()
-                    .is_some_and(|providers| providers.contains(&kind))
-            } else {
-                !self.hidden.iter().any(|id| id == kind.id()) && !self.missing.contains(&kind)
-            }
+            || (!self.hidden.iter().any(|id| id == kind.id()) && !self.missing.contains(&kind))
     }
 
     fn discover(&mut self, kind: Kind, cx: &mut Context<Self>) {
         if cfg!(test) || self.loading.contains(&kind) {
             return;
         }
-        if let Some(project) = self.remote_project.clone() {
-            self.loading = Kind::ALL.to_vec();
-            let work = cx
-                .background_executor()
-                .spawn(async move { catalog::remote_catalog(&project) });
-            cx.spawn(async move |this, cx| {
-                let result = work.await;
-                let _ = this.update(cx, |this, cx| {
-                    this.loading.clear();
-                    match result {
-                        Ok(catalog) => {
-                            this.missing = Kind::ALL
-                                .into_iter()
-                                .filter(|kind| !catalog.providers.contains(kind))
-                                .collect();
-                            this.remote_providers = Some(catalog.providers);
-                            this.catalogs = catalog.models.into_iter().collect();
-                            this.errors = catalog.errors.into_iter().collect();
-                            if let ModelTab::Harness(selected) = this.tab
-                                && this.missing.contains(&selected)
-                                && selected != this.provider
-                            {
-                                this.tab = ModelTab::Harness(this.provider);
-                            }
-                        }
-                        Err(error) => {
-                            this.errors = Kind::ALL
-                                .into_iter()
-                                .map(|kind| (kind, error.clone()))
-                                .collect();
-                        }
-                    }
-                    this.highlighted = this.current_index(cx);
-                    cx.notify();
-                });
-            })
-            .detach();
-            return;
-        }
+        let profile = self.profiles.get(&kind).cloned().unwrap_or_default();
         self.loading.push(kind);
         self.errors.retain(|(k, _)| *k != kind);
-        let work = cx.background_executor().spawn({
-            let profile = self.profiles.get(&kind).cloned().unwrap_or_default();
-            async move { catalog::models_for(kind, &profile) }
-        });
+        let work = cx
+            .background_executor()
+            .spawn(async move { catalog::models_for(kind, &profile) });
         cx.spawn(async move |this, cx| {
             let result = work.await;
             let _ = this.update(cx, |this, cx| {
@@ -444,7 +393,7 @@ impl ModelList {
                 })
                 .collect();
             entries.extend(additional);
-        } else if kind == Kind::Claude && self.remote_project.is_none() {
+        } else if kind == Kind::Claude {
             // Stable CLI aliases remain usable while discovery is loading.
             let additional: Vec<_> = [("sonnet", "Sonnet"), ("opus", "Opus"), ("haiku", "Haiku")]
                 .into_iter()
@@ -495,13 +444,7 @@ impl ModelList {
             .collect()
     }
     fn enabled(&self, kind: Kind) -> bool {
-        (kind == self.provider || self.switch_allowed)
-            && !self.missing.contains(&kind)
-            && (self.remote_project.is_none()
-                || self
-                    .remote_providers
-                    .as_ref()
-                    .is_some_and(|providers| providers.contains(&kind)))
+        (kind == self.provider || self.switch_allowed) && !self.missing.contains(&kind)
     }
     fn saved_model_name(&self, kind: Kind, id: Option<&str>) -> SharedString {
         self.catalogs
@@ -522,17 +465,15 @@ impl ModelList {
             return;
         }
         self.tab = tab;
-        if cx.has_global::<vorkspace_ui::preferences::Preferences>() {
-            cx.update_global::<vorkspace_ui::preferences::Preferences, _>(|prefs, _| {
-                prefs.model_picker_tab = Some(
-                    match tab {
-                        ModelTab::Favorites => "favorites",
-                        ModelTab::Harness(kind) => kind.id(),
-                    }
-                    .into(),
-                );
-            });
-        }
+        crate::preference_writes::remember(cx, |prefs| {
+            prefs.model_picker_tab = Some(
+                match tab {
+                    ModelTab::Favorites => "favorites",
+                    ModelTab::Harness(kind) => kind.id(),
+                }
+                .into(),
+            );
+        });
         if let ModelTab::Harness(kind) = tab
             && !self.catalogs.iter().any(|(k, _)| *k == kind)
             && !self.errors.iter().any(|(k, _)| *k == kind)
@@ -644,7 +585,7 @@ impl Render for ModelList {
                     .aria_selected(current)
                     .when(!entry.enabled, |d| {
                         d.aria_description(if self.missing.contains(&entry.kind) {
-                            if self.remote_project.is_some() { "Install this provider's CLI and sign in on the connected machine, then retry model discovery" } else { "Install this provider's CLI and sign in, then retry model discovery" }
+                            "Install this provider's CLI and sign in, then retry model discovery"
                         } else {
                             "Wait for the current turn to finish before switching providers"
                         })
@@ -819,18 +760,14 @@ impl Render for ModelList {
 pub(crate) enum ProjectPicked {
     Project(String),
     New,
-    Remote,
 }
 
 /// ProjectPickerPopover: a search field over the projects, the current one
 /// first and checked, and "New project" at the foot.
 pub(crate) struct ProjectPicker {
-    appearance:
-        std::collections::HashMap<String, vorkspace_core::project_appearance::ProjectAppearance>,
     projects: Vec<String>,
     current: String,
     active: usize,
-    allow_remote: bool,
     search: Entity<input::Input>,
     _changed: Subscription,
 }
@@ -848,11 +785,9 @@ impl ProjectPicker {
             projects.insert(0, first);
         }
         Self {
-            appearance: Default::default(),
             projects,
             current: current.into(),
             active: 0,
-            allow_remote: false,
             search,
             _changed: changed,
         }
@@ -860,32 +795,13 @@ impl ProjectPicker {
     pub(crate) fn search_focus(&self, cx: &gpui::App) -> FocusHandle {
         self.search.focus_handle(cx)
     }
-    pub(crate) fn allow_remote(mut self) -> Self {
-        self.allow_remote = true;
-        self
-    }
-    pub(crate) fn appearance(
-        mut self,
-        appearance: std::collections::HashMap<
-            String,
-            vorkspace_core::project_appearance::ProjectAppearance,
-        >,
-    ) -> Self {
-        self.appearance = appearance;
-        self
-    }
-    fn label(&self, path: &str) -> String {
-        self.appearance
-            .get(path)
-            .map_or_else(|| project_name(path), |a| a.label(path))
-    }
     fn matches(&self, cx: &gpui::App) -> Vec<String> {
         let query = self.search.read(cx).content.to_lowercase();
         self.projects
             .iter()
             .filter(|path| {
                 query.is_empty()
-                    || format!("{}\n{}", self.label(path), path)
+                    || format!("{}\n{}", project_name(path), path)
                         .to_lowercase()
                         .contains(&query)
             })
@@ -905,18 +821,11 @@ impl ProjectPicker {
         }
     }
 }
-/// `prettyParent`: the folder holding a project, with the home folder as `~`.
 fn pretty_parent(path: &str) -> String {
-    let parent = std::path::Path::new(path)
+    std::path::Path::new(path)
         .parent()
-        .map(|p| p.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    match std::env::var("HOME") {
-        Ok(home) if !home.is_empty() && parent.starts_with(&home) => {
-            format!("~{}", &parent[home.len()..])
-        }
-        _ => parent,
-    }
+        .map(crate::panel_kit::home_relative)
+        .unwrap_or_default()
 }
 impl Render for ProjectPicker {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -931,7 +840,7 @@ impl Render for ProjectPicker {
                 div()
                     .id(("project-option", ix))
                     .role(Role::ListBoxOption)
-                    .aria_label(self.label(&path))
+                    .aria_label(project_name(&path))
                     .aria_description(path.clone())
                     .aria_selected(current)
                     .cursor(CursorStyle::Arrow)
@@ -962,17 +871,7 @@ impl Render for ProjectPicker {
                                     .text_color(content(1.))
                                     .into_any_element()
                             } else {
-                                if path.starts_with("remote://") {
-                                    icon("globe", 14.)
-                                        .text_color(content(0.6))
-                                        .into_any_element()
-                                } else {
-                                    crate::project_settings::project_icon(
-                                        &self.appearance.get(&path).cloned().unwrap_or_default(),
-                                        &path,
-                                        14.,
-                                    )
-                                }
+                                crate::project_mark::project_icon(&path, 14.)
                             }),
                     )
                     .child(
@@ -983,7 +882,7 @@ impl Render for ProjectPicker {
                             .truncate()
                             .text_size(px(13.))
                             .font_weight(gpui::FontWeight::MEDIUM)
-                            .child(self.label(&path)),
+                            .child(project_name(&path)),
                     )
                     .child(
                         div()
@@ -1104,34 +1003,7 @@ impl Render for ProjectPicker {
                             )
                             .child("New project")
                             .on_click(cx.listener(|_, _, _, cx| cx.emit(ProjectPicked::New))),
-                    )
-                    .when(self.allow_remote, |d| {
-                        d.child(
-                            div()
-                                .id("project-remote")
-                                .role(Role::Button)
-                                .map(vorkspace_ui::theme::tab_reachable)
-                                .aria_label("Open folder on a machine")
-                                .cursor(CursorStyle::Arrow)
-                                .h(px(36.))
-                                .px(px(10.))
-                                .gap(px(10.))
-                                .rounded(px(radius::CONTAINER))
-                                .flex()
-                                .items_center()
-                                .text_size(px(13.))
-                                .text_color(content(0.75))
-                                .hover(|s| {
-                                    s.bg(vorkspace_ui::fluid::hover(0.08))
-                                        .text_color(content(1.))
-                                })
-                                .child(icon("globe", 16.).text_color(content(0.75)))
-                                .child("Open folder on a machine…")
-                                .on_click(
-                                    cx.listener(|_, _, _, cx| cx.emit(ProjectPicked::Remote)),
-                                ),
-                        )
-                    }),
+                    ),
             )
     }
 }

@@ -30,6 +30,15 @@ export async function startDev({
   // Cargo's built-in dev profile writes to debug; named profiles keep their name.
   const profileDirectory = profile === "dev" ? "debug" : profile;
   const buildEnv = resolveNativeEnv(env);
+  let dataMode = "vorkspace-data";
+  let opensDesktop = !["visual", "visual-mcp", "app"].includes(args[0]);
+  for (let index = 0; index < args.length; index++) {
+    const arg = args[index];
+    if (arg === "--dev-data") dataMode = "dev-data";
+    if (arg === "--vorkspace-data" || arg === "--vorkspace-db") dataMode = "vorkspace-data";
+    if (["--cwd", "--vorkspace-db"].includes(arg)) index++;
+    if (["--check-data", "--help", "-h"].includes(arg)) opensDesktop = false;
+  }
   const launch = (command, argv, options = {}) => track(spawnProcess(command, argv, {
     cwd: root, env: buildEnv, stdio: "inherit", ...options,
   }));
@@ -103,12 +112,6 @@ export async function startDev({
         } catch (error) {
           log(`Skipped pruning old build output: ${error.message}`);
         }
-        const dataMode = args.reduce((mode, arg, index) => {
-          if (["--cwd", "--vorkspace-db"].includes(args[index - 1])) return mode;
-          if (arg === "--dev-data") return "dev-data";
-          if (arg === "--vorkspace-data") return "vorkspace-data";
-          return mode;
-        }, "vorkspace-data");
         const packaged = await run("bash", ["scripts/desktop/bundle-native-macos.sh", profileDirectory, target, pkg.version, dataMode]);
         if (closing) return;
         if (packaged.code !== 0) {
@@ -117,7 +120,8 @@ export async function startDev({
         }
         const bundledApp = join(target, profileDirectory, "vorkspace.app");
         let executable = join(bundledApp, "Contents", "MacOS", "vorkspace-gpui");
-        if (profile === "release" && !buildEnv.CI && buildEnv.VORKSPACE_NO_INSTALL !== "1"
+        if (profile === "release" && opensDesktop && dataMode === "vorkspace-data"
+          && !buildEnv.CI && buildEnv.VORKSPACE_NO_INSTALL !== "1"
           && installBundle(bundledApp)) {
           executable = "/Applications/vorkspace.app/Contents/MacOS/vorkspace-gpui";
         }

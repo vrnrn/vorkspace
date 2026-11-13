@@ -30,8 +30,8 @@ impl Default for ProjectRule {
 }
 
 impl ProjectRule {
-    /// Read the exact React preference schema, including indefinite null mutes.
-    /// Invalid fields are ignored, as in loadNotificationPreferences.
+    /// Read the saved preference schema exactly, including indefinite null mutes.
+    /// Invalid fields are ignored.
     pub fn from_preferences(preferences: &Value, project: &str, category: &str) -> Self {
         let preference = &preferences[project];
         let disabled = preference["disabled"]
@@ -56,6 +56,15 @@ fn timestamp(value: &Value) -> u64 {
         .filter(|number| number.is_finite() && *number >= 0.0)
         .map(|number| number.min(u64::MAX as f64) as u64)
         .unwrap_or(0)
+}
+
+pub(crate) fn next_mute_expiry(preferences: &Value, now: u64) -> Option<u64> {
+    preferences
+        .as_object()?
+        .values()
+        .map(|rule| timestamp(&rule["mutedUntil"]))
+        .filter(|&deadline| deadline > now)
+        .min()
 }
 
 pub fn should_notify(

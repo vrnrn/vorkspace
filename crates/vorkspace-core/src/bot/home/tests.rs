@@ -87,7 +87,7 @@ fn session_pointer_uses_the_saved_account_and_cannot_be_overwritten_by_a_retired
     let root = temp.path().join("bots");
     let bot = bot("Sam's Bot");
     let home = ensure(&root, &bot, None).unwrap();
-    let store = Store::open(&temp.path().join("native.sqlite")).unwrap();
+    let store = Store::test(&temp.path().join("native.sqlite")).unwrap();
     let mut first = store.create("codex", home.to_str().unwrap()).unwrap();
     let account = Profile {
         id: "work".into(),
@@ -139,7 +139,7 @@ fn legacy_codex_home_and_sqlite_configuration_travel_together() {
     let home = ensure(&root, &bot, None).unwrap();
     let provider_home = temp.path().join("codex-bots/default");
     std::fs::create_dir_all(&provider_home).unwrap();
-    let store = Store::open(&temp.path().join("native.sqlite")).unwrap();
+    let store = Store::test(&temp.path().join("native.sqlite")).unwrap();
     let mut session = store.create("codex", home.to_str().unwrap()).unwrap();
     session.provider_id = Some("native-thread".into());
     write_session(&root, &bot, &session, &Profile::default()).unwrap();
@@ -168,16 +168,10 @@ fn legacy_codex_home_and_sqlite_configuration_travel_together() {
 
 #[test]
 fn moving_a_bot_home_preserves_history_and_pending_input_across_reopen() {
-    for shared in [false, true] {
+    {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("sessions.db");
-        let open = || {
-            if shared {
-                Store::open_vorkspace(&path)
-            } else {
-                Store::open(&path)
-            }
-        };
+        let open = || Store::test(&path);
         let mut store = open().unwrap();
         let mut session = store.create("codex", "/old-home").unwrap();
         store.provider_id(session.id, "keep-thread").unwrap();

@@ -1,18 +1,18 @@
-//! The project's Git status, shared by the right panel and the title bar:
-//! GitChangesPanel's `useDiffIndex`, useGitFileStatuses and
-//! useProjectDiffStats over one off-thread reader. Reads never overlap; a
-//! read requested meanwhile runs once the current one returns, and only a
-//! changed snapshot notifies.
-use gpui::{Context, EventEmitter, Task};
-use std::time::Instant;
-use std::{collections::HashMap, path::PathBuf, time::Duration};
-use vorkspace_core::scm::{self, DiffIndex, DiffStats};
+//! Window checkout selection and its projection of the shared checkout catalog.
+use gpui::{App, Context, Entity, EventEmitter, Subscription};
+use std::{collections::HashMap, sync::Arc};
+use vorkspace_core::scm::DiffIndex;
 
-const POLL: Duration = Duration::from_secs(2);
-const RESUME_TTL: Duration = Duration::from_secs(30);
+mod checkout;
+use checkout::Snapshot;
+pub(crate) use checkout::{Checkout, CheckoutCatalog, EditorBaselineRevision, HistoryItem};
 
 /// A disk or Git change: Changes, History and the Explorer reread.
 pub(crate) struct GitChanged;
+pub(crate) struct GitHeadChanged {
+    pub(crate) cwd: String,
+    pub(crate) head: vorkspace_core::scm::LocalHead,
+}
 
 #[derive(Default, Clone, PartialEq)]
 pub(crate) struct StatusMap {
@@ -65,209 +65,197 @@ fn parent(path: &str) -> &str {
 }
 
 pub(crate) struct ProjectGit {
-    /// The active session's working folder (its worktree, if it has one):
-    /// Sidebar.tsx's `gitRoot`.
     project: String,
-    pub root: String,
-    pub index: Option<DiffIndex>,
-    pub stats: Option<DiffStats>,
-    pub statuses: StatusMap,
+    catalog: Entity<CheckoutCatalog>,
+    checkout: Option<Entity<Checkout>>,
+    observation: Option<Subscription>,
+    snapshot: Option<Arc<Snapshot>>,
+    source_revision: u64,
     /// Bumped on every observed change, for views that reread on it.
     pub epoch: u64,
-    /// Owned by the review surface, which outlives none of its project's tabs.
-    pub review_cache: Option<Box<dyn std::any::Any>>,
-    versions: Option<HashMap<String, scm::FileDiffVersion>>,
-    remembered: HashMap<String, (u64, DiffIndex)>,
-    clock: u64,
-    in_flight: bool,
-    pending: bool,
-    stats_loaded: Option<Instant>,
-    poll: Option<Task<()>>,
+    checkout_revision: u64,
+    polling: bool,
 }
 impl EventEmitter<GitChanged> for ProjectGit {}
+impl EventEmitter<GitHeadChanged> for ProjectGit {}
 
 impl ProjectGit {
+    #[cfg(test)]
     pub(crate) fn new(project: String, cx: &mut Context<Self>) -> Self {
+        use gpui::AppContext as _;
+        let catalog = cx.new(|_| CheckoutCatalog::default());
+        Self::shared(project, catalog, cx)
+    }
+
+    pub(crate) fn shared(
+        project: String,
+        catalog: Entity<CheckoutCatalog>,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let viewer = cx.entity_id();
+        cx.on_release(move |this, cx| {
+            if this.polling
+                && let Some(checkout) = &this.checkout
+            {
+                checkout.update(cx, |checkout, cx| checkout.poll(viewer, false, cx));
+            }
+        })
+        .detach();
         let mut this = Self {
-            root: project.clone(),
             project: String::new(),
-            index: None,
-            stats: None,
-            statuses: StatusMap::default(),
+            catalog,
+            checkout: None,
+            observation: None,
+            snapshot: None,
+            source_revision: 0,
             epoch: 0,
-            review_cache: None,
-            versions: None,
-            remembered: HashMap::new(),
-            clock: 0,
-            in_flight: false,
-            pending: false,
-            stats_loaded: None,
-            poll: None,
+            checkout_revision: 0,
+            polling: false,
         };
         this.set_project(project, cx);
         this
     }
+
     pub(crate) fn project(&self) -> &str {
         &self.project
+    }
+    pub(crate) fn checkout_revision(&self) -> u64 {
+        self.checkout_revision
+    }
+    pub(crate) fn checkout(&self) -> Option<Entity<Checkout>> {
+        self.checkout.clone()
+    }
+    pub(crate) fn checkout_for(
+        project: &Entity<Self>,
+        path: &str,
+        cx: &mut App,
+    ) -> Entity<Checkout> {
+        let catalog = project.read(cx).catalog.clone();
+        catalog.update(cx, |catalog, cx| catalog.acquire(path, cx))
+    }
+    pub(crate) fn index(&self) -> Option<&DiffIndex> {
+        self.snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.index.as_ref())
+    }
+    pub(crate) fn snapshot(&self) -> Option<Arc<DiffIndex>> {
+        self.snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.index.clone())
+    }
+    pub(crate) fn statuses(&self) -> Option<&StatusMap> {
+        self.snapshot.as_ref().map(|snapshot| &snapshot.statuses)
     }
     pub(crate) fn available(&self) -> bool {
         !self.project.is_empty() && self.project != "~"
     }
-    /// The first frame of a switch already shows the new checkout's last
-    /// snapshot, never the previous one's files and actions.
+    /// Publish the selected checkout's own state immediately, including when
+    /// it is still loading. Peer windows keep their independent selections.
     pub(crate) fn set_project(&mut self, project: String, cx: &mut Context<Self>) {
         if project == self.project {
             return;
         }
-        self.project = project.clone();
-        self.root = project.clone();
-        self.index = self.remembered.get(&project).map(|(_, i)| i.clone());
-        self.stats = self.index.as_ref().map(stats_of);
-        self.statuses = self
-            .index
-            .as_ref()
-            .map(|i| status_maps(i, &self.root))
-            .unwrap_or_default();
-        self.stats_loaded = None;
-        self.versions = None;
-        self.epoch += 1;
-        cx.emit(GitChanged);
-        cx.notify();
-        self.warm_choices(cx);
-        self.reload(cx);
-    }
-    /// Poll every 2s while the project's Git status is visible.
-    pub(crate) fn set_polling(&mut self, polling: bool, cx: &mut Context<Self>) {
-        if polling == self.poll.is_some() {
-            return;
-        }
-        if !polling {
-            self.poll = None;
-            return;
-        }
-        self.reload(cx);
-        self.poll = Some(cx.spawn(async move |this, cx| {
-            loop {
-                cx.background_executor().timer(POLL).await;
-                if this.update(cx, |this, cx| this.reload(cx)).is_err() {
-                    break;
-                }
-            }
-        }));
-    }
-    /// useProjectDiffStats reads again on focus once its snapshot is 30s old.
-    pub(crate) fn resume(&mut self, cx: &mut Context<Self>) {
-        if self
-            .stats_loaded
-            .is_none_or(|at| at.elapsed() >= RESUME_TTL)
-            || self.poll.is_some()
+        let viewer = cx.entity_id();
+        if let Some(checkout) = self.checkout.take()
+            && self.polling
         {
-            self.warm_choices(cx);
-            self.reload(cx);
+            checkout.update(cx, |checkout, cx| checkout.poll(viewer, false, cx));
         }
-    }
-    /// A mutation or file operation: reread now and tell every view.
-    pub(crate) fn changed(&mut self, cx: &mut Context<Self>) {
+        self.observation = None;
+        self.snapshot = None;
+        self.source_revision = 0;
+        self.project = project;
+        self.checkout_revision += 1;
         self.epoch += 1;
-        cx.emit(GitChanged);
-        self.warm_choices(cx);
-        self.reload(cx);
-    }
-    /// Project selection warms both menus before the user opens either one.
-    fn warm_choices(&self, cx: &Context<Self>) {
-        if !self.available() {
-            return;
-        }
-        let project = self.project.clone();
-        cx.background_executor()
-            .spawn(async move {
-                let _ = vorkspace_model::git_cache::load(std::path::Path::new(&project));
-            })
-            .detach();
-    }
-    pub(crate) fn reload(&mut self, cx: &mut Context<Self>) {
-        if !self.available() {
-            return;
-        }
-        if self.in_flight {
-            self.pending = true;
-            return;
-        }
-        self.in_flight = true;
-        let project = self.project.clone();
-        let path = PathBuf::from(&project);
-        let work = cx.background_executor().spawn(async move {
-            let index = scm::diff_index(&path)?;
-            let versions = scm::file_diff_versions(&path, &index).ok();
-            Ok::<_, String>((index, versions))
-        });
-        cx.spawn(async move |this, cx| {
-            let result = work.await;
-            let _ = this.update(cx, |this, cx| {
-                this.in_flight = false;
-                // A slow or unavailable checkout keeps its last snapshot, and
-                // never takes another checkout's.
-                if this.project == project
-                    && let Ok((next, versions)) = result
-                {
-                    this.stats_loaded = Some(Instant::now());
-                    this.remember(&project, &next);
-                    if this.index.as_ref() != Some(&next) || this.versions != versions {
-                        let had = this.index.is_some();
-                        this.stats = Some(stats_of(&next));
-                        this.statuses = status_maps(&next, &this.root);
-                        this.index = Some(next);
-                        this.versions = versions;
-                        if had {
-                            this.epoch += 1;
-                            cx.emit(GitChanged);
-                        }
-                        cx.notify();
-                    }
-                }
-                if std::mem::take(&mut this.pending) {
-                    this.reload(cx);
+        if self.available() {
+            let checkout = self
+                .catalog
+                .update(cx, |catalog, cx| catalog.acquire(&self.project, cx));
+            self.snapshot = checkout.read(cx).snapshot();
+            self.source_revision = checkout.read(cx).revision;
+            self.observation = Some(cx.observe(&checkout, |this, checkout, cx| {
+                this.sync_checkout(&checkout, cx);
+            }));
+            checkout.update(cx, |checkout, cx| {
+                checkout.attach(cx);
+                if self.polling {
+                    checkout.poll(viewer, true, cx);
                 }
             });
-        })
-        .detach();
+            self.checkout = Some(checkout);
+        }
+        cx.emit(GitChanged);
+        cx.notify();
     }
-    /// rememberIndex: recent checkouts open on their last snapshot, within 24
-    /// checkouts and 20,000 files.
-    fn remember(&mut self, project: &str, index: &DiffIndex) {
-        self.clock += 1;
-        self.remembered
-            .insert(project.to_owned(), (self.clock, index.clone()));
-        let mut files: usize = self.remembered.values().map(|(_, i)| i.files.len()).sum();
-        while self.remembered.len() > 24 || files > 20_000 {
-            let Some(oldest) = self
-                .remembered
-                .iter()
-                .min_by_key(|(_, (at, _))| *at)
-                .map(|(k, _)| k.clone())
-            else {
-                break;
-            };
-            if let Some((_, gone)) = self.remembered.remove(&oldest) {
-                files -= gone.files.len();
+
+    fn sync_checkout(&mut self, source: &Entity<Checkout>, cx: &mut Context<Self>) {
+        if self.checkout.as_ref() != Some(source) {
+            return;
+        }
+        let checkout = source.read(cx);
+        let snapshot = checkout.snapshot();
+        let invalidate = self.source_revision != checkout.revision;
+        self.source_revision = checkout.revision;
+        let changed = self.snapshot.as_ref().map(Arc::as_ptr) != snapshot.as_ref().map(Arc::as_ptr);
+        let previous_head = self
+            .snapshot
+            .as_ref()
+            .and_then(|old| old.local_head.as_ref());
+        let next_head = snapshot.as_ref().and_then(|new| new.local_head.as_ref());
+        let head = next_head
+            .filter(|head| Some(*head) != previous_head)
+            .cloned();
+        self.snapshot = snapshot;
+        if invalidate {
+            self.epoch += 1;
+            cx.emit(GitChanged);
+        }
+        if changed {
+            cx.notify();
+        }
+        if let Some(head) = head {
+            cx.emit(GitHeadChanged {
+                cwd: self.project.clone(),
+                head,
+            });
+        }
+    }
+
+    pub(crate) fn set_polling(&mut self, polling: bool, cx: &mut Context<Self>) {
+        if polling != self.polling {
+            self.polling = polling;
+            if let Some(checkout) = &self.checkout {
+                let viewer = cx.entity_id();
+                checkout.update(cx, |checkout, cx| checkout.poll(viewer, polling, cx));
             }
         }
     }
-    pub(crate) fn has_changes(&self) -> bool {
-        self.stats.as_ref().is_some_and(|s| s.files > 0)
+
+    pub(crate) fn resume(&mut self, cx: &mut Context<Self>) {
+        if let Some(checkout) = &self.checkout {
+            checkout.update(cx, Checkout::reconcile);
+        }
     }
-}
-fn stats_of(index: &DiffIndex) -> DiffStats {
-    DiffStats {
-        files: index.files.len() as i64,
-        additions: index.additions,
-        deletions: index.deletions,
+
+    /// A local mutation invalidates every view of the same checkout.
+    pub(crate) fn changed(&mut self, cx: &mut Context<Self>) {
+        if let Some(checkout) = self.checkout.clone() {
+            checkout.update(cx, Checkout::changed);
+            self.sync_checkout(&checkout, cx);
+        }
+    }
+
+    pub(crate) fn reload(&mut self, cx: &mut Context<Self>) {
+        if let Some(checkout) = &self.checkout {
+            checkout.update(cx, Checkout::reconcile);
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gpui::{AppContext, TestAppContext};
     use vorkspace_core::scm::ChangedFile;
     fn file(path: &str, status: &str) -> ChangedFile {
         ChangedFile {
@@ -295,5 +283,46 @@ mod tests {
         assert_eq!(map.dirs["/r/a"], "modified");
         assert!(!map.dirs.contains_key("/r"));
         assert_eq!(map.files["/r/a/gone.rs"], "deleted");
+    }
+
+    #[gpui::test]
+    fn checkout_observation_is_shared_without_sharing_window_selection(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(
+            std::process::Command::new("git")
+                .args(["init", "-q"])
+                .current_dir(dir.path())
+                .status()
+                .unwrap()
+                .success()
+        );
+        std::fs::write(dir.path().join("local.txt"), "untracked").unwrap();
+        let path = dir.path().to_string_lossy().into_owned();
+        let (first, second) = cx.update(|cx| {
+            let catalog = cx.new(|_| CheckoutCatalog::default());
+            let first = cx.new(|cx| ProjectGit::shared(path.clone(), catalog.clone(), cx));
+            let second = cx.new(|cx| ProjectGit::shared(path.clone(), catalog, cx));
+            assert_eq!(first.read(cx).checkout, second.read(cx).checkout);
+            (first, second)
+        });
+        cx.run_until_parked();
+        let peer_epoch = cx.update(|cx| {
+            let snapshot = first.read(cx).snapshot().expect("checkout scanned");
+            assert!(Arc::ptr_eq(&snapshot, &second.read(cx).snapshot().unwrap()));
+            assert_eq!(snapshot.files.len(), 1);
+            let epoch = second.read(cx).epoch;
+            first.update(cx, ProjectGit::changed);
+            epoch
+        });
+        cx.run_until_parked();
+        cx.update(|cx| {
+            assert!(second.read(cx).epoch > peer_epoch);
+            second.update(cx, |git, cx| git.set_project("~".into(), cx));
+            assert!(second.read(cx).snapshot().is_none());
+            assert_eq!(first.read(cx).project(), path);
+            let retained = first.read(cx).snapshot().unwrap();
+            second.update(cx, |git, cx| git.set_project(path, cx));
+            assert!(Arc::ptr_eq(&retained, &second.read(cx).snapshot().unwrap()));
+        });
     }
 }

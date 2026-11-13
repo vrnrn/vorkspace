@@ -3,27 +3,50 @@ use super::*;
 use vorkspace_ui::radius;
 
 impl Conversation {
+    pub(crate) fn owns_running_turn(&self, token: &vorkspace_core::process::TurnToken) -> bool {
+        self.responding() && token.matches(&self.cancel)
+    }
+
+    pub(crate) fn stop_running_turn(
+        &mut self,
+        token: &vorkspace_core::process::TurnToken,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if !self.owns_running_turn(token) {
+            return false;
+        }
+        self.stop(cx);
+        true
+    }
+
     /// `Session: Stop` on Escape: cancels a running turn.
     pub(crate) fn stop_if_busy(&mut self, cx: &mut Context<Self>) {
         if self.cancel_edit_last_turn(cx) {
             return;
         }
-        if self.busy || self.ticket_context.pending() {
+        if self.responding()
+            || self.ticket_context.pending()
+            || self.composer_draft.waiting_to_submit()
+        {
             self.stop(cx);
         }
     }
     pub(super) fn stop(&mut self, cx: &mut Context<Self>) {
+        if self.composer_draft.cancel_waiting_send() {
+            self.notification_cancelled = true;
+            cx.emit(SessionChanged::Settled);
+            cx.notify();
+        }
         let ticket_pending = self.ticket_context.pending();
         self.ticket_context.cancel();
         if ticket_pending {
             self.status = "Ready".into();
             cx.notify();
         }
-        if !self.busy || self.stopping {
+        if !self.responding() {
             return;
         }
-        self.stopping = true;
-        self.busy = false;
+        self.turn_state = TurnState::Stopping;
         self.follow_ups.resuming = false;
         self.follow_ups.continuations.clear();
         self.notification_cancelled = true;
@@ -40,12 +63,10 @@ impl Conversation {
         self.status = "Ready".into();
         self.transcript
             .update(cx, |view, cx| view.stop_streaming(cx));
-        self.review
-            .update(cx, |review, cx| review.set_busy(false, cx));
-        cx.emit(SessionChanged);
+        cx.emit(SessionChanged::Turn);
         cx.notify();
     }
-    // Composer.tsx in the inset layout: a frosted, rounded box holding the
+    // The composer in the inset layout: a frosted, rounded box holding the
     // field and its toolbar, with the workspace bar sitting under it.
     pub(super) fn composer(&mut self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let command = if self.follow_ups.draft_selected {
@@ -92,11 +113,12 @@ impl Conversation {
             .children(menu)
             .children(self.model_list_popover(cx))
             .children(self.orchestration_card(cx))
-            .children(if self.is_remote() { None } else { self.usage_notice(false, cx) })
+            .children(self.usage_notice(false, cx))
             .child(self.message_queue(window, cx))
-            .children(if self.is_remote() { None } else { self.auth_notice(cx) })
+            .children(self.auth_notice(cx))
             .when(self.settings.worktree_removed,|d|d.child(div().mb_2().p_3().rounded(px(radius::CONTAINER)).border_1().border_color(content(0.1)).flex().items_center().gap_3().text_size(px(12.)).child(div().flex_1().child("Worktree deleted. Select a branch or worktree to continue this conversation.")).child(tool_pill("reattach-worktree","Select worktree").child("Select worktree").on_click(cx.listener(|this,_,window,cx|this.open_git(GitMode::Worktree,window,cx))))))
-            .when_some(self.settings.handoff.clone(), |d, handoff| {
+            .when_some(self.settings.pending_provider_switch.as_ref().map(|switch| switch.from.as_str())
+                .or_else(|| self.settings.handoff.as_ref().map(|handoff| handoff.from.as_str())), |d, from| {
                 d.child(
                     div()
                         .mb(px(6.))
@@ -112,17 +134,21 @@ impl Conversation {
                         .child(icon("response-handoff", 14.))
                         .child(div().min_w_0().flex_1().child(format!(
                             "Handoff from {} · Add your next instruction below",
-                            Kind::display_label(&handoff.from)
+                            Kind::display_label(from)
                         )))
-                        .child(
+                        .when(!self.responding(), |d| d.child(
                             tool_pill("dismiss-handoff", "Dismiss handoff")
                                 .child(icon("close", 12.))
                                 .on_click(cx.listener(|this, _, _, cx| {
+                                    if this.responding() {
+                                        return;
+                                    }
+                                    this.settings.pending_provider_switch = None;
                                     this.settings.handoff = None;
                                     this.save_settings(cx);
                                     cx.notify();
                                 })),
-                        ),
+                        )),
                 )
             })
             .when_some(self.git_picker.clone(), |d, picker| {
@@ -150,7 +176,6 @@ impl Conversation {
             })
             .child(self.approval_shelf(window, cx))
             .child(self.composer_box(window, cx))
-            .children(self.remote_notice(cx))
             .child(self.composer_tools(cx))
             .into_any_element()
     }
@@ -161,7 +186,8 @@ impl Conversation {
         let fill = composer_fill();
         let bot = self.settings.bot.is_some();
         let input = self.input.read(cx);
-        let has_value = input.has_message_text() || !self.attachments.is_empty();
+        let has_value = (input.has_message_text() || !self.attachments.is_empty())
+            && !self.editing_last_turn.blocks_send();
         // Sessions complete files, commands and skills; a Bot's field is plain.
         let field = if bot {
             self.input.clone().into_any_element()
@@ -215,7 +241,21 @@ impl Conversation {
             )
             .children(self.composer_recovery_banner(cx))
             .children(self.local_submission_banner(cx))
+            .children(self.edit_recovery_banner())
             .children(self.recovered_turn_banner(cx))
+            .when_some(self.follow_ups.admission_error.clone(), |d, error| {
+                d.child(
+                    div()
+                        .id("composer-admission-error")
+                        .role(Role::Alert)
+                        .aria_label(error.clone())
+                        .px(px(10.))
+                        .pt(px(6.))
+                        .text_size(px(12.))
+                        .text_color(vorkspace_ui::theme::danger())
+                        .child(error),
+                )
+            })
             .children(self.attachment_chips(cx))
             .child(
                 // Even padding centres send beside one line and keeps it at
@@ -304,9 +344,9 @@ impl Conversation {
         } else {
             "Current checkout"
         };
-        let enabled = !self.busy && !self.preparing_worktree && self.git.is_some();
+        let enabled = !self.responding() && !self.preparing_worktree && self.git.is_some();
         // Still reading git is not unavailable: don't dim, then brighten.
-        let dimmed = !enabled && (self.loaded || self.busy || self.preparing_worktree);
+        let dimmed = !enabled && (self.loaded || self.responding() || self.preparing_worktree);
         let workspace = if draft {
             bar_trigger(
                 "composer-workspace",
@@ -362,145 +402,9 @@ impl Conversation {
             self.branch.clone()
         };
         if compact {
-            let open = self.menu.as_ref().is_some_and(|open| {
-                !matches!(open.kind, ComposerMenu::Add | ComposerMenu::Account)
-            }) || self.git_picker.is_some()
-                || self.bot_ui.models.is_some();
-            return div()
-                .debug_selector(|| "composer-toolbar".into())
-                .w_full()
-                .min_w_0()
-                .flex()
-                .items_center()
-                .gap(px(2.))
-                .pt_1()
-                .pl_1()
-                .pr_1p5()
-                .child(self.add_button(true, cx))
-                .child(
-                    div()
-                        .ml_auto()
-                        .min_w_0()
-                        .flex()
-                        .items_center()
-                        .gap_1()
-                        .child(
-                            quiet_control("composer-session-settings", open)
-                                .debug_selector(|| "composer-session-settings".into())
-                                .flex_shrink(1.)
-                                .aria_label(if bot {
-                                    "Bot settings"
-                                } else {
-                                    "Session settings"
-                                })
-                                .aria_expanded(open)
-                                .track_focus(&self.compact_focus)
-                                .tab_index(0)
-                                .child(self.compact_anchor.probe())
-                                // Existing open menus follow the same visible anchor through a resize.
-                                .child(self.model_anchor.probe())
-                                .child(self.access_anchor.probe())
-                                .child(self.workspace_anchor.probe())
-                                .child(self.branch_anchor.probe())
-                                .children(
-                                    self.bot_ui
-                                        .setting_anchors
-                                        .iter()
-                                        .map(|anchor| anchor.probe()),
-                                )
-                                .child(icon("settings", 14.))
-                                .child(div().min_w_0().truncate().child(if bot {
-                                    "Bot settings"
-                                } else {
-                                    "Session settings"
-                                }))
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    this.toggle_menu(ComposerMenu::CompactSettings, window, cx)
-                                }))
-                                .on_key_down(cx.listener(
-                                    |this, event: &gpui::KeyDownEvent, window, cx| {
-                                        if matches!(event.keystroke.key.as_str(), "enter" | "space")
-                                        {
-                                            this.toggle_menu(
-                                                ComposerMenu::CompactSettings,
-                                                window,
-                                                cx,
-                                            );
-                                            cx.stop_propagation();
-                                        }
-                                    },
-                                )),
-                        )
-                        .children(self.context_meter(true, cx)),
-                )
-                .into_any_element();
+            return self.compact_toolbar(bot, cx);
         }
-        let model_open = self.menu_is(ComposerMenu::Model)
-            || self.menu_is(ComposerMenu::CompactSettings)
-            || self.menu_is(ComposerMenu::Recent)
-            || self.bot_ui.models.is_some();
-        let model = quiet_control("composer-model", model_open)
-            .debug_selector(|| "composer-model".into())
-            .min_w_0()
-            .max_w(px(220.))
-            .flex_shrink(1.)
-            .aria_label(format!(
-                "{}, {}{}",
-                kind.label(),
-                self.model_label(),
-                trigger_effort
-                    .as_ref()
-                    .map(|effort| format!(", effort {effort}"))
-                    .unwrap_or_default()
-            ))
-            .child(self.model_anchor.probe())
-            .child(self.compact_anchor.probe())
-            .track_focus(&self.compact_focus)
-            .tab_index(0)
-            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
-                if matches!(event.keystroke.key.as_str(), "enter" | "space") {
-                    if this.menu_is(ComposerMenu::CompactSettings) {
-                        this.close_menu(window, cx);
-                    } else {
-                        this.toggle_menu(ComposerMenu::Model, window, cx);
-                    }
-                    cx.stop_propagation();
-                }
-            }))
-            .aria_expanded(model_open)
-            .on_click(cx.listener(|this, _, window, cx| {
-                if this.menu_is(ComposerMenu::CompactSettings) {
-                    this.close_menu(window, cx);
-                } else {
-                    this.toggle_menu(ComposerMenu::Model, window, cx);
-                }
-            }))
-            .on_mouse_down(
-                MouseButton::Right,
-                cx.listener(|this, _, window, cx| {
-                    cx.stop_propagation();
-                    this.open_recent_models(window, cx)
-                }),
-            )
-            .child(provider_icon(&self.summary.provider, 14.))
-            .child(
-                div()
-                    .debug_selector(|| "composer-model-label".into())
-                    .min_w_0()
-                    .truncate()
-                    .child(self.model_label()),
-            )
-            .when_some(trigger_effort, |d, effort| {
-                d.child(
-                    div()
-                        .debug_selector(|| "composer-model-effort".into())
-                        .min_w_0()
-                        .flex_shrink(1.)
-                        .truncate()
-                        .text_color(content(0.5))
-                        .child(effort),
-                )
-            });
+        let model = self.model_control(kind, trigger_effort, cx);
         let access_open = self.menu_is(ComposerMenu::Access);
         let access = quiet_control("composer-access", access_open)
             .debug_selector(|| "composer-access".into())
@@ -600,7 +504,7 @@ impl Conversation {
                     .child(model)
                     .children(controls)
                     .when(!bot, |d| d.child(access))
-                    .when(self.editing_last_turn.pending(), |d| {
+                    .when(self.editing_last_turn.can_cancel(), |d| {
                         d.child(
                             div()
                                 .id("cancel-edit-last-turn")
@@ -617,8 +521,8 @@ impl Conversation {
                     })
                     .when(
                         !bot && self.status != "Ready"
-                            && !self.busy
-                            && !self.loading
+                            && !self.responding()
+                            && !self.history_loading()
                             && self.settings.usage_limit.is_none(),
                         |d| {
                             d.child(
@@ -638,6 +542,151 @@ impl Conversation {
                     .children(self.context_meter(false, cx)),
             )
             .into_any_element()
+    }
+
+    fn compact_toolbar(&self, bot: bool, cx: &mut Context<Self>) -> AnyElement {
+        let open =
+            self.menu.as_ref().is_some_and(|open| {
+                !matches!(open.kind, ComposerMenu::Add | ComposerMenu::Account)
+            }) || self.git_picker.is_some()
+                || self.bot_ui.models.is_some();
+        div()
+            .debug_selector(|| "composer-toolbar".into())
+            .w_full()
+            .min_w_0()
+            .flex()
+            .items_center()
+            .gap(px(2.))
+            .pt_1()
+            .pl_1()
+            .pr_1p5()
+            .child(self.add_button(true, cx))
+            .child(
+                div()
+                    .ml_auto()
+                    .min_w_0()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .child(
+                        quiet_control("composer-session-settings", open)
+                            .debug_selector(|| "composer-session-settings".into())
+                            .flex_shrink(1.)
+                            .aria_label(if bot {
+                                "Bot settings"
+                            } else {
+                                "Session settings"
+                            })
+                            .aria_expanded(open)
+                            .track_focus(&self.compact_focus)
+                            .tab_index(0)
+                            .child(self.compact_anchor.probe())
+                            // Existing open menus follow the same visible anchor through a resize.
+                            .child(self.model_anchor.probe())
+                            .child(self.access_anchor.probe())
+                            .child(self.workspace_anchor.probe())
+                            .child(self.branch_anchor.probe())
+                            .children(
+                                self.bot_ui
+                                    .setting_anchors
+                                    .iter()
+                                    .map(|anchor| anchor.probe()),
+                            )
+                            .child(icon("settings", 14.))
+                            .child(div().min_w_0().truncate().child(if bot {
+                                "Bot settings"
+                            } else {
+                                "Session settings"
+                            }))
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.toggle_menu(ComposerMenu::CompactSettings, window, cx)
+                            }))
+                            .on_key_down(cx.listener(
+                                |this, event: &gpui::KeyDownEvent, window, cx| {
+                                    if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                                        this.toggle_menu(ComposerMenu::CompactSettings, window, cx);
+                                        cx.stop_propagation();
+                                    }
+                                },
+                            )),
+                    )
+                    .children(self.context_meter(true, cx)),
+            )
+            .into_any_element()
+    }
+
+    fn model_control(
+        &self,
+        kind: Kind,
+        trigger_effort: Option<SharedString>,
+        cx: &mut Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        let model_open = self.menu_is(ComposerMenu::Model)
+            || self.menu_is(ComposerMenu::CompactSettings)
+            || self.menu_is(ComposerMenu::Recent)
+            || self.bot_ui.models.is_some();
+        quiet_control("composer-model", model_open)
+            .debug_selector(|| "composer-model".into())
+            .min_w_0()
+            .max_w(px(220.))
+            .flex_shrink(1.)
+            .aria_label(format!(
+                "{}, {}{}",
+                kind.label(),
+                self.model_label(),
+                trigger_effort
+                    .as_ref()
+                    .map(|effort| format!(", effort {effort}"))
+                    .unwrap_or_default()
+            ))
+            .child(self.model_anchor.probe())
+            .child(self.compact_anchor.probe())
+            .track_focus(&self.compact_focus)
+            .tab_index(0)
+            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
+                if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                    if this.menu_is(ComposerMenu::CompactSettings) {
+                        this.close_menu(window, cx);
+                    } else {
+                        this.toggle_menu(ComposerMenu::Model, window, cx);
+                    }
+                    cx.stop_propagation();
+                }
+            }))
+            .aria_expanded(model_open)
+            .on_click(cx.listener(|this, _, window, cx| {
+                if this.menu_is(ComposerMenu::CompactSettings) {
+                    this.close_menu(window, cx);
+                } else {
+                    this.toggle_menu(ComposerMenu::Model, window, cx);
+                }
+            }))
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(|this, _, window, cx| {
+                    cx.stop_propagation();
+                    this.open_recent_models(window, cx)
+                }),
+            )
+            .child(provider_icon(&self.summary.provider, 14.))
+            .child(
+                div()
+                    .debug_selector(|| "composer-model-label".into())
+                    .min_w_0()
+                    .truncate()
+                    .child(self.model_label()),
+            )
+            .when_some(trigger_effort, |d, effort| {
+                d.child(
+                    div()
+                        .debug_selector(|| "composer-model-effort".into())
+                        .min_w_0()
+                        .flex_shrink(1.)
+                        .truncate()
+                        .text_color(content(0.5))
+                        .child(effort),
+                )
+            })
     }
 
     pub(super) fn context_meter(&self, force: bool, cx: &mut Context<Self>) -> Option<AnyElement> {
@@ -718,22 +767,30 @@ impl Conversation {
     pub(super) fn action(&self, has_value: bool, cx: &mut Context<Self>) -> impl IntoElement {
         let ticket_pending = self.ticket_context.pending();
         let bot = self.settings.bot.is_some();
-        let busy = !bot && (ticket_pending || (self.responding() && !has_value));
+        let busy = !bot
+            && (self.composer_draft.waiting_to_submit()
+                || ticket_pending
+                || (self.responding() && (!has_value || self.composer_version_offered())));
+        let offering = self.composer_version_offered()
+            || self
+                .composer_draft
+                .lane_pending(composer_draft::ComposerLane::Shelf);
         let draft = self.draft_active(cx);
         let enabled = ticket_pending
             || (!self.attaching
-                && (!self.preparing_worktree || self.busy || self.stopping)
-                && (busy || (has_value && self.loaded))
-                && (busy
-                    || !draft
-                    || (self.follow_ups.state.draft.is_none()
-                        && (!self.is_remote() || (!self.busy && !self.stopping)))));
+                && (!self.preparing_worktree || self.turn_in_flight())
+                && (busy || (has_value && self.loaded && !offering))
+                && (busy || !draft || (self.follow_ups.state.draft.is_none())));
         let accent = primary_action(enabled);
         vorkspace_ui::theme::keyboard_reachable(div().id("send-or-stop"), enabled)
             .debug_selector(|| "send-or-stop".into())
             .role(Role::Button)
             .aria_label(if busy {
                 "Stop"
+            } else if let Some(label) = self.follow_ups.admission_label() {
+                label
+            } else if offering {
+                "Waiting for send confirmation"
             } else if draft {
                 "Save draft"
             } else {
@@ -785,7 +842,7 @@ impl Conversation {
                 }
             }))
     }
-    // EmptySession.tsx: the composer centred under its question, or resting
+    // An empty session: the composer centred under its question, or resting
     // where it will dock once a neighbouring pane squeezes it narrower than
     // the column. A narrow window alone keeps it centred.
     pub(super) fn empty(&mut self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
@@ -860,7 +917,7 @@ impl Conversation {
                             } else {
                                 format!(
                                     "What should we work on in {}?",
-                                    self.project_appearance.label(&self.summary.cwd)
+                                    crate::workspace::project_name(&self.summary.cwd)
                                 )
                             }),
                     )

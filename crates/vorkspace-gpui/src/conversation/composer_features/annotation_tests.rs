@@ -279,6 +279,11 @@ fn annotated_copy_is_persisted_and_sent_and_stale_owner_is_rejected(cx: &mut Tes
     chat.update(cx, |chat, cx| {
         chat.loaded = true;
         chat.send(cx);
+        assert!(chat.transcript.read(cx).source_rows().is_empty());
+    });
+    let executor = cx.foreground_executor().clone();
+    executor.block_test(cx.condition(&chat, |chat, _| !chat.turn_in_flight()));
+    chat.read_with(cx, |chat, cx| {
         let rows = chat.transcript.read(cx).source_rows();
         let manifest = rows
             .iter()

@@ -1,27 +1,9 @@
-const KEY = "vorkspace.vox.microphone.v1";
 const DEFAULT = { id: "builtin", label: "built-in microphone" };
 const AUDIO = {
   channelCount: 1,
   echoCancellation: true,
   noiseSuppression: true,
 };
-export function loadVoxMicrophone() {
-  try {
-    const value = JSON.parse(localStorage.getItem(KEY) ?? "null");
-    if (
-      typeof value?.id === "string" &&
-      value.id &&
-      typeof value.label === "string"
-    )
-      return { id: value.id, label: value.label };
-  } catch {
-    /* use the app's default when storage is unavailable */
-  }
-  return DEFAULT;
-}
-export function saveVoxMicrophone(value) {
-  localStorage.setItem(KEY, JSON.stringify(value));
-}
 export async function listVoxMicrophones() {
   if (!navigator.mediaDevices?.enumerateDevices) return [];
   return (await navigator.mediaDevices.enumerateDevices()).filter(
@@ -31,8 +13,8 @@ export async function listVoxMicrophones() {
       !["default", "communications"].includes(device.deviceId),
   );
 }
-export class VoxMicrophoneError extends Error {}
-export function findVoxMicrophone(selected, devices) {
+class VoxMicrophoneError extends Error {}
+function findVoxMicrophone(selected, devices) {
   return selected.id === "builtin"
     ? devices.find((entry) =>
         /macbook.*microphone|built[ -]?in.*mic|internal.*mic|microphone array/i.test(
@@ -49,7 +31,7 @@ export function findVoxMicrophone(selected, devices) {
           return matches.length === 1 ? matches[0] : undefined;
         })());
 }
-export async function allowVoxMicrophones() {
+async function allowVoxMicrophones() {
   const stream = await navigator.mediaDevices.getUserMedia({
     audio: AUDIO,
     video: false,
@@ -58,8 +40,12 @@ export async function allowVoxMicrophones() {
 }
 /** Pin an explicit input before WebRTC starts. A missing selection is an error,
  * never permission to fall back to a Bluetooth/system-default microphone. */
-export async function captureVoxMicrophone(isCurrent) {
-  const selected = loadVoxMicrophone();
+export async function captureVoxMicrophone(selection, isCurrent) {
+  const selected =
+    typeof selection?.id === "string" && selection.id && typeof selection.label === "string"
+      ? selection
+      : DEFAULT;
+  if (!isCurrent()) throw new DOMException("cancelled", "AbortError");
   if (selected.id === "system")
     return navigator.mediaDevices.getUserMedia({ audio: AUDIO, video: false });
   let devices = await listVoxMicrophones();

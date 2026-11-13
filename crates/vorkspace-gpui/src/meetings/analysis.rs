@@ -1,7 +1,7 @@
 //! Explicit summary generation through the selected restricted provider.
 use super::{
     Page,
-    document::{Field, Section, Snapshot, decode},
+    document::{Field, Section},
 };
 use gpui::Context;
 use std::{
@@ -15,6 +15,7 @@ use vorkspace_core::{
     accounts::Profile,
     provider::{self, Kind},
 };
+use vorkspace_meetings::Snapshot;
 
 pub(super) struct Analysis {
     pub id: String,
@@ -74,7 +75,7 @@ impl Page {
         let summarize_id = id.clone();
         let work = cx.background_executor().spawn(async move {
             let scratch = tempfile::tempdir().map_err(|error| error.to_string())?;
-            let result = meetings.summarize(&summarize_id, &cancel, |settings, prompt| {
+            meetings.summarize(&summarize_id, &cancel, |settings, prompt| {
                 if cancel.load(Ordering::Acquire) {
                     return Err("Meeting summary canceled.".into());
                 }
@@ -108,8 +109,7 @@ impl Page {
                         Ok(text)
                     }
                 })
-            })?;
-            decode(result)
+            })
         });
         cx.spawn(async move |this, cx| {
             let result = work.await;

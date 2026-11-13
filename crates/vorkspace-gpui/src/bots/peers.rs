@@ -48,7 +48,7 @@ impl Bots {
             .iter()
             .filter(|(bot, _)| {
                 self.chats
-                    .get(*bot)
+                    .get(bot)
                     .is_some_and(|v| v.read(cx).summary.id == session)
             })
             .filter_map(|(_, m)| m.peer.as_ref().map(|p| p.hop))

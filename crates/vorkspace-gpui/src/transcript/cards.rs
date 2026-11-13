@@ -10,7 +10,7 @@ enum Resource {
 }
 
 // Preserve the core routing distinction: numbers are native handles; serialized
-// desktop IDs resolve through session_handle, including numeric-looking IDs.
+// string IDs resolve through session_handle, including numeric-looking IDs.
 // Invalid references must not coalesce.
 pub(super) fn session(value: &Value) -> Option<i64> {
     if let Some(id) = value.as_i64() {

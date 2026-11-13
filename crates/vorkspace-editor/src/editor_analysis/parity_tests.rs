@@ -24,6 +24,34 @@ fn search_and_replace_share_codemirror_unicode_captures_and_word_boundaries() {
     );
 }
 #[test]
+fn prettier_loads_embedded_parsers_through_the_native_boundary() {
+    for (path, source, fragment) in [
+        (
+            "a.html",
+            "<script>const value={x:1}</script><style>body{color:red}</style>",
+            "const value = { x: 1 };",
+        ),
+        (
+            "a.md",
+            "```tsx\nconst value={x:1}\n```\n",
+            "const value = { x: 1 };",
+        ),
+        (
+            "a.mdx",
+            "export const value={x:1}\n\n<section>{value.x}</section>\n",
+            "export const value = { x: 1 };",
+        ),
+    ] {
+        let at = source.find("value").unwrap();
+        let formatted = format(path, source, at).unwrap().unwrap();
+        assert!(
+            formatted.formatted.contains(fragment),
+            "{path}: {formatted:?}"
+        );
+        assert!(formatted.formatted[formatted.cursor..].starts_with("value"));
+    }
+}
+#[test]
 fn prettier_and_emmet_keep_cursor_bytes_and_the_frontend_defaults() {
     let source = "const emoji='🙂';const value={x:1}";
     let result = format("a.ts", source, source.find("value").unwrap())
@@ -44,9 +72,27 @@ fn prettier_and_emmet_keep_cursor_bytes_and_the_frontend_defaults() {
     }
     assert!(format("a.json", "{bad", 0).unwrap().is_none());
     assert!(format("a.rs", "fn main(){}", 0).unwrap().is_none());
+    for extension in ["js", "jsx", "mjs", "cjs", "ts", "tsx", "mts", "cts"] {
+        let path = format!("a.{}", extension.to_uppercase());
+        assert!(format(&path, "const a=1", 0).unwrap().is_some(), "{path}");
+    }
+    for extension in ["html", "htm", "md", "markdown", "mdx"] {
+        let path = format!("a.{extension}");
+        assert!(format(&path, "hello", 0).unwrap().is_some(), "{path}");
+    }
+    // The admission limit counts JavaScript's UTF-16 units, including pairs.
+    let at_limit = "🙂".repeat(256 * 1024);
+    assert!(format("a.md", &at_limit, 0).unwrap().is_some());
+    assert!(format("a.md", &(at_limit + "a"), 0).unwrap().is_none());
     let result = emmet("a.tsx", ".container>span", 15).unwrap().unwrap();
     assert!(result.formatted.contains("className=\"container\""));
     assert!(result.formatted[result.cursor..].starts_with("</span>"));
+    let oversized = "div*50>span*50";
+    assert!(
+        emmet("a.html", oversized, oversized.len())
+            .unwrap()
+            .is_none()
+    );
 }
 #[test]
 fn completions_snippets_and_folds_use_the_frontend_languages() {
@@ -106,12 +152,12 @@ fn large_tsx_analysis_highlights_the_end_of_the_current_and_original_file() {
     assert!(
         tail.tokens
             .iter()
-            .any(|token| token.kind == "var(--syntax-keyword)")
+            .any(|token| token.kind == TokenKind::Keyword)
     );
     assert!(
         tail.tokens
             .iter()
-            .any(|token| token.kind == "var(--syntax-string)")
+            .any(|token| token.kind == TokenKind::String)
     );
     assert!(
         analysis
@@ -149,24 +195,10 @@ fn hunk_actions_preserve_eof_newlines_and_selected_line_scope() {
         let changes = analyze("a.txt", current, Some(original)).unwrap().changes;
         let at = changes[0].from;
         assert_eq!(
-            chunk_action(original, current, at, at..at, false)
+            chunk_action(original, current, at, at..at)
                 .unwrap()
                 .as_deref(),
             Some(original)
         );
-        assert_eq!(
-            chunk_action(original, current, at, at..at, true)
-                .unwrap()
-                .as_deref(),
-            Some(current)
-        );
     }
-    let original = "one\ntwo\nthree\n";
-    let current = "ONE\nTWO\nthree\n";
-    assert_eq!(
-        chunk_action(original, current, 0, 0..3, true)
-            .unwrap()
-            .as_deref(),
-        Some("ONE\ntwo\nthree\n")
-    );
 }

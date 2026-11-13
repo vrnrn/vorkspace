@@ -2,7 +2,7 @@
 //! authority for publishing edits to the saved meeting.
 use super::*;
 use rustix::fs::AtFlags;
-use std::io::ErrorKind;
+use std::{io::ErrorKind, sync::Arc};
 
 const DRAFT_CHANGED: &str = "The draft changed in another view. Reopen this meeting to review it.";
 
@@ -10,38 +10,39 @@ pub struct EditLease {
     _lock: Lock,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(crate) struct Receipt {
     pub(crate) version: String,
     pub(crate) revision: u64,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug)]
 pub struct DraftWrite {
-    pub id: String,
-    pub expected: Option<String>,
-    pub version: String,
+    id: String,
+    expected: Option<String>,
+    version: String,
     draft: Draft,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct Draft {
-    revision: u64,
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Draft {
+    pub revision: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
-    title: Option<String>,
+    pub title: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    transcript: Option<String>,
+    pub transcript: Option<Arc<str>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    summary: Option<String>,
-    view: DraftView,
-    title_focused: bool,
-    start: u32,
-    end: u32,
+    pub summary: Option<Arc<str>>,
+    pub view: DraftView,
+    pub title_focused: bool,
+    pub start: u32,
+    pub end: u32,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-enum DraftView {
+pub enum DraftView {
+    #[default]
     Transcript,
     Summary,
 }
@@ -52,46 +53,65 @@ struct Slot {
     draft: Option<Draft>,
 }
 
+#[derive(Default)]
+pub(super) struct CatalogEdits {
+    pub(super) title: Option<String>,
+    pub(super) transcript: Option<bool>,
+    pub(super) summary: Option<bool>,
+}
+
 impl DraftWrite {
-    pub fn from_params(params: Value) -> Result<Self, String> {
-        let edit: Self = decode(params)?;
+    pub fn new(
+        id: String,
+        expected: Option<String>,
+        version: String,
+        draft: Draft,
+    ) -> Result<Self, String> {
         let valid_version = |version: &str| {
             version.len() == 32
                 && version
                     .bytes()
                     .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
         };
-        if !valid_id(&edit.id)
-            || !valid_version(&edit.version)
-            || edit
-                .expected
+        if !valid_id(&id)
+            || !valid_version(&version)
+            || expected
                 .as_deref()
-                .is_some_and(|version| !valid_version(version) || version == edit.version)
+                .is_some_and(|expected| !valid_version(expected) || expected == version)
         {
             return Err("Invalid meeting draft identity".into());
         }
-        let oversized =
-            |text: &Option<String>, limit| text.as_ref().is_some_and(|text| text.len() > limit);
-        if oversized(&edit.draft.title, 4 * MAX_TITLE_CHARS)
-            || oversized(&edit.draft.transcript, recording::MAX_TRANSCRIPT)
-            || oversized(&edit.draft.summary, MAX_SUMMARY_BYTES)
+        let oversized = |text: Option<&str>, limit| text.is_some_and(|text| text.len() > limit);
+        if oversized(draft.title.as_deref(), 4 * MAX_TITLE_CHARS)
+            || oversized(draft.transcript.as_deref(), recording::MAX_TRANSCRIPT)
+            || oversized(draft.summary.as_deref(), MAX_SUMMARY_BYTES)
         {
             return Err("Meeting draft exceeds its size limit.".into());
         }
-        Ok(edit)
+        Ok(Self {
+            id,
+            expected,
+            version,
+            draft,
+        })
     }
 
-    /// The last eight digits are a fixed-width sequence within one iframe.
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    pub fn version(&self) -> &str {
+        &self.version
+    }
+
+    pub fn draft(&self) -> &Draft {
+        &self.draft
+    }
+
+    /// The last eight digits are a fixed-width sequence within one editor.
     /// Coalescing may skip an arbitrary number of intermediate checkpoints.
     pub fn follows(&self, version: &str) -> bool {
         follows(&self.version, version)
-    }
-
-    pub fn restore_pending(&self, document: &mut Value, error: String) -> Result<(), String> {
-        document["draft"] = value(&self.draft)?;
-        document["draft_version"] = json!(self.version);
-        document["draft_error"] = json!(error);
-        Ok(())
     }
 }
 
@@ -138,32 +158,23 @@ impl Meetings {
         }))
     }
 
-    // Outer None hides blank, absent and consumed checkpoints. Inner None is
-    // a meaningful untitled draft, whose row uses the display placeholder.
-    pub(crate) fn visible_draft_title(
+    pub(super) fn catalog_edits(
         &self,
         id: &str,
         applied: Option<&Receipt>,
-    ) -> Result<Option<Option<String>>, String> {
-        let Some(slot) = self.draft_slot(id)? else {
-            return Ok(None);
+    ) -> Result<CatalogEdits, String> {
+        let Some(draft) = self
+            .draft_slot(id)?
+            .filter(|slot| applied.is_none_or(|receipt| receipt.version != slot.version))
+            .and_then(|slot| slot.draft)
+        else {
+            return Ok(CatalogEdits::default());
         };
-        if applied.is_some_and(|receipt| receipt.version == slot.version) {
-            return Ok(None);
-        }
-        let Some(draft) = slot.draft else {
-            return Ok(None);
-        };
-        let nonblank = |text: &str| !text.trim().is_empty();
-        let title = draft.title.filter(|text| nonblank(text));
-        if title.is_some()
-            || draft.transcript.as_deref().is_some_and(nonblank)
-            || draft.summary.as_deref().is_some_and(nonblank)
-        {
-            Ok(Some(title))
-        } else {
-            Ok(None)
-        }
+        Ok(CatalogEdits {
+            title: draft.title,
+            transcript: draft.transcript.map(|text| !text.trim().is_empty()),
+            summary: draft.summary.map(|text| !text.trim().is_empty()),
+        })
     }
 
     pub(crate) fn remove_draft(&self, id: &str) -> Result<(), String> {
@@ -177,22 +188,24 @@ impl Meetings {
             .map_err(|error| error.to_string())
     }
 
-    pub fn open_document(&self, id: &str) -> Result<Value, String> {
+    pub fn open_document(&self, id: &str) -> Result<Snapshot, String> {
         let _lock = self.lock()?;
         let meeting = self.metadata(id)?;
         let slot = self.draft_slot(id)?;
-        let applied = meeting
-            .applied_draft
-            .as_ref()
-            .map(|receipt| receipt.version.clone());
-        let mut result = self.read_document(meeting)?;
+        let mut document = self.read_document(meeting)?;
         if let Some(Slot { version, draft }) = slot {
-            if applied.as_ref() != Some(&version) {
-                result["draft"] = value(draft)?;
+            if document
+                .meeting
+                .applied_draft
+                .as_ref()
+                .map(|receipt| &receipt.version)
+                != Some(&version)
+            {
+                document.draft = draft;
             }
-            result["draft_version"] = json!(version);
+            document.draft_version = Some(version);
         }
-        Ok(result)
+        Ok(document)
     }
 
     pub fn checkpoint_draft(&self, edit: &DraftWrite) -> Result<(), String> {
@@ -231,7 +244,7 @@ impl Meetings {
         }
         let rebased;
         let draft = if let Some(receipt) = receipt.filter(|receipt| {
-            // A restored draft may have been written by a previous iframe.
+            // A restored draft may have been written by a previous editor.
             (edit.follows(&receipt.version) || edit.expected.as_ref() == Some(&receipt.version))
                 && edit.draft.revision.checked_add(1) == Some(receipt.revision)
         }) {
@@ -250,7 +263,7 @@ impl Meetings {
         atomic_json(&self.draft_path(&edit.id)?, &checkpoint)
     }
 
-    pub fn save_draft(&self, id: &str, version: &str) -> Result<Value, String> {
+    pub fn save_draft(&self, id: &str, version: &str) -> Result<Meeting, String> {
         let _lock = self.lock()?;
         let meeting = self.metadata(id)?;
         let slot = self.draft_slot(id)?;
@@ -262,7 +275,7 @@ impl Meetings {
         }
         let slot = slot.filter(|slot| slot.version == version);
         let draft = slot.and_then(|slot| slot.draft).ok_or(DRAFT_CHANGED)?;
-        let saved = self.update_locked(meeting, &value(draft)?, Some(version.into()))?;
+        let saved = self.update_locked(meeting, draft, Some(version.into()))?;
         // A crash or cleanup error leaves a consumed slot. The receipt was
         // published atomically with the document, so it cannot reopen as input.
         let _ = atomic_json(

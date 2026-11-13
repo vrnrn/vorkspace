@@ -76,7 +76,7 @@ fn completed_results_are_durable_beyond_prior_cache_eviction_and_scoped_to_origi
 }
 #[test]
 fn failed_admission_never_authorizes_an_effect_and_failed_completion_stays_unconfirmed() {
-    let store = Store::open_vorkspace(std::path::Path::new(":memory:")).unwrap();
+    let store = Store::test(std::path::Path::new(":memory:")).unwrap();
     let caller = store.create("codex", "/project").unwrap().id;
     ensure(&store.conn).unwrap();
     store.conn.execute_batch("CREATE TRIGGER refuse_admit BEFORE INSERT ON app_command_receipts BEGIN SELECT RAISE(ABORT,'storage failed'); END").unwrap();
@@ -209,65 +209,57 @@ fn cold_hidden_habit_and_worker_targets_are_protected_at_the_mutation_owner() {
 }
 #[test]
 fn ordinary_background_launches_remain_mutable_after_reopen() {
-    for open in [
-        Store::open as fn(&std::path::Path) -> Result<Store, String>,
-        Store::open_vorkspace,
-    ] {
-        let root = tempfile::tempdir().unwrap();
-        let path = root.path().join("db");
-        let store = open(&path).unwrap();
-        let caller = store.create("codex", "/project").unwrap().id;
-        let child = store.create("codex", "/project").unwrap().id;
-        let internal = store.create("codex", "/project").unwrap().id;
-        let mut roster = crate::bot::Roster::default();
-        let bot = roster
-            .create(crate::bot::Bot {
-                name: "Test bot".into(),
-                ..roster.draft(vec!["/project".into()])
-            })
-            .unwrap()
-            .id
-            .clone();
-        let bot = roster.get_mut(&bot).unwrap();
-        bot.session_id = Some(caller);
-        bot.show_started_sessions_in_sidebar = false;
-        bot.launches.push(crate::bot::Launch {
-            session_id: child,
-            cwd: "/project".into(),
-            title: "Background work".into(),
-            harness: "codex".into(),
-            model: None,
-            origin_turn: 0,
-            notify_on_complete: false,
-            completed: false,
-            dismissed: false,
-        });
-        roster.hidden_sessions.push(internal);
-        roster.save(&store).unwrap();
-        if store.shared.is_some() {
-            store
-                .shared_patch(child, &[("sidebar_hidden", json!(true))])
-                .unwrap();
-        }
-        drop(store);
-        let mut store = open(&path).unwrap();
-        assert!(store.check_app_target(caller, child, "/project").is_ok());
-        assert!(store.check_app_target(caller, caller, "/project").is_err());
-        assert!(store
-            .check_app_target(caller, internal, "/project")
-            .is_err());
+    let open = Store::test;
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("db");
+    let store = open(&path).unwrap();
+    let caller = store.create("codex", "/project").unwrap().id;
+    let child = store.create("codex", "/project").unwrap().id;
+    let internal = store.create("codex", "/project").unwrap().id;
+    let mut roster = crate::bot::Roster::default();
+    let bot = roster
+        .create(crate::bot::Bot {
+            name: "Test bot".into(),
+            ..roster.draft(vec!["/project".into()])
+        })
+        .unwrap()
+        .id
+        .clone();
+    let bot = roster.get_mut(&bot).unwrap();
+    bot.session_id = Some(caller);
+    bot.show_started_sessions_in_sidebar = false;
+    bot.launches.push(crate::bot::Launch {
+        session_id: child,
+        cwd: "/project".into(),
+        title: "Background work".into(),
+        harness: "codex".into(),
+        ..Default::default()
+    });
+    roster.hidden_sessions.push(internal);
+    roster.save(&store).unwrap();
+    {
         store
-            .archive_app_session(caller, child, "/project")
+            .shared_patch(child, &[("sidebar_hidden", json!(true))])
             .unwrap();
-        assert!(store.bot_session(child).unwrap().unwrap().archived);
-        store.delete_app_session(caller, child, "/project").unwrap();
-        assert!(store.bot_session(child).unwrap().is_none());
-        assert!(store.bot_session(internal).unwrap().is_some());
     }
+    drop(store);
+    let mut store = open(&path).unwrap();
+    assert!(store.check_app_target(caller, child, "/project").is_ok());
+    assert!(store.check_app_target(caller, caller, "/project").is_err());
+    assert!(store
+        .check_app_target(caller, internal, "/project")
+        .is_err());
+    store
+        .archive_app_session(caller, child, "/project")
+        .unwrap();
+    assert!(store.bot_session(child).unwrap().unwrap().archived);
+    store.delete_app_session(caller, child, "/project").unwrap();
+    assert!(store.bot_session(child).unwrap().is_none());
+    assert!(store.bot_session(internal).unwrap().is_some());
 }
 #[test]
 fn legacy_background_launch_identity_is_independent_of_sidebar_visibility() {
-    let store = Store::open_vorkspace(std::path::Path::new(":memory:")).unwrap();
+    let store = Store::test(std::path::Path::new(":memory:")).unwrap();
     let caller = store.create("codex", "/project").unwrap().id;
     let source = store.persisted_session_id(caller).unwrap();
     let mut roster = crate::bot::Roster::default();
@@ -327,7 +319,7 @@ fn legacy_background_launch_identity_is_independent_of_sidebar_visibility() {
 }
 #[test]
 fn admission_does_not_commit_a_post_insert_corrupted_receipt() {
-    let store = Store::open_vorkspace(std::path::Path::new(":memory:")).unwrap();
+    let store = Store::test(std::path::Path::new(":memory:")).unwrap();
     let caller = store.create("codex", "/project").unwrap().id;
     ensure(&store.conn).unwrap();
     store.conn.execute_batch("CREATE TRIGGER corrupt_receipt AFTER INSERT ON app_command_receipts BEGIN UPDATE app_command_receipts SET fingerprint='different' WHERE caller_session_id=NEW.caller_session_id AND request_id=NEW.request_id; END").unwrap();

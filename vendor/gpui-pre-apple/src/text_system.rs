@@ -1,6 +1,6 @@
 // Copyright 2022 - 2025 Zed Industries, Inc.
 // SPDX-License-Identifier: Apache-2.0
-// Modified by Vorkspace to normalize font weights for face matching. See NOTICE.
+// Modified by Vorkspace for font weight matching and glyph offsets. See NOTICE.
 use anyhow::anyhow;
 use collections::{HashMap, HashSet};
 use core_foundation::{
@@ -618,11 +618,7 @@ impl AppleTextSystemState {
                 .zip(run.string_indices().iter())
             {
                 let glyph_utf16_ix = usize::try_from(glyph_utf16_ix).unwrap();
-                if ix_converter.utf16_ix > glyph_utf16_ix {
-                    // We cannot reuse current index converter, as it can only seek forward. Restart the search.
-                    ix_converter = StringIndexConverter::new(text);
-                }
-                ix_converter.advance_to_utf16_ix(glyph_utf16_ix);
+                ix_converter.seek_to_utf16_ix(glyph_utf16_ix);
                 glyphs.push(ShapedGlyph {
                     id: GlyphId(glyph_id as u32),
                     position: point(position.x as f32, position.y as f32).map(px),
@@ -661,13 +657,28 @@ impl<'a> StringIndexConverter<'a> {
         }
     }
 
-    fn advance_to_utf16_ix(&mut self, utf16_target: usize) {
-        for (ix, c) in self.text[self.utf8_ix..].char_indices() {
-            if self.utf16_ix >= utf16_target {
-                self.utf8_ix += ix;
+    fn seek_to_utf16_ix(&mut self, target: usize) {
+        // CoreText emits glyphs in visual order, which can traverse the
+        // source string backwards. Keep the cursor on the first character
+        // boundary at or after the requested offset in either direction.
+        if self.utf16_ix > target {
+            for ch in self.text[..self.utf8_ix].chars().rev() {
+                let previous = self.utf16_ix - ch.len_utf16();
+                if previous < target {
+                    break;
+                }
+                self.utf8_ix -= ch.len_utf8();
+                self.utf16_ix = previous;
+            }
+            return;
+        }
+
+        for (offset, ch) in self.text[self.utf8_ix..].char_indices() {
+            if self.utf16_ix >= target {
+                self.utf8_ix += offset;
                 return;
             }
-            self.utf16_ix += c.len_utf16();
+            self.utf16_ix += ch.len_utf16();
         }
         self.utf8_ix = self.text.len();
     }
@@ -700,27 +711,6 @@ fn bounds_from_rect_i(rect: RectI) -> Bounds<DevicePixels> {
         size: size(DevicePixels(rect.width()), DevicePixels(rect.height())),
     }
 }
-
-// impl From<Vector2I> for Size<DevicePixels> {
-//     fn from(value: Vector2I) -> Self {
-//         size(value.x().into(), value.y().into())
-//     }
-// }
-
-// impl From<RectI> for Bounds<i32> {
-//     fn from(rect: RectI) -> Self {
-//         Bounds {
-//             origin: point(rect.origin_x(), rect.origin_y()),
-//             size: size(rect.width(), rect.height()),
-//         }
-//     }
-// }
-
-// impl From<Point<u32>> for Vector2I {
-//     fn from(size: Point<u32>) -> Self {
-//         Vector2I::new(size.x as i32, size.y as i32)
-//     }
-// }
 
 fn size_from_vector2f(vec: Vector2F) -> Size<f32> {
     size(vec.x(), vec.y())
@@ -781,9 +771,22 @@ mod lenient_font_attributes {
 
 #[cfg(test)]
 mod tests {
+    use super::StringIndexConverter;
     use crate::AppleTextSystem;
     use gpui::{FontFallbacks, FontFeatures, FontRun, GlyphId, PlatformTextSystem, font, px};
     use std::sync::Arc;
+
+    #[test]
+    fn glyph_offsets_seek_in_both_directions_across_surrogate_pairs() {
+        let mut converter = StringIndexConverter::new("a😀ב𐐀z");
+        for (target, expected) in [0, 7, 6, 5, 4, 2, 3, 1, 0, 2, 9, 5]
+            .into_iter()
+            .zip([0, 12, 11, 11, 7, 5, 5, 1, 0, 5, 12, 11])
+        {
+            converter.seek_to_utf16_ix(target);
+            assert_eq!(converter.utf8_ix, expected);
+        }
+    }
 
     #[test]
     fn test_reload_family_with_features_and_fallbacks() {

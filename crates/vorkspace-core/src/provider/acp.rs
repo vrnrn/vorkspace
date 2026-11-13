@@ -298,80 +298,7 @@ impl Protocol {
         if let Some(method) = v["method"].as_str() {
             if v.get("id").is_some() {
                 if method == "session/request_permission" {
-                    let request = &v["params"];
-                    let subject = request.get("subject").unwrap_or(request);
-                    let tool = request
-                        .get("toolCall")
-                        .or_else(|| request.get("tool_call"))
-                        .or_else(|| subject.get("toolCall"))
-                        .or_else(|| subject.get("tool_call"))
-                        .or_else(|| request.get("subject"))
-                        .unwrap_or(request);
-                    let call_id = tool["toolCallId"]
-                        .as_str()
-                        .or_else(|| tool["tool_call_id"].as_str())
-                        .unwrap_or("");
-                    let known = self.tools.get(call_id);
-                    let kind = tool["kind"]
-                        .as_str()
-                        .or_else(|| self.acp.tool_kinds.get(call_id).map(String::as_str));
-                    let title = match kind {
-                        Some("edit" | "delete" | "move") => "Allow file changes?".into(),
-                        Some("execute") => "Allow this command?".into(),
-                        _ => format!(
-                            "Allow {}?",
-                            tool["title"]
-                                .as_str()
-                                .or_else(|| known.map(|t| t.name.as_str()))
-                                .unwrap_or("this tool")
-                        ),
-                    };
-                    let detail = known
-                        .map(|call| format!("{}\n{}\n{}", call.name, call.input, call.output))
-                        .unwrap_or_else(|| serde_json::to_string_pretty(tool).unwrap_or_default());
-                    let id = v["id"].to_string();
-                    self.approvals
-                        .insert(id.clone(), (v["id"].clone(), "acp".into(), request.clone()));
-                    let read = matches!(kind, Some("read" | "search"));
-                    let planning = self.probe
-                        || self.request.settings.plan
-                        || self.request.settings.access == AccessMode::ReadOnly;
-                    let access = self.request.settings.access;
-                    let auto = access == AccessMode::FullAccess
-                        || (access == AccessMode::AutoAcceptEdits && kind == Some("edit"));
-                    if self.request.settings.text_only
-                        || self.acp.stage != Stage::Prompt
-                        || self.acp.cancelling
-                    {
-                        self.approvals.remove(&id);
-                        write_json(
-                            stdin,
-                            json!({"jsonrpc":"2.0","id":v["id"],"result":{"outcome":{"outcome":"cancelled"}}}),
-                        )?;
-                        return Ok(events);
-                    }
-                    if planning || auto {
-                        self.respond(
-                            Control {
-                                id,
-                                decision: if (planning && !read) || self.probe {
-                                    Decision::Deny
-                                } else {
-                                    Decision::Allow
-                                },
-                            },
-                            stdin,
-                        )?;
-                    } else {
-                        events.push(Event::Approval(Approval {
-                            id,
-                            title,
-                            detail,
-                            can_remember: request["options"].as_array().is_some_and(|options| {
-                                options.iter().any(|o| o["kind"] == "allow_always")
-                            }),
-                        }));
-                    }
+                    self.acp_permission(&v, &mut events, stdin)?;
                 } else {
                     write_json(
                         stdin,
@@ -473,73 +400,7 @@ impl Protocol {
                 events.push(Event::Reasoning(content_text(&update["content"])))
             }
             "tool_call" | "tool_call_update" | "tool_call_content_chunk" => {
-                let tool = update
-                    .get("toolCall")
-                    .or_else(|| update.get("tool_call"))
-                    .unwrap_or(update);
-                let Some(id) = tool["toolCallId"]
-                    .as_str()
-                    .or_else(|| tool["tool_call_id"].as_str())
-                    .or_else(|| update["toolCallId"].as_str())
-                else {
-                    return;
-                };
-                let is_new = !self.tools.contains_key(id);
-                if let Some(kind) = tool["kind"].as_str() {
-                    self.acp.tool_kinds.insert(id.into(), kind.into());
-                }
-                let call = self.tools.entry(id.into()).or_insert_with(|| {
-                    ToolCall::new(
-                        id,
-                        tool["title"]
-                            .as_str()
-                            .or_else(|| tool["kind"].as_str())
-                            .unwrap_or("Tool"),
-                    )
-                });
-                if let Some(title) = tool["title"].as_str() {
-                    call.name = title.into();
-                }
-                // ACP titles are often prose; retain semantic kind/locations
-                // separately, so actual provider arguments stay unchanged.
-                if let Some(input) = tool.get("rawInput").or_else(|| tool.get("raw_input")) {
-                    call.input = input
-                        .as_str()
-                        .map(str::to_owned)
-                        .unwrap_or_else(|| serde_json::to_string_pretty(input).unwrap_or_default());
-                }
-                let mut presentation = call.display.take().unwrap_or_else(|| json!({}));
-                presentation["title"] = json!(call.name);
-                if let Some(kind) = self.acp.tool_kinds.get(id) {
-                    presentation["kind"] = json!(kind);
-                }
-                for field in ["locations", "preview"] {
-                    if let Some(value) = tool.get(field) {
-                        presentation[field] = value.clone();
-                    }
-                }
-                presentation["cwd"] = json!(self.request.cwd);
-                call.display = Some(presentation);
-                let output = content_text(&tool["content"]);
-                if kind == "tool_call_content_chunk" {
-                    call.append_output(&output);
-                } else if !output.is_empty() {
-                    call.output = output;
-                }
-                if let Some(raw) = tool.get("rawOutput").filter(|_| call.output.is_empty()) {
-                    call.output = content_text(raw);
-                }
-                call.bound_output();
-                match tool["status"].as_str() {
-                    Some("completed") => call.state = ToolState::Completed,
-                    Some("failed") => call.state = ToolState::Failed,
-                    Some("cancelled" | "canceled" | "aborted") => call.state = ToolState::Cancelled,
-                    _ => {}
-                }
-                events.push(Event::Tool(call.clone()));
-                if is_new {
-                    self.acp.message += 1;
-                }
+                self.acp_tool_update(update, kind, events);
             }
             "usage_update" => {
                 usage_events(update, events);
@@ -576,6 +437,158 @@ impl Protocol {
                 events.push(Event::Status(text));
             }
             _ => {}
+        }
+    }
+
+    fn acp_permission(
+        &mut self,
+        v: &Value,
+        events: &mut Vec<Event>,
+        stdin: &mut impl Write,
+    ) -> Result<(), String> {
+        let request = &v["params"];
+        let subject = request.get("subject").unwrap_or(request);
+        let tool = request
+            .get("toolCall")
+            .or_else(|| request.get("tool_call"))
+            .or_else(|| subject.get("toolCall"))
+            .or_else(|| subject.get("tool_call"))
+            .or_else(|| request.get("subject"))
+            .unwrap_or(request);
+        let call_id = tool["toolCallId"]
+            .as_str()
+            .or_else(|| tool["tool_call_id"].as_str())
+            .unwrap_or("");
+        let known = self.tools.get(call_id);
+        let kind = tool["kind"]
+            .as_str()
+            .or_else(|| self.acp.tool_kinds.get(call_id).map(String::as_str));
+        let title = match kind {
+            Some("edit" | "delete" | "move") => "Allow file changes?".into(),
+            Some("execute") => "Allow this command?".into(),
+            _ => format!(
+                "Allow {}?",
+                tool["title"]
+                    .as_str()
+                    .or_else(|| known.map(|t| t.name.as_str()))
+                    .unwrap_or("this tool")
+            ),
+        };
+        let detail = known
+            .map(|call| format!("{}\n{}\n{}", call.name, call.input, call.output))
+            .unwrap_or_else(|| serde_json::to_string_pretty(tool).unwrap_or_default());
+        let id = v["id"].to_string();
+        self.approvals
+            .insert(id.clone(), (v["id"].clone(), "acp".into(), request.clone()));
+        let read = matches!(kind, Some("read" | "search"));
+        let planning = self.probe
+            || self.request.settings.plan
+            || self.request.settings.access == AccessMode::ReadOnly;
+        let access = self.request.settings.access;
+        let auto = access == AccessMode::FullAccess
+            || (access == AccessMode::AutoAcceptEdits && kind == Some("edit"));
+        if self.request.settings.text_only || self.acp.stage != Stage::Prompt || self.acp.cancelling
+        {
+            self.approvals.remove(&id);
+            write_json(
+                stdin,
+                json!({"jsonrpc":"2.0","id":v["id"],"result":{"outcome":{"outcome":"cancelled"}}}),
+            )?;
+            return Ok(());
+        }
+        if planning || auto {
+            self.respond(
+                Control {
+                    id,
+                    decision: if (planning && !read) || self.probe {
+                        Decision::Deny
+                    } else {
+                        Decision::Allow
+                    },
+                },
+                stdin,
+            )?;
+        } else {
+            events.push(Event::Approval(Approval {
+                id,
+                title,
+                detail,
+                can_remember: request["options"]
+                    .as_array()
+                    .is_some_and(|options| options.iter().any(|o| o["kind"] == "allow_always")),
+            }));
+        }
+
+        Ok(())
+    }
+
+    fn acp_tool_update(&mut self, update: &Value, kind: &str, events: &mut Vec<Event>) {
+        let tool = update
+            .get("toolCall")
+            .or_else(|| update.get("tool_call"))
+            .unwrap_or(update);
+        let Some(id) = tool["toolCallId"]
+            .as_str()
+            .or_else(|| tool["tool_call_id"].as_str())
+            .or_else(|| update["toolCallId"].as_str())
+        else {
+            return;
+        };
+        let is_new = !self.tools.contains_key(id);
+        if let Some(kind) = tool["kind"].as_str() {
+            self.acp.tool_kinds.insert(id.into(), kind.into());
+        }
+        let call = self.tools.entry(id.into()).or_insert_with(|| {
+            ToolCall::new(
+                id,
+                tool["title"]
+                    .as_str()
+                    .or_else(|| tool["kind"].as_str())
+                    .unwrap_or("Tool"),
+            )
+        });
+        if let Some(title) = tool["title"].as_str() {
+            call.name = title.into();
+        }
+        // ACP titles are often prose; retain semantic kind/locations
+        // separately, so actual provider arguments stay unchanged.
+        if let Some(input) = tool.get("rawInput").or_else(|| tool.get("raw_input")) {
+            call.input = input
+                .as_str()
+                .map(str::to_owned)
+                .unwrap_or_else(|| serde_json::to_string_pretty(input).unwrap_or_default());
+        }
+        let mut presentation = call.display.take().unwrap_or_else(|| json!({}));
+        presentation["title"] = json!(call.name);
+        if let Some(kind) = self.acp.tool_kinds.get(id) {
+            presentation["kind"] = json!(kind);
+        }
+        for field in ["locations", "preview"] {
+            if let Some(value) = tool.get(field) {
+                presentation[field] = value.clone();
+            }
+        }
+        presentation["cwd"] = json!(self.request.cwd);
+        call.display = Some(presentation);
+        let output = content_text(&tool["content"]);
+        if kind == "tool_call_content_chunk" {
+            call.append_output(&output);
+        } else if !output.is_empty() {
+            call.output = output;
+        }
+        if let Some(raw) = tool.get("rawOutput").filter(|_| call.output.is_empty()) {
+            call.output = content_text(raw);
+        }
+        call.bound_output();
+        match tool["status"].as_str() {
+            Some("completed") => call.state = ToolState::Completed,
+            Some("failed") => call.state = ToolState::Failed,
+            Some("cancelled" | "canceled" | "aborted") => call.state = ToolState::Cancelled,
+            _ => {}
+        }
+        events.push(Event::Tool(call.clone()));
+        if is_new {
+            self.acp.message += 1;
         }
     }
 }

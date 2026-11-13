@@ -3,8 +3,27 @@ use gpui::TestAppContext;
 use vorkspace_core::{agent::Settings, store::Store};
 
 #[gpui::test]
+fn a_title_change_updates_the_catalog_without_revisiting_chat_visibility(cx: &mut TestAppContext) {
+    let (window, _, id) = crate::shell::tests::window(cx);
+    cx.run_until_parked();
+    let before = window
+        .update(cx, |shell, _, cx| {
+            shell.sessions[&id].update(cx, |view, cx| view.rename("New title".into(), cx));
+            shell.history_clock
+        })
+        .unwrap();
+    cx.run_until_parked();
+    window
+        .update(cx, |shell, _, cx| {
+            assert_eq!(shell.session_summary(id, cx).unwrap().title, "New title");
+            assert_eq!(shell.history_clock, before);
+        })
+        .unwrap();
+}
+
+#[gpui::test]
 fn whole_project_sidebar_keeps_seven_today_sessions_across_worktrees_lazy(cx: &mut TestAppContext) {
-    let store = Store::open_vorkspace(std::path::Path::new(":memory:")).unwrap();
+    let store = Store::test(std::path::Path::new(":memory:")).unwrap();
     let mut summaries = Vec::new();
     let mut main = HashSet::new();
     let mut feature = HashSet::new();
@@ -97,32 +116,9 @@ fn whole_project_sidebar_keeps_seven_today_sessions_across_worktrees_lazy(cx: &m
         .unwrap();
 }
 
-#[test]
-fn remembered_controls_survive_the_mapped_native_model_default() {
-    let remembered = Settings {
-        model: Some("model-a".into()),
-        effort: Some("high".into()),
-        model_settings: [("reasoningEffort".into(), "high".into())].into(),
-        ..Default::default()
-    };
-    let selected = new_session_settings(Some(remembered.clone()), Some("model-a".into()));
-    assert_eq!(selected.effort.as_deref(), Some("high"));
-    assert_eq!(
-        selected
-            .model_settings
-            .get("reasoningEffort")
-            .map(String::as_str),
-        Some("high")
-    );
-    let changed = new_session_settings(Some(remembered), Some("model-b".into()));
-    assert_eq!(changed.model.as_deref(), Some("model-b"));
-    assert!(changed.effort.is_none());
-    assert!(changed.model_settings.is_empty());
-}
-
 #[gpui::test]
 fn restoring_large_history_materializes_only_visible_chats(cx: &mut TestAppContext) {
-    let store = Store::open(std::path::Path::new(":memory:")).unwrap();
+    let store = Store::test(std::path::Path::new(":memory:")).unwrap();
     let mut summaries = Vec::new();
     for i in 0..1200 {
         let cwd = if i < 1000 {
@@ -150,7 +146,7 @@ fn restoring_large_history_materializes_only_visible_chats(cx: &mut TestAppConte
     });
     window
         .update(cx, |shell, window, cx| {
-            assert_eq!(shell.session_summaries.len(), 1200);
+            assert_eq!(shell.directory.read(cx).rows.len(), 1200);
             assert_eq!(shell.sessions.len(), 1);
             assert_eq!(shell.session_marks.len(), 1);
             assert_eq!(shell.tab_marks.len(), 1);
@@ -160,14 +156,14 @@ fn restoring_large_history_materializes_only_visible_chats(cx: &mut TestAppConte
                 shell.tab_copy(oldest, cx).headline,
                 "Saved conversation 999"
             );
-            shell.query = "saved conversation 999".into();
+            shell.sidebar.query = "saved conversation 999".into();
             assert_eq!(shell.sidebar_session_ids(cx), [oldest]);
             assert_eq!(
                 shell.sessions.len(),
                 1,
                 "filtering old history must remain metadata-only"
             );
-            shell.query.clear();
+            shell.sidebar.query.clear();
             shell.run_session_menu(oldest, "pin", window, cx);
             assert!(shell.session_metadata(oldest, cx).summary.pinned);
             assert_eq!(
@@ -220,7 +216,9 @@ fn inactive_history_cache_has_a_count_bound_and_reopens_evicted_history(cx: &mut
     cx.run_until_parked();
     window
         .update(cx, |shell, window, cx| {
+            let before = shell.history_clock;
             shell.update_chat_visibility(cx);
+            assert_eq!(shell.history_clock, before);
             assert_eq!(shell.workspace.active, Some(active));
             let retained = ids
                 .iter()
@@ -243,34 +241,6 @@ fn inactive_history_cache_has_a_count_bound_and_reopens_evicted_history(cx: &mut
                 chat.transcript.read(cx).source_rows()[0].text,
                 "Saved answer 0"
             );
-        })
-        .unwrap();
-}
-
-#[gpui::test]
-fn session_metadata_responding_preserves_remote_running_and_stopping_state(
-    cx: &mut TestAppContext,
-) {
-    let (window, a, _) = super::super::tests::window(cx);
-    window
-        .update(cx, |shell, _, cx| {
-            assert!(!shell.session_metadata(a, cx).responding());
-            shell.sessions[&a].update(cx, |s, _| s.busy = true);
-            assert!(shell.session_metadata(a, cx).responding());
-            shell.sessions[&a].update(cx, |s, _| s.stopping = true);
-            assert!(!shell.session_metadata(a, cx).responding());
-
-            let remote_summary = locked(&shell.store)
-                .unwrap()
-                .create("codex", "/work/project")
-                .unwrap();
-            let remote_id = remote_summary.id;
-            shell.session_summaries.insert(remote_id, remote_summary);
-            assert!(!shell.session_metadata(remote_id, cx).responding());
-            shell.remote_marks.insert(remote_id, (true, false));
-            assert!(shell.session_metadata(remote_id, cx).responding());
-            shell.remote_marks.insert(remote_id, (false, false));
-            assert!(!shell.session_metadata(remote_id, cx).responding());
         })
         .unwrap();
 }

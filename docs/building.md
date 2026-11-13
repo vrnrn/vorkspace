@@ -23,7 +23,7 @@ This builds the app and helper in the `native-dev` Cargo profile, which rebuilds
 
 | Option | Effect |
 | --- | --- |
-| `--release` | Use the release profile. This also installs to `/Applications/vorkspace.app`, unless `VORKSPACE_NO_INSTALL=1` is set. |
+| `--release` | Use the release profile. Normal desktop launches install to `/Applications/vorkspace.app` when permitted. Isolated data, read-only checks, and `VORKSPACE_NO_INSTALL=1` launch from the build directory. |
 | `--profile NAME` | Use another Cargo profile, such as `dev` or `perf`. |
 | `--dev-data` | Use isolated development data. `VORKSPACE_NATIVE_DATA_DIR` chooses its directory. |
 | `--vorkspace-data` | Use normal desktop data, which is the default. |
@@ -36,10 +36,10 @@ The profile and data selection are independent. Everything after `--` goes to th
 
 ### The background helper
 
-The `vorkspace-helper` process handles clipboard history, ⌘⇧C, dictation and meeting capture. The bundle includes it at `Contents/Helpers/vorkspace helper.app`. It stays available after the development app exits while **Keep recent copies** or **Dictation** is on.
+The `vorkspace-helper` process handles clipboard history, ⌘⇧C, dictation and meeting capture. The bundle includes it at `Contents/Helpers/vorkspace helper.app`. A helper launched by `npm run dev` finalizes any active recording and exits when its app disconnects. For regular launches, **Keep recent copies** or **Dictation** can keep the helper available after the app quits.
 
-- Rebuilding replaces it on the next launch, which clears its history.
-- Each bundle path gets its own helper, so a development build and the installed app can run side by side. You'll see two menu bar icons, and only the first gets ⌘⇧C. The other reports that in Settings.
+- Rebuilding starts a fresh helper and clears its in-memory clipboard history.
+- Development and regular launches use separate sockets, so the runner can close its helper while an installed app keeps recording. When both helpers are active, only the first gets ⌘⇧C. The other reports that in Settings.
 - Quit in the clipboard menu stops the helper. When no note is recording, turning off both **Keep recent copies** and **Dictation** also stops it. See the [dictation guide](dictation.md) for permissions and custom words.
 
 `cargo run` builds only the app, and the app looks for the helper beside its own binary. To include it, build both in the same profile:
@@ -55,7 +55,7 @@ cargo run --locked -p vorkspace-gpui --profile native-dev
 npm run build
 ```
 
-This compiles the app and helper with the release profile, packages `target/release/vorkspace.app`, and installs it to `/Applications/vorkspace.app` when that's safe. `VORKSPACE_NO_INSTALL=1` skips installing. To package a build by hand, use the commands in [verification](testing.md).
+This compiles the app and helper with the release profile, packages `target/release/vorkspace.app`, and installs it to `/Applications/vorkspace.app` when permitted. The installer stages a complete bundle and atomically swaps it into the installed path. `VORKSPACE_NO_INSTALL=1` builds the bundle without installing. To package a build by hand, use the commands in [verification](testing.md).
 
 The app provides **Restart vorkspace** in its application menu and Command Palette (`⌘⌥R`). When developing from inside the installed app, run `npm run build`, confirm installation succeeded, then use Restart to load it. Restart relaunches the bundle that is running, so a `native-dev` build stays on `target/native-dev/vorkspace.app` even when an older copy is installed. Restart prompts about unsaved file edits and uses the normal shutdown hooks for drafts, workspace state, voice, and provider processes. Its relaunch helper waits for the old process to exit before opening the successor. Restart does not compile code; use the runner's `r` to rebuild a development bundle. `cargo build` alone does not update the installed app bundle.
 
@@ -75,7 +75,7 @@ npm run assets
 npm run check
 ```
 
-The editor and formatter bundles are committed under `crates/vorkspace-gpui/assets/`; the Vox audio bundle lives under `crates/vorkspace-core/assets/`. Their maintained sources live in `embedded/editor` and `embedded/vox`. These files are embedded, so Cargo can compile without installing JavaScript dependencies. `npm run assets` installs the separate editor generator dependencies and rebuilds these bundles. Root npm dependencies are build/test tools only.
+The editor and formatter bundles are committed under `crates/vorkspace-editor/assets/`. The Vox audio bundle lives under `crates/vorkspace-core/assets/`. Their maintained sources live in `embedded/editor` and `embedded/vox`. These files are embedded, so Cargo can compile without installing JavaScript dependencies. `npm run assets` installs the separate editor generator dependencies and rebuilds these bundles. Root npm dependencies are build/test tools only. The native UI reads its code palettes directly from `crates/vorkspace-ui/assets/editor-palettes.json`.
 
 The GPUI fork and a patched `block` crate live in `vendor/` and are edited directly. `vorkspace_ui::fluid` uses the fork's `gpui::dither` and `gpui::vertical_dither` APIs, which draw a 4×4 Bayer pattern in the Metal quad shader. `cargo clippy` with `-D warnings` doesn't cover these vendored crates, so check that a rebuild stays free of warnings after changing one. `npm run test:rust` runs the `block` tests separately because that crate sits outside the workspace.
 
@@ -92,7 +92,7 @@ Two optional machine-level tools complement these. A capped [sccache](https://gi
 
 In a new linked worktree, run `npm run worktree:seed` before the first build. To have Vorkspace do this for its own worktrees, set the project's setup command to `npm run worktree:seed` under **Settings → Worktrees**. It clones the main checkout's Cargo target directory, honoring `CARGO_TARGET_DIR`, with APFS copy-on-write, so the clone is instant and takes no extra disk, and only workspace and vendored crates rebuild.
 
-`npm run check` runs tooling, voice, host, formatting, Clippy, and workspace tests. `npm run check:fast` skips the host and GPUI suites. Both use the `verify` Cargo profile: application code is unoptimized, dependencies retain basic optimization, and QuickJS retains its release-level optimization so interpreter deadlines remain meaningful. Debug assertions stay enabled. The interactive `native-dev` and shipped `release` profiles are separate. `npm run test:rust` runs every Rust test in parallel, one process per test. `npm run host:package` creates a self-contained remote host archive including Node.
+`npm run check` runs tooling, voice, formatting, Clippy, and workspace tests. `npm run check:fast` skips the GPUI suite. Both use the `verify` Cargo profile: application code is unoptimized, dependencies retain basic optimization, and QuickJS retains its release-level optimization so interpreter deadlines remain meaningful. Debug assertions stay enabled. The interactive `native-dev` and shipped `release` profiles are separate. `npm run test:rust` runs every Rust test in parallel, one process per test.
 
 Native CI and Mac release use the pinned compiler components and checksum-verified Zig 0.17.0. They share a dependency cache keyed by Rust, manifests, compiler flags, and the macOS SDK. Application source still builds and every check still runs on a cache hit. CI packages the `verify` build to verify bundle metadata and signing; release packaging uses `release`. A compiler, SDK, or dependency change can require a cold build.
 

@@ -3,6 +3,46 @@ use crate::shell::tests::window;
 use gpui::TestAppContext;
 
 #[gpui::test]
+fn failed_note_handoff_keeps_the_notes_pane_active(cx: &mut TestAppContext) {
+    let (window, _, _) = window(cx);
+    let active = window
+        .update(cx, |shell, window, cx| {
+            let note = locked(&shell.store)
+                .unwrap()
+                .upsert_note(&vorkspace_core::notes::NoteUpsert {
+                    id: "disconnected-note".into(),
+                    title: "Keep reading".into(),
+                    source_cwd: Some("/unavailable/repo".into()),
+                    ..Default::default()
+                })
+                .unwrap();
+            locked(&shell.store)
+                .unwrap()
+                .begin_project_deletion(note.source_cwd.as_deref().unwrap())
+                .unwrap();
+            shell.open_notes(window, cx);
+            let active = shell.workspace.active;
+            shell.note_to_chat(note, cx);
+            assert_eq!(shell.pages.active_app_view, Some(AppView::Notes));
+            active
+        })
+        .unwrap();
+    cx.run_until_parked();
+    window
+        .update(cx, |shell, _, _| {
+            assert_eq!(shell.workspace.active, active);
+            assert_eq!(shell.pages.active_app_view, Some(AppView::Notes));
+            assert!(
+                shell
+                    .error
+                    .as_deref()
+                    .is_some_and(|error| error.contains("being deleted"))
+            );
+        })
+        .unwrap();
+}
+
+#[gpui::test]
 fn codebase_navigation_keeps_the_selected_project_and_worktree(cx: &mut TestAppContext) {
     let (window, _, _) = window(cx);
     let directory = tempfile::tempdir().unwrap();
@@ -54,139 +94,10 @@ fn codebase_navigation_keeps_the_selected_project_and_worktree(cx: &mut TestAppC
                 }
             }
             assert_eq!(ids.values().copied().collect::<HashSet<_>>().len(), 3);
-            assert_eq!(shell.codebase_tabs.len(), 3);
+            assert_eq!(shell.page_tabs.codebase_tabs.len(), 3);
         })
         .unwrap();
     cx.run_until_parked();
-}
-
-#[gpui::test]
-fn remote_session_restores_beside_app_panes_and_uses_the_same_stack_limit(cx: &mut TestAppContext) {
-    use serde_json::json;
-    use vorkspace_core::store::Store;
-
-    let directory = tempfile::tempdir().unwrap();
-    let store = Store::open(&directory.path().join("native.sqlite")).unwrap();
-    let project = store
-        .remember_remote_project("offline-layout", &json!({"id":"repo", "cwd":"/host/repo"}))
-        .unwrap();
-    let session = store
-        .register_remote_summary(
-            &project,
-            &json!({"id":"chat","harness":"codex","title":"Remote chat","cwd":"/host/repo"}),
-        )
-        .unwrap();
-    let id = session.id;
-    assert!(id < 0);
-    let cwd = project.key;
-    let mut workspace = Workspace::default();
-    workspace.add_project(&cwd);
-    workspace.open(id);
-    let notes = workspace
-        .app_pane(AppPane::App(AppView::Notes), cwd.clone(), cwd.clone())
-        .unwrap();
-    let search = workspace
-        .app_pane(AppPane::Search, cwd.clone(), cwd.clone())
-        .unwrap();
-    workspace.split(notes, SplitDir::Down);
-    workspace.split(search, SplitDir::Down);
-    workspace.open(id);
-    workspace.project = "/local".into();
-    workspace
-        .scope_focus
-        .insert(format!("{cwd}\0{cwd}"), TitleTab::Workspace(id));
-    let saved = serde_json::to_string(&workspace).unwrap();
-    let store = Arc::new(Mutex::new(store));
-    let window = cx.update(|cx| {
-        cx.open_window(Default::default(), |_, cx| {
-            cx.new(|cx| {
-                let shell = Shell::new(store, vec![session], "/local".into(), Some(saved), cx);
-                if let Some(chat) = shell.sessions.get(&id) {
-                    // This fixture owns the pane identity and has no host connection.
-                    chat.update(cx, |chat, _| chat.mark_remote_snapshot_loaded_for_test());
-                }
-                shell
-            })
-        })
-        .unwrap()
-    });
-    cx.run_until_parked();
-    window
-        .update(cx, |shell, w, cx| {
-            assert_eq!(shell.workspace.project, cwd);
-            assert_eq!(shell.workspace.active, Some(id));
-            assert_eq!(shell.visible_tabs(cx), [TitleTab::Workspace(id)]);
-            assert!(shell.has_session_panes());
-            assert_eq!(shell.pane_title(id, cx), "Remote chat");
-            assert_eq!(shell.workspace.session_for_pane(id), Some(id));
-            assert_eq!(shell.workspace.session_for_pane(notes), None);
-            assert_eq!(shell.workspace.session_for_pane(search), None);
-            assert!(shell.sessions.contains_key(&id));
-            assert!(!shell.sessions.contains_key(&notes));
-            assert!(!shell.sessions.contains_key(&search));
-            assert_eq!(shell.workspace.layout(id).leaf_ids(), [id, notes, search]);
-            assert!(!shell.split_allowed(
-                &shell.workspace.layout(id),
-                id,
-                SplitDir::Down,
-                i64::MAX
-            ));
-            assert!(shell.placement_allowed(DragSource::Review(i64::MAX), id, Edge::Bottom));
-            shell.bot_manager().update(cx, |manager, cx| {
-                manager.create_named(vec![cwd.clone()], w, cx);
-                manager.dismiss_settings(w, cx);
-            });
-        })
-        .unwrap();
-    cx.run_until_parked();
-    window
-        .update(cx, |shell, w, cx| {
-            let caller = shell
-                .bot_manager()
-                .read(cx)
-                .chat()
-                .unwrap()
-                .read(cx)
-                .summary
-                .id;
-            let listed = shell
-                .app_workspace_action(caller, &cwd, "workspace.list", &json!({}), w, cx)
-                .unwrap();
-            let tab = listed["tabs"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .find(|tab| tab["tabId"] == json!(id))
-                .unwrap();
-            assert_eq!(tab["panes"][0]["kind"], "session");
-            assert_eq!(tab["panes"][0]["sessionId"], json!(id));
-            let opened = shell
-                .app_workspace_action(
-                    caller,
-                    &cwd,
-                    "workspace.open",
-                    &json!({"kind":"session","sessionId":id.to_string()}),
-                    w,
-                    cx,
-                )
-                .unwrap();
-            assert_eq!(opened["paneId"], json!(id));
-            assert_eq!(shell.workspace.active, Some(id));
-            assert_eq!(
-                shell
-                    .app_workspace_action(
-                        caller,
-                        &cwd,
-                        "workspace.open",
-                        &json!({"kind":"session","sessionId":notes}),
-                        w,
-                        cx,
-                    )
-                    .unwrap_err(),
-                "Session is unavailable"
-            );
-        })
-        .unwrap();
 }
 
 #[gpui::test]
@@ -212,25 +123,24 @@ fn linked_github_activity_stays_with_each_visible_bot_pane(cx: &mut TestAppConte
         let (pane, session) = window
             .update(visual, |shell, _, cx| {
                 let pane = shell.workspace.active.unwrap();
-                let session = shell
-                    .bot_manager()
-                    .read(cx)
-                    .chat()
-                    .unwrap()
-                    .read(cx)
-                    .summary
-                    .id;
+                let chat = shell.bot_manager().read(cx).chat().unwrap();
+                let session = chat.read(cx).summary.id;
+                let item = WorkItem {
+                    kind: "pr".into(),
+                    repo: "example/project".into(),
+                    number,
+                    url: format!("https://github.com/example/project/pull/{number}"),
+                };
+                let updated_at = chat.update(cx, |chat, _| {
+                    chat.summary.work_item = Some(item.clone());
+                    chat.summary.updated_at as i64 + 1
+                });
                 let card = Card {
                     session,
-                    item: WorkItem {
-                        kind: "pr".into(),
-                        repo: "example/project".into(),
-                        number,
-                        url: format!("https://github.com/example/project/pull/{number}"),
-                    },
+                    item,
                     title: format!("Review feedback {number}"),
                     state: "open".into(),
-                    updated_at: vorkspace_core::time::now_ms() as i64,
+                    updated_at,
                     entries: vec![],
                     details_error: false,
                     truncated: false,
@@ -338,7 +248,7 @@ fn reopening_a_mixed_app_layout_restores_scope_and_cli_rejects_foreign_siblings(
             assert_eq!(shell.workspace.active, Some(notes));
             assert_eq!(shell.workspace.project, project);
             assert_eq!(shell.working_copy(), worktree);
-            assert_eq!(shell.session_working_copy(notes, cx), worktree);
+            assert_eq!(shell.pane_working_copy(notes, cx), worktree);
             shell.record_worktree_session(notes, cx);
             assert_eq!(shell.workspace.tab_workspaces[&session], worktree);
             assert!(
@@ -368,7 +278,7 @@ fn native_mixed_workspace_capture() {
     vorkspace_ui::clock::use_test_clock(&cx);
     for (label, width) in [("wide", 1440.), ("compact", 1080.)] {
         let store = Arc::new(Mutex::new(
-            vorkspace_core::store::Store::open(std::path::Path::new(":memory:")).unwrap(),
+            vorkspace_core::store::Store::test(std::path::Path::new(":memory:")).unwrap(),
         ));
         let session = locked(&store)
             .unwrap()
@@ -428,7 +338,7 @@ fn native_mixed_workspace_capture() {
                 shell.workspace.place(b, a, Edge::Bottom);
                 shell.open(a, w, cx);
                 shell.workspace.sidebar_visible = false;
-                shell.sidebar_fraction = 0.;
+                shell.sidebar.fraction = 0.;
                 shell.invalidate_chrome(cx);
             })
             .unwrap();
@@ -461,10 +371,10 @@ fn independent_notes_tile_beside_sessions_and_close_the_originating_pane(cx: &mu
             }
             shell.open_note_tab("design".into(), w, cx);
             let a = shell.workspace.active.unwrap();
-            let first = shell.note_tabs[&a].clone();
+            let first = shell.page_tabs.note_tabs[&a].clone();
             shell.open_note_tab("release".into(), w, cx);
             let b = shell.workspace.active.unwrap();
-            let second = shell.note_tabs[&b].clone();
+            let second = shell.page_tabs.note_tabs[&b].clone();
             assert_ne!(a, b);
             assert_ne!(first, second);
             shell.workspace.place(a, session, Edge::Right);
@@ -481,8 +391,8 @@ fn independent_notes_tile_beside_sessions_and_close_the_originating_pane(cx: &mu
                 vec![session, a, b]
             );
             assert!(shell.has_session_panes());
-            assert_eq!(shell.note_tabs[&a], first);
-            assert_eq!(shell.note_tabs[&b], second);
+            assert_eq!(shell.page_tabs.note_tabs[&a], first);
+            assert_eq!(shell.page_tabs.note_tabs[&b], second);
             assert_eq!(shell.tab_copy(session, cx).headline, "design");
             shell.open_note_tab("release".into(), w, cx);
             assert!(
@@ -491,7 +401,7 @@ fn independent_notes_tile_beside_sessions_and_close_the_originating_pane(cx: &mu
             );
             assert_eq!(shell.workspace.active, Some(b));
             assert_eq!(
-                shell.note_tabs.len(),
+                shell.page_tabs.note_tabs.len(),
                 2,
                 "opening an existing note focuses its editor"
             );
@@ -506,7 +416,7 @@ fn independent_notes_tile_beside_sessions_and_close_the_originating_pane(cx: &mu
                 "close belongs to the emitting note"
             );
             assert_eq!(shell.workspace.active, Some(b));
-            assert_eq!(shell.note_tabs[&b], second);
+            assert_eq!(shell.page_tabs.note_tabs[&b], second);
             assert!(shell.workspace.tab_of(session).is_some());
             assert_eq!(shell.tab_copy(session, cx).headline, "release");
         })
@@ -529,7 +439,7 @@ fn disabling_a_feature_keeps_its_session_sibling_and_draft(cx: &mut TestAppConte
                 .unwrap();
             shell.open_note_tab("retained".into(), w, cx);
             let note = shell.workspace.active.unwrap();
-            let editor = shell.note_tabs[&note].clone();
+            let editor = shell.page_tabs.note_tabs[&note].clone();
             shell.workspace.place(note, session, Edge::Right);
             shell.workspace.preferences.notes = false;
             shell.open(session, w, cx);
@@ -538,10 +448,10 @@ fn disabling_a_feature_keeps_its_session_sibling_and_draft(cx: &mut TestAppConte
                     .visible_tabs(cx)
                     .contains(&TitleTab::Workspace(session))
             );
-            assert_eq!(shell.note_tabs[&note], editor);
+            assert_eq!(shell.page_tabs.note_tabs[&note], editor);
             shell.workspace.preferences.notes = true;
             shell.open(note, w, cx);
-            assert_eq!(shell.note_tabs[&note], editor);
+            assert_eq!(shell.page_tabs.note_tabs[&note], editor);
         })
         .unwrap();
 }
@@ -580,7 +490,7 @@ fn mixed_panes_use_existing_width_and_vertical_limits(cx: &mut TestAppContext) {
     let (window, _, session) = window(cx);
     window
         .update(cx, |shell, _, _| {
-            shell.viewport_width = 2000.;
+            shell.window.viewport_width = 2000.;
             shell.workspace.sidebar_visible = false;
             let mut leaves = vec![session];
             for name in ["a", "b", "c"] {
@@ -606,7 +516,7 @@ fn mixed_panes_use_existing_width_and_vertical_limits(cx: &mut TestAppContext) {
                 shell.pane_layout_allowed(&four, &three),
                 "an old oversized layout can improve"
             );
-            shell.viewport_width = 700.;
+            shell.window.viewport_width = 700.;
             assert!(!shell.split_allowed(&one, session, SplitDir::Right, leaves[1]));
         })
         .unwrap();
@@ -638,8 +548,8 @@ fn switching_focus_keeps_bot_and_terminal_siblings_alive(cx: &mut TestAppContext
             });
             shell.open_terminal_tab(w, cx);
             let terminal_pane = shell.workspace.active.unwrap();
-            let id = shell.active_terminal_tab.unwrap();
-            let terminal = shell.terminal_tabs[&id].clone();
+            let id = shell.pages.active_terminal_tab.unwrap();
+            let terminal = shell.pages.terminal_tabs[&id].clone();
             shell.workspace.place(bot_pane, session, Edge::Right);
             shell.workspace.place(terminal_pane, bot_pane, Edge::Bottom);
             shell.open(session, w, cx);
@@ -657,7 +567,7 @@ fn switching_focus_keeps_bot_and_terminal_siblings_alive(cx: &mut TestAppContext
                 shell.workspace_bot_context().is_some(),
                 "the Bot's browse panel stays available"
             );
-            assert!(terminal.read(cx).visible);
+            assert!(terminal.read(cx).is_visible());
             assert_eq!(chat.read(cx).input.read(cx).content, "Unsent Bot draft");
             shell.open(terminal_pane, w, cx);
             assert_eq!(

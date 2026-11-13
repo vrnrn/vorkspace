@@ -1,14 +1,30 @@
 # Architecture
 
+The file parser can work on its own. It labels parts of the text as keywords, strings, comments and similar groups. The screen chooses the colors for those labels from your current theme.
+
+The screen can reuse text it has already measured. It checks the text, font, width and line limit before reusing wrapping, so a short preview and a full message keep their own correct shape.
+
+The Edit menu remembers which file you were using when the window loses focus. Commands such as Format and Find still reach that editor. An open management dialog protects the file behind it from those commands.
+
+Formatting loads the language tools that the file needs, including tools for code inside HTML or Markdown. Each formatting request gets a fresh, limited workspace. Find uses the editor library's own search rules. Rebuilding the formatter also checks its answers against the original library.
+
 The desktop app window is drawn by GPUI. Rust keeps track of conversations, files, Bots, and running agents in the same desktop process. The code is split into several crates, which are smaller building blocks with one job each, such as colors and animation timing or understanding code in the editor. Splitting them changes how the code is organized, not how the app runs: they are all still one app. Saved history lives in SQLite, with extra window settings beside it.
 
-A Bot's face and name stay at the top of its chat as messages scroll. Its face shows whether it is idle, working or needs you, without following the mouse. The app draws a Bot's body picture once and then moves only its eyes, so blinking and looking around are cheap drawing rather than a fresh picture every frame. Idle faces now and then glance around or blink, all at the same moments, then hold still, so a quiet chat redraws the window only a few times every few seconds instead of thirty times a second. Each window’s sidebar faces and its settings preview follow the mouse when it moves; working and attention faces keep animating. Old face pictures stay in graphics memory while a window still uses them and are removed afterward. On Mac, messages fade gently around the face to reveal the chat's own background colors and picture. You can still select, click and scroll the chat there, and the fade stays above the typing box. Hidden or covered faces stop animating, and an empty chat shows help instead of a second face.
+The app reads the saved workspace and Bot list once as it opens. Windows share the same conversation list, including names, draft markers, and working folders. Each window keeps its own tabs and selection. If a conversation is already open in another window, the app takes you to that window.
+
+All open windows share the same reminders and linked GitHub updates. Dismissing an update in one window clears it everywhere. Opening or snoozing an old reminder leaves any newer reminder you scheduled in place. Quitting waits for reminder changes you just made to save.
+
+Stopping an orchestration also stops its prepared workers from opening new conversations. Workers that already started keep the conversation and work they saved.
+
+A Bot's face and name stay at the top of its chat as messages scroll. Its face shows whether it is idle, working or needs you, without following the mouse. The app draws a Bot's body picture once and then moves only its eyes, so blinking and looking around are cheap drawing rather than a fresh picture every frame. Idle faces now and then glance around or blink, all at the same moments, then hold still, so a quiet chat redraws the window only a few times every few seconds instead of thirty times a second. Each window’s sidebar faces and its settings preview follow the mouse when it moves; working and attention faces keep animating. Old body pictures stay in graphics memory while a window still uses them and are removed afterward. On Mac, messages fade gently around the face to reveal the chat's own background colors and picture. You can still select, click and scroll the chat there, and the fade stays above the typing box. Hidden or covered faces stop animating, and an empty chat shows help instead of a second face.
 
 Picking a project from the top of the sidebar always takes you to that project's sessions, even if you were looking at one of its Bots. The full sidebar starts with your [vorkspace](vorkspaces.md) and lists that vorkspace's sessions, running ones first. In the narrow icon sidebar, the Working card appears above Subscriptions when a session is running, needs approval, or has finished while you were looking elsewhere. It covers sessions across projects; click one to open it. The list starts with four sessions; More opens a scrollable list and Show less returns to four. Each session shows its name, what tool it last used (when known), its project and elapsed time. The card disappears when nothing qualifies, and it still appears for just one session. In a short window, scroll the upper sidebar to reach navigation; the card and bottom controls stay available. You can turn off Working agents in General settings.
 
-Each new worktree can run a setup command you choose under **Settings → Worktrees**, before its first agent turn. Pressing Stop ends a running setup. If setup fails or gets interrupted, the app keeps the worktree and includes a warning in agent requests until one finishes. An agent can see the same warning again if a turn ends early or two sessions share the worktree. Settings shows which worktrees passed the removal checks and how much disk they use. If Git cannot verify a check, the app keeps the worktree during agent cleanup.
+Each new worktree can run a setup command you choose under **Settings → Worktrees**, before its first agent turn. The app keeps the command in its own data folder. If an older version was waiting to run setup, check that worktree before running the command yourself. Pressing Stop ends a running setup. If setup fails or gets interrupted, the app keeps the worktree and includes a warning in agent requests until one finishes. An agent can see the same warning again if a turn ends early or two sessions share the worktree. Settings shows which worktrees passed the removal checks and how much disk they use. If Git cannot verify a check, the app keeps the worktree during agent cleanup.
 
 Closing the window keeps the app running in the menu bar, and clicking its Dock icon brings the window back.
+
+Changing a setting or choosing a model updates the shared preferences once. Other windows pick up the change and keep their own zoom. If two windows change different settings, both choices are saved.
 
 Open Bots in the main app window. Click the macOS menu bar icon or press ⌘⇧C to find recently copied text and images. Search finds text; image thumbnails show what you copied. Hover over an image for one second to show its larger preview; moving away hides that pane. Choosing an item puts its original contents back on the clipboard, ready for your usual Paste command. New meeting and Settings are also in this menu. New meeting opens a blank note with recording controls. During recording, Stop recording replaces New meeting. Quick Composer still has its global shortcut.
 
@@ -16,13 +32,35 @@ Clipboard history keeps at most 50 items in memory. A small helper app keeps it 
 
 The app checks whether the clipboard changed twice a second. It makes small image previews in the background, one at a time, and never saves a clipboard history file.
 
-Rust controls Vox calls and translates desktop Copilot requests. Small JavaScript helpers handle editor language tools, voice audio, and remote machines. The editor helpers get a limited amount of working time, and time spent waiting while other apps keep the computer busy does not count against it. Empty conversations show the composer, and session titles stay still. A remote machine keeps its own agents running and history saved even when your desktop disconnects. Notes, recordings and their summaries are drawn by the app itself. Vox audio and HTML previews use separate browser surfaces, and HTML previews cannot send commands to the app.
+Rust controls Vox calls and translates desktop Copilot requests. Small JavaScript helpers handle editor language tools and voice audio. The editor helpers get a limited amount of working time, and time spent waiting while other apps keep the computer busy does not count against it. Empty conversations show the composer, and session titles stay still. Notes, recordings and their summaries are drawn by the app itself. Vox audio and HTML previews use separate browser surfaces, and HTML previews cannot send commands to the app.
 
 Notes, Automations, connector pages, Todos and Search share [one compact design](native-pages.md). The same controls use the same sizes and colors. Narrow windows keep navigation usable without throwing away the selected item or unfinished text.
 
 The [repository map](repository.md) shows where each part lives. Embedded helper code has its own folder; the scripts folder contains developer tools.
 
-Long saved chats are read a piece at a time. Hidden views keep their work without repeatedly asking to redraw, and repeated terminal redraw requests are combined. Cleaning up one idle agent does not hold the shared lock that other agents need.
+The app reads saved messages and details about their replies together. Switching back to a window refreshes the chats you can see. Hidden chats with drafts or running work keep the history they need. An oversized hidden chat can free its memory while smaller chats stay ready to reopen. Repeated terminal redraw requests are combined. Cleaning up one idle agent leaves the shared lock available to other agents.
+
+The app groups quick bursts of command output and keeps a readable tail. An idle agent can stay ready for the next message while the saved transcript stays in the conversation's storage.
+
+Queued messages keep the attachments and mode they had when you queued them. Continuing an earlier turn leaves the files you added to your next draft in the composer.
+
+The app keeps word-fade animation data while new text is arriving, then releases it. When you scroll a long chat, the prompt rail uses your position to find nearby prompts.
+
+The app prepares a few attachment thumbnails at a time across all windows. Opening a picture full screen has its own loading path.
+
+The Changes panel and title bar read from the same Git snapshot. One Git status check tells the app which files and branch changed. When everything matches the last check, it can reuse the line totals. On your Mac, the app listens for file changes in an active checkout and still does a periodic check. Folders the Mac cannot watch use periodic checks. Two windows on the same checkout share a commit graph, and each window keeps its own search and selection. If you switch checkouts while writing a commit message, each checkout keeps its own draft while Changes is open. A confirmation belongs to the checkout and branch where you opened it. Review keeps your place while files refresh. It keeps the lines around an edit in memory and counts the unchanged lines further away. You can open a deleted file to see what was removed, tell staged and unstaged tabs apart, and confirm before discarding a change.
+
+When you open a file from a saved turn, Review shows that file as it was before and after that turn, even after another turn finishes. Undo and Keep apply to the turn shown on the card. If another turn has replaced it, the app refreshes the card for you.
+
+Open **View → Running Work** to see the app’s local agents. A Stop click is tied to the reply shown in the list, even from another window or after its chat view disappears. The worker keeps ownership until its final save. An old Stop or screen update cannot affect a newer reply.
+
+If the app cannot read process usage, it still lists the agents it knows about and lets you stop them. Missing CPU and memory readings are labeled unavailable.
+
+Each database has one app instance in charge of running automations. Another instance can queue a request. A new conversation, its settings and its run record save together before the prompt is sent. After a restart, setup that never saved can resume. Once a conversation is prepared, an interrupted run stays recorded with that conversation so you can inspect it. A setup error also keeps the prepared conversation available.
+
+When a Bot receives a message, the app sends that message's attachments and options with its own reply. Your composer and chat settings stay ready for your next message.
+
+Side questions keep their own replies and unfinished drafts. You can switch between them or close the sheet and return later. A side question can read the conversation it came from and runs separately from the main reply.
 
 Long indexed Bot chats opened from the Bot panel first show their newest messages. Scroll up or choose Load earlier messages to read older parts without losing your place. If the saved chat changes elsewhere, the app reloads it when you request another page; if loading fails temporarily, you can retry. Before a Bot runs or a message changes, the app loads the complete chat so older messages stay safe. Other kinds of history keep their existing loading behavior.
 
@@ -31,6 +69,8 @@ Bots, sessions, terminals, notes, GitHub/GitLab/Jira items, Search, Automations 
 Click a project to return to its workspace.
 
 Files opened from Search or a Bot link stay with the working copy they came from. A new file pane opens beside the Bot when there is room, or in its own tab. Closing and reopening the file tab keeps unfinished edits while the app is open. Add to chat puts your comment in the original Bot's draft, even if you've moved the file or restarted. If the chat can't accept it, your comment stays available to copy or try again. GitHub activity appears in the Bot chat it belongs to.
+
+An open file tab checks its own working copy for Git changes. For local files, it checks whether the file changed before reading it again. Saving still checks the file's contents against the last version the editor read. Typing while a reload is in progress keeps those new edits.
 
 Drag a tab onto another pane’s edge to put them beside or above one another. Drag a pane’s small header to move it, or back to the tab bar to give it its own tab. You can resize the space between panes. The same limits apply throughout: each column needs 420 points of width, and up to three content panes can be stacked vertically. Existing file-pane exceptions stay the same. When you shrink the window, an older large layout scrolls instead of throwing away panes.
 
@@ -59,3 +99,5 @@ Each Mac window remembers which mouse pointer it should show. It updates the poi
 The background app is named **vorkspace helper**. It remains available after the main app quits while clipboard history or dictation is enabled. It also runs during meeting recordings and sends recording updates and transcript text to the main app. Clipboard history stays in the helper.
 
 Optional [Codebase Memory](codebase.md) uses a local helper engine to map a project’s symbols and calls. The app decides which projects may use it, keeps each checkout separate, and stops the work when you disable it.
+
+VoiceOver can read and open a complete link even when it wraps across lines or sits beside inline code. The words around it stay in reading order.

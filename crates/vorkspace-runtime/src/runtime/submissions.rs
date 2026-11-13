@@ -2,7 +2,7 @@
 //! cannot prove that an external effect did not happen, and never permits replay.
 use super::*;
 use std::collections::HashMap;
-use vorkspace_core::store::{NativeHistoryRequest, SubmissionInput};
+use vorkspace_core::store::{ComposerOrigin, NativeHistoryRequest, SubmissionInput};
 
 pub(super) struct Submissions {
     store: Database,
@@ -67,8 +67,12 @@ impl Submissions {
         text: &str,
         settings: &Settings,
         history: Option<&NativeHistoryRequest>,
+        composer: Option<&ComposerOrigin>,
     ) -> Result<(), String> {
-        let user_turn = settings.bot_message_id.clone().unwrap_or_else(uuid);
+        let user_turn = composer
+            .map(ComposerOrigin::message_id)
+            .or_else(|| settings.bot_message_id.clone())
+            .unwrap_or_else(uuid);
         self.initial = Some(self.reserve(
             &user_turn,
             text,
@@ -100,12 +104,17 @@ impl Submissions {
     pub(super) fn was_dispatched(&self) -> bool {
         self.dispatched
     }
-    pub(super) fn dispatch_initial(&mut self) -> Result<(), String> {
+    pub(super) fn dispatch_initial(
+        &mut self,
+        composer: Option<&ComposerOrigin>,
+    ) -> Result<(), String> {
         let attempt = self.initial.as_ref().ok_or("Local send was not reserved")?;
-        if !locked(&self.store)?
-            .dispatch_local_submission(attempt)?
-            .claimed
-        {
+        let store = locked(&self.store)?;
+        let claim = match composer {
+            Some(origin) => store.dispatch_composer_submission(attempt, origin),
+            None => store.dispatch_local_submission(attempt),
+        }?;
+        if !claim.claimed {
             return Err("Local send is already claimed; it was not replayed".into());
         }
         self.dispatched = true;
@@ -234,7 +243,7 @@ mod tests {
     use super::*;
     #[test]
     fn preflight_failure_is_retryable_but_dispatched_unknown_effects_never_replay() {
-        let db = Store::open_vorkspace(std::path::Path::new(":memory:")).unwrap();
+        let db = Store::test(std::path::Path::new(":memory:")).unwrap();
         let session = db.create("codex", "/project").unwrap().id;
         let store = Arc::new(Mutex::new(db));
         let settings = Settings {
@@ -242,7 +251,9 @@ mod tests {
             ..Default::default()
         };
         let mut failed = Submissions::new(store.clone(), session);
-        failed.reserve_initial("hello", &settings, None).unwrap();
+        failed
+            .reserve_initial("hello", &settings, None, None)
+            .unwrap();
         failed.finish(&Err("CLI missing".into()), false).unwrap();
         assert_eq!(
             locked(&store).unwrap().local_submissions(session).unwrap()[0]
@@ -252,9 +263,9 @@ mod tests {
         );
         let mut interrupted = Submissions::new(store.clone(), session);
         interrupted
-            .reserve_initial("hello", &settings, None)
+            .reserve_initial("hello", &settings, None, None)
             .unwrap();
-        interrupted.dispatch_initial().unwrap();
+        interrupted.dispatch_initial(None).unwrap();
         interrupted
             .finish(&Err("Disconnected".into()), false)
             .unwrap();
@@ -267,7 +278,7 @@ mod tests {
         let mut retry = Submissions::new(store.clone(), session);
         assert!(
             retry
-                .reserve_initial("hello", &settings, None)
+                .reserve_initial("hello", &settings, None, None)
                 .unwrap_err()
                 .contains("not replayed")
         );
@@ -282,11 +293,15 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
-        assert!(retry.reserve_initial("hello", &settings, None).is_err());
+        assert!(
+            retry
+                .reserve_initial("hello", &settings, None, None)
+                .is_err()
+        );
     }
     #[test]
     fn failed_steer_keeps_its_recovery_metadata_and_blocks_the_stable_queue_identity() {
-        let db = Store::open_vorkspace(std::path::Path::new(":memory:")).unwrap();
+        let db = Store::test(std::path::Path::new(":memory:")).unwrap();
         let session = db.create("codex", "/project").unwrap().id;
         let store = Arc::new(Mutex::new(db));
         let message = vorkspace_core::follow_up::Message {
@@ -326,9 +341,14 @@ mod unwind_tests {
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let mut submissions = Submissions::new(db.clone(), session);
             submissions
-                .reserve_initial("Preserved while unwinding", &Settings::default(), None)
+                .reserve_initial(
+                    "Preserved while unwinding",
+                    &Settings::default(),
+                    None,
+                    None,
+                )
                 .unwrap();
-            submissions.dispatch_initial().unwrap();
+            submissions.dispatch_initial(None).unwrap();
             let _guard = locked(&db).unwrap();
             panic!("Controlled worker panic while owning the store lock");
         }));

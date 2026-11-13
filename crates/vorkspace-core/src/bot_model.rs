@@ -36,7 +36,7 @@ pub enum CompactionMode {
 pub struct Bot {
     pub id: String,
     pub session_id: Option<i64>,
-    /// Keep a missing desktop association visible instead of silently starting
+    /// Keep a missing session association visible instead of silently starting
     /// a replacement conversation when its saved UUID cannot be resolved.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub unavailable_session: Option<String>,
@@ -73,11 +73,11 @@ pub struct Bot {
     pub background: Option<Background>,
     pub launches: Vec<Launch>,
     pub documents: Vec<Document>,
-    /// References last projected from desktop blocks, to reconcile deletions.
-    #[serde(default)]
-    pub desktop_document_ids: Vec<String>,
-    #[serde(default)]
-    pub desktop_launch_ids: Vec<i64>,
+    /// References last projected from conversation blocks, to reconcile deletions.
+    #[serde(default, rename = "desktopDocumentIds")]
+    pub projected_document_ids: Vec<String>,
+    #[serde(default, rename = "desktopLaunchIds")]
+    pub projected_launch_ids: Vec<i64>,
     pub outbox: Vec<Message>,
     pub pending_reports: Vec<String>,
     pub habit_sessions: Vec<i64>,
@@ -125,8 +125,8 @@ impl Default for Bot {
             background: None,
             launches: Vec::new(),
             documents: Vec::new(),
-            desktop_document_ids: Vec::new(),
-            desktop_launch_ids: Vec::new(),
+            projected_document_ids: Vec::new(),
+            projected_launch_ids: Vec::new(),
             outbox: Vec::new(),
             pending_reports: Vec::new(),
             habit_sessions: Vec::new(),
@@ -143,7 +143,7 @@ pub struct InitialConfiguration {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub soul: Option<String>,
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Launch {
     pub session_id: i64,
@@ -151,7 +151,12 @@ pub struct Launch {
     pub title: String,
     pub harness: String,
     pub model: Option<String>,
+    /// Compatibility field for launches saved by older builds.
     pub origin_turn: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<LaunchOrigin>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notification_id: Option<String>,
     pub notify_on_complete: bool,
     #[serde(default)]
     pub completed: bool,
@@ -159,7 +164,71 @@ pub struct Launch {
     pub dismissed: bool,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LaunchOrigin {
+    pub session_id: i64,
+    pub turn: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum LaunchGroup {
+    Turn(LaunchOrigin),
+    LegacyChild(i64),
+}
+
+impl LaunchGroup {
+    pub fn source(self) -> Option<i64> {
+        match self {
+            Self::Turn(origin) => Some(origin.session_id),
+            Self::LegacyChild(_) => None,
+        }
+    }
+}
+
+impl Launch {
+    pub fn set_origin(&mut self, session_id: i64, turn: u64) {
+        self.origin = Some(LaunchOrigin { session_id, turn });
+        self.origin_turn = ((session_id as u64) << 32) | (turn & u64::from(u32::MAX));
+        self.notification_id = self.notify_on_complete.then(crate::session::new_id);
+    }
+}
+
+impl Bot {
+    pub fn launch_group(&self, launch: &Launch) -> LaunchGroup {
+        if let Some(origin) = launch.origin {
+            return LaunchGroup::Turn(origin);
+        }
+        let legacy = LaunchGroup::LegacyChild(launch.session_id);
+        let prefix = launch.origin_turn >> 32;
+        if prefix == 0 {
+            return legacy;
+        }
+        // Older records retained only 32 bits. Recover the source only when
+        // one known conversation for this Bot owns that exact prefix.
+        let mut source = None;
+        for id in self
+            .session_id
+            .into_iter()
+            .chain(self.habit_sessions.iter().copied())
+        {
+            if id > 0 && u64::from(id as u32) == prefix {
+                if source.is_some_and(|previous| previous != id) {
+                    return legacy;
+                }
+                source = Some(id);
+            }
+        }
+        source.map_or(legacy, |session_id| {
+            LaunchGroup::Turn(LaunchOrigin {
+                session_id,
+                turn: launch.origin_turn & u64::from(u32::MAX),
+            })
+        })
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Document {
     pub id: String,
@@ -212,4 +281,56 @@ pub struct Peer {
     pub from: String,
     pub hop: u8,
     pub expect_reply: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn delegated_origin_retains_a_full_handle_and_a_fresh_notice_for_each_send() {
+        let source = (1_i64 << 52) | 13;
+        let turn = (1_u64 << 40) | 9;
+        let mut launch = Launch {
+            session_id: 32,
+            notify_on_complete: true,
+            ..Default::default()
+        };
+        launch.set_origin(source, turn);
+        let notice = launch.notification_id.clone();
+        let encoded = serde_json::to_value(&launch).unwrap();
+        let restored: Launch = serde_json::from_value(encoded).unwrap();
+        assert_eq!(
+            Bot::default().launch_group(&restored),
+            LaunchGroup::Turn(LaunchOrigin {
+                session_id: source,
+                turn
+            })
+        );
+        launch.set_origin(source, turn);
+        assert_ne!(launch.notification_id, notice);
+    }
+
+    #[test]
+    fn legacy_delegation_is_resolved_only_to_a_unique_known_bot_session() {
+        let source = (1_i64 << 52) | 13;
+        let launch = Launch {
+            session_id: 32,
+            origin_turn: (13 << 32) | 9,
+            notify_on_complete: true,
+            ..Default::default()
+        };
+        let mut owner = Bot {
+            session_id: Some(5),
+            habit_sessions: vec![source],
+            ..Default::default()
+        };
+        assert_eq!(owner.launch_group(&launch).source(), Some(source));
+        owner.habit_sessions.push((1_i64 << 51) | 13);
+        assert_eq!(owner.launch_group(&launch), LaunchGroup::LegacyChild(32));
+        assert_eq!(
+            Bot::default().launch_group(&launch),
+            LaunchGroup::LegacyChild(32)
+        );
+    }
 }

@@ -395,7 +395,7 @@ fn restored_bot_review_keeps_its_comment_destination_after_moving_beside_another
         let text = &chat.input.read(cx).content;
         assert!(text.starts_with("Keep this draft while typing\n\n"));
         assert_eq!(text.matches("A review comment").count(), 1);
-        assert!(!chat.busy);
+        assert!(!chat.responding());
     });
     other_chat.read_with(cx, |chat, cx| {
         assert!(chat.input.read(cx).content.is_empty())
@@ -468,7 +468,7 @@ fn file_word_wrap_is_shared_and_persisted_across_restart(cx: &mut TestAppContext
         .update(visual, |shell, w, cx| {
             assert!(!shell.workspace.preferences.file_word_wrap);
             assert!(
-                !shell.reviews[&session]
+                !shell.review.reviews[&session]
                     .read(cx)
                     .active_editor()
                     .unwrap()
@@ -492,7 +492,7 @@ fn file_word_wrap_is_shared_and_persisted_across_restart(cx: &mut TestAppContext
     let (store, summaries, saved, project) = window
         .update(visual, |shell, _, cx| {
             assert!(
-                !shell.reviews[&session]
+                !shell.review.reviews[&session]
                     .read(cx)
                     .active_editor()
                     .unwrap()
@@ -526,7 +526,10 @@ fn file_word_wrap_is_shared_and_persisted_across_restart(cx: &mut TestAppContext
     restored
         .update(visual, |shell, _, cx| {
             assert!(!shell.workspace.preferences.file_word_wrap);
-            let editor = shell.reviews[&session].read(cx).active_editor().unwrap();
+            let editor = shell.review.reviews[&session]
+                .read(cx)
+                .active_editor()
+                .unwrap();
             assert!(
                 !editor.read(cx).input.read(cx).word_wrap(),
                 "restart restores the setting"
@@ -574,7 +577,7 @@ fn numbered_shortcuts_return_from_file_only_tabs_to_sessions(cx: &mut TestAppCon
                     shell.reorder_title_tab(&TitleTab::Workspace(file), 0, cx);
                     file
                 } else {
-                    shell.reviews[&first].update(cx, |r, cx| {
+                    shell.review.reviews[&first].update(cx, |r, cx| {
                         r.state.chat_hidden = true;
                         cx.emit(crate::git_tools::review::ReviewEvent::Changed);
                     });
@@ -595,7 +598,7 @@ fn numbered_shortcuts_return_from_file_only_tabs_to_sessions(cx: &mut TestAppCon
                 window
                     .update(visual, |shell, _, _| {
                         // A restored tab has saved state before its pane is mounted.
-                        shell.reviews.remove(&file);
+                        shell.review.reviews.remove(&file);
                         shell.workspace.reviews.get_mut(&file).unwrap().active = nested_tab;
                     })
                     .unwrap();
@@ -660,7 +663,7 @@ fn session_pane_grip_detaches_and_redocks_preserving_chat_and_dirty_files(cx: &m
                 w,
                 cx,
             );
-            (chat, shell.reviews[&session].clone())
+            (chat, shell.review.reviews[&session].clone())
         })
         .unwrap();
     cx.run_until_parked();
@@ -703,8 +706,8 @@ fn session_pane_grip_detaches_and_redocks_preserving_chat_and_dirty_files(cx: &m
     window
         .update(visual, |shell, _, _| {
             assert!(shell.workspace.review_owners.is_empty());
-            assert_eq!(shell.reviews[&session], review);
-            assert!(shell.pane_drag.is_none());
+            assert_eq!(shell.review.reviews[&session], review);
+            assert!(shell.panes.drag.is_none());
         })
         .unwrap();
 
@@ -722,8 +725,8 @@ fn session_pane_grip_detaches_and_redocks_preserving_chat_and_dirty_files(cx: &m
                 [TitleTab::Workspace(session), TitleTab::Workspace(file)]
             );
             assert_eq!(shell.workspace.active, Some(session));
-            assert!(!shell.reviews.contains_key(&session));
-            assert_eq!(shell.reviews[&file], review);
+            assert!(!shell.review.reviews.contains_key(&session));
+            assert_eq!(shell.review.reviews[&file], review);
             shell.open(file, w, cx);
             file
         })
@@ -737,7 +740,7 @@ fn session_pane_grip_detaches_and_redocks_preserving_chat_and_dirty_files(cx: &m
         .unwrap()
         .center();
     let bounds = window
-        .update(visual, |shell, _, _| shell.pane_bounds.get().unwrap())
+        .update(visual, |shell, _, _| shell.panes.bounds.get().unwrap())
         .unwrap();
     let right = point(bounds.right() - px(12.), bounds.center().y);
     visual.simulate_mouse_down(tab, MouseButton::Left, Default::default());
@@ -766,7 +769,7 @@ fn session_pane_grip_detaches_and_redocks_preserving_chat_and_dirty_files(cx: &m
                 chat.read(cx).input.read(cx).content.as_ref(),
                 "Keep this draft"
             );
-            assert_eq!(shell.reviews[&file], review);
+            assert_eq!(shell.review.reviews[&file], review);
             assert_eq!(review.read(cx).active_editor().unwrap(), editor);
             assert!(editor.read(cx).dirty);
             let saved = serde_json::to_string(&shell.workspace).unwrap();
@@ -822,7 +825,7 @@ fn session_pane_grip_places_chat_on_each_edge_of_its_attached_file(cx: &mut Test
         window
             .update(visual, |shell, _, _| {
                 assert_eq!(
-                    shell.pane_drag.as_ref().unwrap().over,
+                    shell.panes.drag.as_ref().unwrap().over,
                     Some((session, edge))
                 );
             })
@@ -866,7 +869,7 @@ fn file_pane_grip_detaches_and_redocks_without_recreating_dirty_editors(cx: &mut
                 w,
                 cx,
             );
-            shell.reviews[&session].clone()
+            shell.review.reviews[&session].clone()
         })
         .unwrap();
     cx.run_until_parked();
@@ -895,7 +898,7 @@ fn file_pane_grip_detaches_and_redocks_without_recreating_dirty_editors(cx: &mut
     window
         .update(visual, |shell, _, _| {
             assert!(shell.workspace.review_owners.is_empty());
-            assert_eq!(shell.reviews[&session], review);
+            assert_eq!(shell.review.reviews[&session], review);
         })
         .unwrap();
     let tab = visual
@@ -906,7 +909,7 @@ fn file_pane_grip_detaches_and_redocks_without_recreating_dirty_editors(cx: &mut
     visual.simulate_mouse_move(drop, MouseButton::Left, Default::default());
     window
         .update(visual, |shell, _, _| {
-            assert_eq!(shell.pane_drag.as_ref().unwrap().insert, Some(0));
+            assert_eq!(shell.panes.drag.as_ref().unwrap().insert, Some(0));
         })
         .unwrap();
     visual.simulate_mouse_up(drop, MouseButton::Left, Default::default());
@@ -917,8 +920,8 @@ fn file_pane_grip_detaches_and_redocks_without_recreating_dirty_editors(cx: &mut
             let pane = shell.workspace.active.unwrap();
             assert!(pane < 0);
             assert_eq!(shell.workspace.session_for_pane(pane), Some(session));
-            assert!(!shell.reviews.contains_key(&session));
-            assert_eq!(shell.reviews[&pane], review);
+            assert!(!shell.review.reviews.contains_key(&session));
+            assert_eq!(shell.review.reviews[&pane], review);
             assert_eq!(review.read(cx).active_editor().unwrap(), editor);
             assert!(editor.read(cx).dirty);
             assert_eq!(
@@ -966,7 +969,7 @@ fn file_pane_grip_detaches_and_redocks_without_recreating_dirty_editors(cx: &mut
                 cx,
             );
             assert_eq!(shell.workspace.active, Some(pane));
-            assert_eq!(shell.reviews[&pane], review);
+            assert_eq!(shell.review.reviews[&pane], review);
             assert_eq!(review.read(cx).active_editor().unwrap(), editor);
             assert!(editor.read(cx).dirty);
         })
@@ -985,7 +988,7 @@ fn file_pane_grip_detaches_and_redocks_without_recreating_dirty_editors(cx: &mut
         .unwrap()
         .center();
     let bounds = window
-        .update(visual, |shell, _, _| shell.pane_bounds.get().unwrap())
+        .update(visual, |shell, _, _| shell.panes.bounds.get().unwrap())
         .unwrap();
     let left = point(bounds.left() + px(12.), bounds.center().y);
     visual.simulate_mouse_down(tab, MouseButton::Left, Default::default());
@@ -996,7 +999,7 @@ fn file_pane_grip_detaches_and_redocks_without_recreating_dirty_editors(cx: &mut
     window
         .update(visual, |shell, _, cx| {
             assert_eq!(shell.workspace.layout(session).leaf_ids(), [pane, session]);
-            assert_eq!(shell.reviews[&pane], review);
+            assert_eq!(shell.review.reviews[&pane], review);
             assert!(editor.read(cx).dirty);
         })
         .unwrap();
@@ -1052,7 +1055,7 @@ fn file_tab_drag_reorders_and_keeps_the_selected_editor(cx: &mut TestAppContext)
                     cx,
                 );
             }
-            shell.reviews[&session].clone()
+            shell.review.reviews[&session].clone()
         })
         .unwrap();
     let visual = &mut VisualTestContext::from_window(window.into(), cx);
@@ -1098,7 +1101,7 @@ fn file_pane_grip_places_an_embedded_review_on_each_edge(cx: &mut TestAppContext
                 w,
                 cx,
             );
-            shell.reviews[&session].clone()
+            shell.review.reviews[&session].clone()
         })
         .unwrap();
     let visual = &mut VisualTestContext::from_window(window.into(), cx);
@@ -1110,7 +1113,7 @@ fn file_pane_grip_places_an_embedded_review_on_each_edge(cx: &mut TestAppContext
             .debug_bounds(Box::leak(format!("pane-{session}").into_boxed_str()))
             .unwrap_or_else(|| {
                 window
-                    .update(visual, |shell, _, _| shell.pane_bounds.get().unwrap())
+                    .update(visual, |shell, _, _| shell.panes.bounds.get().unwrap())
                     .unwrap()
             });
         let end = match edge {
@@ -1128,7 +1131,7 @@ fn file_pane_grip_places_an_embedded_review_on_each_edge(cx: &mut TestAppContext
             .update(visual, |shell, _, _| {
                 let pane = shell.workspace.active.unwrap();
                 assert_eq!(shell.workspace.review_owners.len(), 1);
-                assert_eq!(shell.reviews[&pane], review);
+                assert_eq!(shell.review.reviews[&pane], review);
                 assert!(!shell.workspace.reviews.contains_key(&session));
                 let leaves = shell.workspace.layout(session).leaves();
                 let chat = leaves.iter().find(|l| l.id == session).unwrap().rect;

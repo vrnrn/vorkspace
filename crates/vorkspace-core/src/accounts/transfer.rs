@@ -1,7 +1,12 @@
 //! Exact native transcript copy, including Codex fork/subagent dependencies.
 use super::Profile;
 use crate::kind::Kind;
-use std::path::{Path, PathBuf};
+use std::{
+    fs::OpenOptions,
+    io,
+    os::unix::fs::OpenOptionsExt,
+    path::{Path, PathBuf},
+};
 mod codex;
 use codex::*;
 /// Locate only a provider-owned transcript with the exact saved identity.
@@ -82,16 +87,10 @@ fn same_path(a: &Path, b: &Path) -> bool {
 /// `file-history/<id>/`. The transcript is copied last: it is what `--resume`
 /// looks for, so a partial copy is never mistaken for a complete one.
 fn transfer_claude(from: &Path, to: &Path, id: &str) -> Result<(), String> {
-    let name = format!("{id}.jsonl");
-    let project = std::fs::read_dir(from.join("projects"))
-        .ok()
-        .and_then(|projects| {
-            projects
-                .flatten()
-                .map(|entry| entry.path())
-                .find(|dir| dir.join(&name).is_file())
-        })
+    let source = find_native_thread(from, Kind::Claude, id)?
         .ok_or("Could not find the Claude conversation to carry over")?;
+    let name = source.file_name().ok_or("Invalid Claude transcript path")?;
+    let project = source.parent().ok_or("Invalid Claude project directory")?;
     let dest_project = to.join("projects").join(
         project
             .file_name()
@@ -103,8 +102,22 @@ fn transfer_claude(from: &Path, to: &Path, id: &str) -> Result<(), String> {
         &from.join("file-history").join(id),
         &to.join("file-history").join(id),
     )?;
-    copy_durable(&project.join(&name), &dest_project.join(&name))
+    copy_durable(&source, &dest_project.join(name))
         .map_err(|e| format!("Could not carry the Claude conversation over: {e}"))
+}
+
+fn copy_durable(source: &Path, dest: &Path) -> io::Result<()> {
+    let mut source = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(source)?;
+    if !source.metadata()?.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Expected a regular file",
+        ));
+    }
+    crate::private_file::replace(dest, |file| io::copy(&mut source, file).map(|_| ()))
 }
 
 fn copy_tree(source: &Path, dest: &Path) -> Result<(), String> {

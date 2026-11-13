@@ -1,7 +1,7 @@
 //! Native FileEditor/FilePane previews. Disk work and syntax parsing stay off
 //! the UI thread; drafts, selections and scrolling belong to each live tab.
 use crate::{
-    git_status::{GitChanged, ProjectGit},
+    git_status::{Checkout, EditorBaselineRevision, ProjectGit},
     input::{self, Input},
     panel_kit::{icon_action, stroke},
     transcript::TranscriptView,
@@ -11,18 +11,24 @@ use gpui::{
     KeyBinding, ObjectFit, PromptLevel, Role, SharedString, Subscription, Task, Window, actions,
     div, img, prelude::*, px,
 };
-use std::{path::PathBuf, sync::Arc, time::Duration};
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::Duration,
+};
 use vorkspace_core::files::document::{self, Document, TextDocument};
 use vorkspace_ui::radius;
 use vorkspace_ui::theme::*;
 
 mod chrome;
 mod diff;
+mod document_io;
 mod media;
 #[cfg(test)]
 #[path = "file_editor/tests.rs"]
 mod parity_tests;
 mod search;
+use search::{FindIntent, FindState, SearchOption};
 mod selection;
 
 actions!(
@@ -74,15 +80,20 @@ pub(crate) enum FileEvent {
     AddToChat(String),
 }
 
+struct FileCheckout {
+    entity: Entity<Checkout>,
+    relative: String,
+    revision: Option<EditorBaselineRevision>,
+}
+
 pub(crate) struct FileEditor {
     pub path: String,
-    git: Entity<ProjectGit>,
     cwd: String,
+    checkout: Option<FileCheckout>,
     // The baseline is immutable until Git refreshes it. Per-edit analysis
     // and diff actions share its bytes instead of copying the entire file.
     git_original: Option<Arc<str>>,
     git_staged: bool,
-    git_line_ending: &'static str,
     git_task: Option<Task<()>>,
     analysis: Option<Task<()>>,
     /// The Tree-sitter parser and last tree, reused by each incremental pass.
@@ -92,18 +103,16 @@ pub(crate) struct FileEditor {
     selection: selection::Selection,
     search: Entity<Input>,
     search_open: bool,
+    find_state: FindState,
     replacement: Entity<Input>,
     replace_open: bool,
     match_case: bool,
     whole_word: bool,
     regex: bool,
-    search_invalid: bool,
-    search_task: Option<Task<()>>,
-    matches: Vec<vorkspace_editor::editor_analysis::SearchMatch>,
     autosave: Option<Task<()>>,
+    autosave_enabled: bool,
     formatting: Option<Task<()>>,
     change_index: usize,
-    match_index: usize,
     document: Option<TextDocument>,
     image: Option<Arc<Image>>,
     media: Option<Entity<media::MediaPreview>>,
@@ -111,8 +120,10 @@ pub(crate) struct FileEditor {
     svg_preview: Option<Arc<Image>>,
     unsupported: Option<String>,
     error: Option<String>,
+    load_error: Option<String>,
     disk_changed: bool,
-    loading: bool,
+    disk_revision: Option<document::LocalRevision>,
+    load_task: Option<Task<()>>,
     pub saving: bool,
     pub dirty: bool,
     visible: bool,
@@ -121,7 +132,7 @@ pub(crate) struct FileEditor {
     markdown_source: SharedString,
     navigation: Option<(usize, usize)>,
     _subscriptions: Vec<Subscription>,
-    _poll: Task<()>,
+    disk_poll: Option<Task<()>>,
 }
 impl EventEmitter<FileEvent> for FileEditor {}
 impl Focusable for FileEditor {
@@ -154,16 +165,13 @@ impl FileEditor {
             field
         });
         input.update(cx, |input, _| input.set_editor_path(path.clone()));
-        let subscriptions = vec![
+        let prefs = cx.try_global::<vorkspace_ui::preferences::Preferences>();
+        let autosave_enabled = prefs.is_some_and(|prefs| prefs.autosave);
+        if let Some(wrap) = prefs.map(|prefs| prefs.file_word_wrap) {
+            input.update(cx, |input, cx| input.set_word_wrap(wrap, cx));
+        }
+        let mut subscriptions = vec![
             cx.subscribe(&input, |this, _, _: &input::Changed, cx| this.edited(cx)),
-            cx.subscribe(&input, |this, _, action: &input::CodeAction, cx| {
-                let (index, stage) = match action {
-                    input::CodeAction::Stage(index) => (*index, true),
-                    input::CodeAction::Revert(index) => (*index, false),
-                };
-                this.change_index = index;
-                this.apply_change(stage, cx);
-            }),
             cx.observe(&input, |this, _, cx| {
                 this.observe_code_selection(cx);
                 cx.notify();
@@ -173,55 +181,73 @@ impl FileEditor {
                 cx.notify();
             }),
             cx.subscribe(&search, |this, _, _: &input::Changed, cx| {
-                this.find_matches(cx)
+                this.find_matches(FindIntent::SelectMatch, cx)
             }),
             cx.subscribe(&search, |this, _, _: &input::Submitted, cx| {
                 this.step_match(false, cx)
             }),
             cx.subscribe(&replacement, |this, _, _: &input::Changed, cx| {
-                this.find_matches(cx)
+                this.find_matches(FindIntent::PreserveSelection, cx)
             }),
             cx.subscribe(&replacement, |this, _, _: &input::Submitted, cx| {
                 this.replace_matches(false, cx)
             }),
-            cx.subscribe(&git, |this, _, _: &GitChanged, cx| {
-                if this.visible {
-                    this.refresh_git(cx);
-                }
-            }),
             cx.observe_global::<vorkspace_ui::preferences::Preferences>(|this, cx| {
-                let wrap = cx
-                    .global::<vorkspace_ui::preferences::Preferences>()
-                    .file_word_wrap;
-                this.input
-                    .update(cx, |input, cx| input.set_word_wrap(wrap, cx));
-                this.schedule_autosave(cx);
-                cx.notify();
+                let prefs = cx.global::<vorkspace_ui::preferences::Preferences>();
+                let (wrap, autosave) = (prefs.file_word_wrap, prefs.autosave);
+                if this.input.read(cx).word_wrap() != wrap {
+                    this.input
+                        .update(cx, |input, cx| input.set_word_wrap(wrap, cx));
+                }
+                if this.autosave_enabled != autosave {
+                    this.autosave_enabled = autosave;
+                    this.schedule_autosave(cx);
+                }
             }),
         ];
-        let poll = cx.spawn(async move |this, cx| {
-            loop {
-                cx.background_executor().timer(Duration::from_secs(2)).await;
-                if this
-                    .update(cx, |this, cx| {
-                        if this.visible && !this.saving {
-                            this.load(false, cx);
+        let checkout = Path::new(&path)
+            .strip_prefix(&cwd)
+            .ok()
+            .and_then(Path::to_str)
+            .filter(|relative| !relative.is_empty() && !cwd.is_empty() && cwd != "~")
+            .map(|relative| {
+                let entity = ProjectGit::checkout_for(&git, &cwd, cx);
+                subscriptions.push(cx.observe(&entity, |this, _, cx| {
+                    if this.visible
+                        && let Some(checkout) = &this.checkout
+                    {
+                        let revision = checkout
+                            .entity
+                            .read(cx)
+                            .editor_baseline_revision(&checkout.relative);
+                        if revision.is_none() || checkout.revision != revision {
                             this.refresh_git(cx);
                         }
-                    })
-                    .is_err()
-                {
-                    break;
+                    }
+                }));
+                FileCheckout {
+                    entity,
+                    relative: relative.to_owned(),
+                    revision: None,
                 }
+            });
+        let viewer = cx.entity_id();
+        cx.on_release(move |this, cx| {
+            if this.visible
+                && let Some(checkout) = &this.checkout
+            {
+                checkout
+                    .entity
+                    .update(cx, |checkout, cx| checkout.poll(viewer, false, cx));
             }
-        });
+        })
+        .detach();
         let mut this = Self {
             path,
             cwd,
-            git,
+            checkout,
             git_original: None,
             git_staged: false,
-            git_line_ending: "\n",
             git_task: None,
             analysis: None,
             syntax: Default::default(),
@@ -230,18 +256,16 @@ impl FileEditor {
             selection: selection::Selection::default(),
             search,
             search_open: false,
+            find_state: FindState::default(),
             replacement,
             replace_open: false,
             match_case: false,
             whole_word: false,
             regex: false,
-            search_invalid: false,
-            search_task: None,
             autosave: None,
+            autosave_enabled,
             formatting: None,
             change_index: 0,
-            matches: Vec::new(),
-            match_index: 0,
             document: None,
             image: None,
             media: None,
@@ -249,8 +273,10 @@ impl FileEditor {
             svg_preview: None,
             unsupported: None,
             error: None,
+            load_error: None,
             disk_changed: false,
-            loading: false,
+            disk_revision: None,
+            load_task: None,
             saving: false,
             dirty: false,
             visible: false,
@@ -259,7 +285,7 @@ impl FileEditor {
             markdown_source: "".into(),
             navigation: None,
             _subscriptions: subscriptions,
-            _poll: poll,
+            disk_poll: None,
         };
         if !deferred {
             this.load(false, cx);
@@ -301,17 +327,34 @@ impl FileEditor {
         cx.notify();
     }
     pub(crate) fn set_visible(&mut self, visible: bool, cx: &mut Context<Self>) {
-        let was = self.visible;
+        if visible == self.visible {
+            return;
+        }
         self.visible = visible;
+        if let Some(checkout) = &self.checkout {
+            let viewer = cx.entity_id();
+            checkout
+                .entity
+                .update(cx, |checkout, cx| checkout.poll(viewer, visible, cx));
+        }
         if !visible {
             self.selection.dismiss();
+            self.disk_poll = None;
         }
         if let Some(media) = &self.media {
             media.update(cx, |m, _| m.set_visible(visible));
         }
-        if visible && !was {
+        if visible {
             self.load(false, cx);
             self.refresh_git(cx);
+            self.disk_poll = Some(cx.spawn(async move |this, cx| {
+                loop {
+                    cx.background_executor().timer(Duration::from_secs(2)).await;
+                    if this.update(cx, |this, cx| this.load(false, cx)).is_err() {
+                        break;
+                    }
+                }
+            }));
         }
     }
     fn is_markdown(&self) -> bool {
@@ -321,173 +364,6 @@ impl FileEditor {
                 .and_then(|s| s.to_str()),
             Some("md" | "mdx" | "markdown")
         )
-    }
-    fn load(&mut self, force: bool, cx: &mut Context<Self>) {
-        if self.loading || self.saving {
-            return;
-        }
-        self.loading = true;
-        let requested_from = self.input.read(cx).content.clone();
-        let path = PathBuf::from(&self.path);
-        let work = cx
-            .background_executor()
-            .spawn(async move { document::read_document(&path).and_then(media::prepare_document) });
-        cx.spawn(async move |this, cx| {
-            let result = work.await;
-            let _ = this.update(cx, |this, cx| {
-                this.loading = false;
-                // Confirmation discarded the draft present when reload began.
-                // Typing after that request still belongs to the user.
-                let discard = force && this.input.read(cx).content == requested_from;
-                match result {
-                    Ok(Document::Text(doc)) => {
-                        if !force
-                            && this
-                                .document
-                                .as_ref()
-                                .is_some_and(|old| old.disk == doc.disk)
-                        {
-                            return;
-                        }
-                        if this.dirty && !discard {
-                            this.disk_changed = true;
-                            cx.notify();
-                            return;
-                        }
-                        this.error = None;
-                        this.disk_changed = false;
-                        this.image = None;
-                        this.media = None;
-                        this.unsupported = None;
-                        let first = this.document.is_none();
-                        let text = doc.text.clone();
-                        this.document = Some(doc);
-                        this.input.update(cx, |input, cx| {
-                            input.reload_file(text, !first && !discard, cx);
-                        });
-                        this.dirty = false;
-                        if first && (this.is_markdown() || this.is_svg()) {
-                            this.preview = cx
-                                .try_global::<vorkspace_ui::preferences::Preferences>()
-                                .is_none_or(|prefs| prefs.file_view_mode != "source");
-                        }
-                        this.apply_navigation(cx);
-                        this.update_preview(cx);
-                        this.schedule_analysis(cx);
-                        cx.emit(FileEvent::Dirty);
-                    }
-                    Ok(Document::Image {
-                        bytes,
-                        format,
-                        width,
-                        height,
-                        original_size,
-                    }) => {
-                        if this.dirty && !discard {
-                            this.disk_changed = true;
-                            cx.notify();
-                            return;
-                        }
-                        let byte_size = original_size;
-                        let file_format = if format == "tiff" { "avif" } else { format };
-                        let format = match format {
-                            "jpeg" => ImageFormat::Jpeg,
-                            "webp" => ImageFormat::Webp,
-                            "gif" => ImageFormat::Gif,
-                            "bmp" => ImageFormat::Bmp,
-                            "ico" => ImageFormat::Ico,
-                            "tiff" => ImageFormat::Tiff,
-                            _ => ImageFormat::Png,
-                        };
-                        let image = Arc::new(Image::from_bytes(format, bytes));
-                        if this
-                            .image
-                            .as_ref()
-                            .is_some_and(|old| old.id() == image.id())
-                        {
-                            return;
-                        }
-                        this.media = Some(cx.new(|_| {
-                            media::MediaPreview::image(
-                                this.path.clone(),
-                                image.clone(),
-                                width,
-                                height,
-                                byte_size,
-                                file_format,
-                            )
-                        }));
-                        this.image = Some(image);
-                        this.dirty = false;
-                        this.disk_changed = false;
-                        cx.emit(FileEvent::Dirty);
-                        this.document = None;
-                        this.unsupported = None;
-                        this.error = None;
-                    }
-                    Ok(Document::Video {
-                        size,
-                        modified,
-                        source,
-                    }) => {
-                        if this.dirty && !discard {
-                            this.disk_changed = true;
-                            cx.notify();
-                            return;
-                        }
-                        let same = this
-                            .media
-                            .as_ref()
-                            .is_some_and(|m| m.read(cx).same_video(size, modified));
-                        if !same || force {
-                            this.media = Some(cx.new(|cx| {
-                                media::MediaPreview::video(
-                                    this.path.clone(),
-                                    size,
-                                    modified,
-                                    source,
-                                    cx,
-                                )
-                            }));
-                        }
-                        if let Some(media) = &this.media {
-                            media.update(cx, |m, _| m.set_visible(this.visible));
-                            this.media_events =
-                                Some(cx.subscribe(media, |this, _, _: &media::MediaEvent, cx| {
-                                    this.load(true, cx)
-                                }));
-                        }
-                        this.document = None;
-                        this.image = None;
-                        this.unsupported = None;
-                        this.error = None;
-                        this.dirty = false;
-                        this.disk_changed = false;
-                        cx.emit(FileEvent::Dirty);
-                    }
-                    Ok(Document::Unsupported(reason)) => {
-                        if this.dirty && !discard {
-                            this.disk_changed = true;
-                            cx.notify();
-                            return;
-                        }
-                        this.media = None;
-                        this.unsupported = Some(reason);
-                        this.disk_changed = false;
-                        this.document = None;
-                        this.image = None;
-                        this.error = None;
-                        this.dirty = false;
-                        cx.emit(FileEvent::Dirty);
-                    }
-                    Err(error) => {
-                        this.error = Some(error);
-                    }
-                }
-                cx.notify();
-            });
-        })
-        .detach();
     }
     fn edited(&mut self, cx: &mut Context<Self>) {
         self.selection.dismiss();
@@ -503,55 +379,49 @@ impl FileEditor {
             self.input
                 .update(cx, |input, cx| input.schedule_completion(false, cx));
         }
-        if self.search_open {
-            self.find_matches(cx);
-        }
+        self.find_matches(FindIntent::PreserveSelection, cx);
         cx.notify();
     }
     fn refresh_git(&mut self, cx: &mut Context<Self>) {
-        let cwd = PathBuf::from(&self.cwd);
-        let Ok(relative) = PathBuf::from(&self.path)
-            .strip_prefix(&cwd)
-            .map(|p| p.to_string_lossy().into_owned())
-        else {
+        let Some(checkout) = &mut self.checkout else {
             return;
         };
+        checkout.revision = checkout
+            .entity
+            .read(cx)
+            .editor_baseline_revision(&checkout.relative);
+        let cwd = PathBuf::from(&self.cwd);
+        let relative = checkout.relative.clone();
         let work = cx.background_executor().spawn(async move {
-            let files = vorkspace_core::scm::diff_files(&cwd).ok()?;
-            let staged = files
-                .files
-                .iter()
-                .find(|f| f.relative == relative)
-                .is_some_and(|f| f.staged && !f.unstaged);
-            let diff = vorkspace_core::scm::file_diff(&cwd, &relative, staged).ok()?;
-            (!diff.binary && !diff.too_large).then(|| {
-                (
-                    Arc::<str>::from(diff.original.replace("\r\n", "\n").replace('\r', "\n")),
-                    staged,
-                    if diff.original.contains("\r\n") {
-                        "\r\n"
-                    } else if diff.original.contains('\r') {
-                        "\r"
-                    } else {
-                        "\n"
-                    },
-                )
-            })
+            let (original, staged) =
+                vorkspace_core::scm::editor_baseline(&cwd, &relative).ok()??;
+            Some((
+                Arc::<str>::from(original.replace("\r\n", "\n").replace('\r', "\n")),
+                staged,
+            ))
         });
         self.git_task = Some(cx.spawn(async move |this, cx| {
             let result = work.await;
             let _ = this.update(cx, |this, cx| {
-                let original = result.map(|(original, staged, line_ending)| {
-                    this.git_staged = staged;
-                    this.git_line_ending = line_ending;
-                    original
-                });
+                let (original, staged) =
+                    result.map_or((None, false), |(original, staged)| (Some(original), staged));
+                let side_changed = this.git_staged != staged;
+                this.git_staged = staged;
                 if this.git_original != original {
                     this.git_original = original;
                     this.schedule_analysis(cx);
                 }
+                if side_changed {
+                    cx.notify();
+                }
             });
         }));
+    }
+
+    fn changed_checkout(&self, cx: &mut Context<Self>) {
+        if let Some(checkout) = &self.checkout {
+            checkout.entity.update(cx, Checkout::changed);
+        }
     }
     fn schedule_analysis(&mut self, cx: &mut Context<Self>) {
         let text = self.input.read(cx).content.clone();
@@ -602,34 +472,6 @@ impl FileEditor {
         cx.emit(FileEvent::WordWrap(wrap));
         cx.notify();
     }
-    fn schedule_autosave(&mut self, cx: &mut Context<Self>) {
-        self.autosave = None;
-        if !self.dirty
-            || self.disk_changed
-            || !cx
-                .try_global::<vorkspace_ui::preferences::Preferences>()
-                .is_some_and(|p| p.autosave)
-        {
-            return;
-        }
-        self.autosave = Some(cx.spawn(async move |this, cx| {
-            cx.background_executor().timer(Duration::from_secs(1)).await;
-            let _ = this.update(cx, |this, cx| {
-                if this.dirty
-                    && !this.disk_changed
-                    && cx
-                        .try_global::<vorkspace_ui::preferences::Preferences>()
-                        .is_some_and(|p| p.autosave)
-                {
-                    if this.input.read(cx).is_composing() || this.saving {
-                        this.schedule_autosave(cx);
-                    } else {
-                        this.save(cx);
-                    }
-                }
-            });
-        }));
-    }
     fn format_document(&mut self, cx: &mut Context<Self>) {
         if self.document.is_none() || self.saving || self.input.read(cx).is_composing() {
             return;
@@ -655,140 +497,6 @@ impl FileEditor {
                 }
             });
         }));
-    }
-    pub(crate) fn save(&mut self, cx: &mut Context<Self>) {
-        if self.saving || self.input.read(cx).is_composing() || self.document.is_none() {
-            return;
-        }
-        let source = self.input.read(cx).content.clone();
-        let at = self.input.read(cx).selection_range().end;
-        let path = self.path.clone();
-        let format = cx
-            .try_global::<vorkspace_ui::preferences::Preferences>()
-            .is_none_or(|p| p.format_on_save);
-        self.saving = true;
-        self.error = None;
-        cx.spawn(async move |this, cx| {
-            if format {
-                let text = source.clone();
-                let result = cx
-                    .background_executor()
-                    .spawn(
-                        async move { vorkspace_editor::editor_analysis::format(&path, &text, at) },
-                    )
-                    .await;
-                let _ = this.update(cx, |this, cx| {
-                    if this.input.read(cx).content == source
-                        && !this.input.read(cx).is_composing()
-                        && let Ok(Some(result)) = result
-                        && result.formatted != source.as_ref()
-                    {
-                        this.input.update(cx, |input, cx| {
-                            input.replace_bytes(
-                                0..source.len(),
-                                &result.formatted,
-                                result.cursor,
-                                cx,
-                            )
-                        });
-                    }
-                });
-            }
-            let Ok(Some((path, doc, saved))) = this.update(cx, |this, cx| {
-                if this.input.read(cx).is_composing() {
-                    this.saving = false;
-                    this.schedule_autosave(cx);
-                    cx.emit(FileEvent::SaveFailed);
-                    return None;
-                }
-                Some((
-                    PathBuf::from(&this.path),
-                    this.document.clone()?,
-                    this.input.read(cx).content.to_string(),
-                ))
-            }) else {
-                return;
-            };
-            let text = saved.clone();
-            let result = cx
-                .background_executor()
-                .spawn(async move { document::save_document(&path, &doc, &text) })
-                .await;
-            let _ = this.update(cx, |this, cx| {
-                this.saving = false;
-                match result {
-                    Ok(disk) => {
-                        if let Some(doc) = &mut this.document {
-                            doc.disk = disk;
-                            doc.text = saved;
-                        }
-                        this.disk_changed = false;
-                        this.edited(cx);
-                        this.git.update(cx, |git, cx| git.changed(cx));
-                        cx.emit(FileEvent::Saved);
-                    }
-                    Err(error) => {
-                        this.disk_changed |= error.contains("changed on disk");
-                        this.error = Some(error);
-                        cx.emit(FileEvent::SaveFailed);
-                    }
-                }
-                cx.notify();
-            });
-        })
-        .detach();
-        cx.notify();
-    }
-    fn reload(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.dirty {
-            self.load(true, cx);
-            return;
-        }
-        let answer = window.prompt(
-            PromptLevel::Warning,
-            "Discard your edits and reload this file?",
-            None,
-            &["Reload", "Cancel"],
-            cx,
-        );
-        cx.spawn_in(window, async move |this, cx| {
-            if matches!(answer.await, Ok(0)) {
-                let _ = this.update(cx, |this, cx| this.load(true, cx));
-            }
-        })
-        .detach();
-    }
-    fn save_my_changes(&mut self, cx: &mut Context<Self>) {
-        if self.saving || self.loading || self.document.is_none() {
-            return;
-        }
-        self.saving = true;
-        let path = PathBuf::from(&self.path);
-        let work = cx.background_executor().spawn(async move {
-            match document::read_document(&path)? {
-                Document::Text(document) => Ok(document),
-                _ => Err("The file is no longer a text document. Your edits were kept.".into()),
-            }
-        });
-        cx.spawn(async move |this, cx| {
-            let latest = work.await;
-            let _ = this.update(cx, |this, cx| {
-                this.saving = false;
-                match latest {
-                    Ok(document) => {
-                        // Consent applies to this observed disk revision only.
-                        // The normal save still checks for subsequent changes.
-                        this.document = Some(document);
-                        this.disk_changed = false;
-                        this.save(cx);
-                    }
-                    Err(error) => this.error = Some(error),
-                }
-                cx.notify();
-            });
-        })
-        .detach();
-        cx.notify();
     }
     fn is_svg(&self) -> bool {
         PathBuf::from(&self.path)
@@ -820,117 +528,12 @@ impl FileEditor {
     fn toggle_preview(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.selection.dismiss();
         self.preview = !self.preview;
-        if cx.has_global::<vorkspace_ui::preferences::Preferences>() {
-            cx.update_global::<vorkspace_ui::preferences::Preferences, _>(|prefs, _| {
-                prefs.file_view_mode = if self.preview { "preview" } else { "source" }.into();
-            });
-        }
+        crate::preference_writes::remember(cx, |prefs| {
+            prefs.file_view_mode = if self.preview { "preview" } else { "source" }.into();
+        });
         self.update_preview(cx);
         window.focus(&self.focus_handle(cx), cx);
         cx.notify();
-    }
-    fn open_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.document.is_none() {
-            return;
-        }
-        self.preview = false;
-        if !self.search_open {
-            let input = self.input.read(cx);
-            let selected = input.content[input.selection_range()].to_owned();
-            if !selected.is_empty() && !selected.contains('\n') {
-                self.search.update(cx, |i, cx| i.set_text(selected, cx));
-            }
-        }
-        self.search_open = true;
-        window.focus(&self.search.focus_handle(cx), cx);
-        cx.notify();
-    }
-    fn find_matches(&mut self, cx: &mut Context<Self>) {
-        let source = self.input.read(cx).content.clone();
-        let query = self.search.read(cx).content.clone();
-        let replacement = self.replacement.read(cx).content.clone();
-        let (case, word, regex) = (self.match_case, self.whole_word, self.regex);
-        let previous = self
-            .matches
-            .get(self.match_index)
-            .map(|m| m.from)
-            .unwrap_or(0);
-        self.matches.clear();
-        self.search_task = Some(cx.spawn(async move |this, cx| {
-            let text = source.clone();
-            let result = cx
-                .background_executor()
-                .spawn(async move {
-                    vorkspace_editor::editor_analysis::search(
-                        &text,
-                        &query,
-                        &replacement,
-                        case,
-                        word,
-                        regex,
-                    )
-                })
-                .await;
-            let _ = this.update(cx, |this, cx| {
-                if this.input.read(cx).content != source {
-                    return;
-                }
-                match result {
-                    Ok(result) => {
-                        this.matches = result.matches;
-                        this.search_invalid = result.invalid;
-                    }
-                    Err(_) => {
-                        this.matches.clear();
-                        this.search_invalid = true;
-                    }
-                }
-                this.match_index = this
-                    .matches
-                    .iter()
-                    .position(|m| m.from >= previous)
-                    .unwrap_or(0);
-                let ranges = this.matches.iter().map(|m| m.from..m.to).collect();
-                this.input
-                    .update(cx, |i, cx| i.set_search_matches(ranges, cx));
-                if let Some(m) = this.matches.get(this.match_index) {
-                    this.input
-                        .update(cx, |i, cx| i.select_range(m.from..m.to, cx));
-                }
-                cx.notify();
-            });
-        }));
-        cx.notify();
-    }
-    fn step_match(&mut self, backwards: bool, cx: &mut Context<Self>) {
-        if self.matches.is_empty() {
-            return;
-        }
-        self.match_index = (self.match_index as isize + if backwards { -1 } else { 1 })
-            .rem_euclid(self.matches.len() as isize) as usize;
-        let m = &self.matches[self.match_index];
-        self.input
-            .update(cx, |i, cx| i.select_range(m.from..m.to, cx));
-        cx.notify();
-    }
-    fn replace_matches(&mut self, all: bool, cx: &mut Context<Self>) {
-        if self.input.read(cx).is_composing() || self.matches.is_empty() {
-            return;
-        }
-        let mut text = self.input.read(cx).content.to_string();
-        let cursor = if all {
-            for m in self.matches.iter().rev() {
-                text.replace_range(m.from..m.to, &m.insert);
-            }
-            0
-        } else {
-            let m = &self.matches[self.match_index];
-            text.replace_range(m.from..m.to, &m.insert);
-            m.from + m.insert.len()
-        };
-        self.input.update(cx, |i, cx| {
-            i.replace_bytes(0..i.content.len(), &text, cursor, cx)
-        });
     }
     fn step_change(&mut self, backwards: bool, cx: &mut Context<Self>) {
         let changes = &self.input.read(cx).editor_analysis().changes;
@@ -938,7 +541,7 @@ impl FileEditor {
             return;
         }
         self.change_index = if backwards {
-            self.change_index.saturating_sub(1)
+            self.change_index.min(changes.len() - 1).saturating_sub(1)
         } else {
             (self.change_index + 1).min(changes.len() - 1)
         };
@@ -946,21 +549,6 @@ impl FileEditor {
         self.input
             .update(cx, |i, cx| i.select_range(from..from, cx));
         cx.notify();
-    }
-    fn revert_change(&mut self, cx: &mut Context<Self>) {
-        self.apply_change(false, cx);
-    }
-    fn dismiss_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.search_open {
-            self.search_open = false;
-            self.search_task = None;
-            self.input
-                .update(cx, |i, cx| i.set_search_matches(Vec::new(), cx));
-            window.focus(&self.input.focus_handle(cx), cx);
-            cx.notify();
-        } else {
-            cx.propagate();
-        }
     }
 }
 impl gpui::Render for FileEditor {
@@ -979,8 +567,6 @@ impl gpui::Render for FileEditor {
                 .into_any_element()
         });
         let selection_menu = self.code_selection_menu(window, cx);
-        self.input
-            .update(cx, |i, _| i.set_editor_diff(false, !self.git_staged));
         if ((!ready || self.preview) && self.input.focus_handle(cx).is_focused(window))
             || (!self.search_open
                 && (self.search.focus_handle(cx).is_focused(window)
@@ -1041,9 +627,10 @@ impl gpui::Render for FileEditor {
                     self.unsupported
                         .clone()
                         .or(self.error.clone())
+                        .or(self.load_error.clone())
                         .unwrap_or_else(|| "Opening file…".into()),
                 )
-                .when(!self.loading, |d| {
+                .when(self.load_task.is_none(), |d| {
                     d.child(
                         div()
                             .id("open-file-externally")
@@ -1067,7 +654,7 @@ impl gpui::Render for FileEditor {
                             })),
                     )
                 })
-                .when(!self.loading, |d| {
+                .when(self.load_task.is_none(), |d| {
                     d.child(
                         div()
                             .flex()
@@ -1170,28 +757,13 @@ impl gpui::Render for FileEditor {
             }))
             .on_action(cx.listener(|this, _: &Format, _, cx| this.format_document(cx)))
             .on_action(cx.listener(|this, _: &MatchCase, _, cx| {
-                if this.search_open {
-                    this.match_case = !this.match_case;
-                    this.find_matches(cx);
-                } else {
-                    cx.propagate();
-                }
+                this.toggle_search_option(SearchOption::Case, cx)
             }))
             .on_action(cx.listener(|this, _: &WholeWord, _, cx| {
-                if this.search_open {
-                    this.whole_word = !this.whole_word;
-                    this.find_matches(cx);
-                } else {
-                    cx.propagate();
-                }
+                this.toggle_search_option(SearchOption::Word, cx)
             }))
             .on_action(cx.listener(|this, _: &Regex, _, cx| {
-                if this.search_open {
-                    this.regex = !this.regex;
-                    this.find_matches(cx);
-                } else {
-                    cx.propagate();
-                }
+                this.toggle_search_option(SearchOption::Regex, cx)
             }))
             .on_action(cx.listener(|this, _: &PreviousChange, _, cx| this.step_change(true, cx)))
             .on_action(cx.listener(|this, _: &NextChange, _, cx| this.step_change(false, cx)))
@@ -1199,13 +771,17 @@ impl gpui::Render for FileEditor {
             .on_action(cx.listener(|this, _: &FindNext, _, cx| this.step_match(false, cx)))
             .on_action(cx.listener(|this, _: &FindPrevious, _, cx| this.step_match(true, cx)))
             .on_action(cx.listener(|this, _: &DismissSearch, w, cx| this.dismiss_search(w, cx)))
-            .child(self.path_header(controls, cx))
+            .child(self.path_header(controls))
             .when(self.search_open, |d| d.child(self.search_panel(cx)))
             .when_some(
-                self.error.clone().filter(|_| ready).or_else(|| {
-                    self.disk_changed
-                        .then(|| "File changed on disk. Reload to use the new version.".into())
-                }),
+                self.error
+                    .clone()
+                    .or_else(|| self.load_error.clone())
+                    .filter(|_| ready)
+                    .or_else(|| {
+                        self.disk_changed
+                            .then(|| "File changed on disk. Reload to use the new version.".into())
+                    }),
                 |d, error| {
                     d.child(
                         div()
@@ -1468,12 +1044,17 @@ mod tests {
         cx.run_until_parked();
         window
             .update(cx, |e, w, cx| {
-                assert_eq!(e.matches.len(), 2);
+                assert_eq!(e.find_state.count(), 2);
                 e.step_match(false, cx);
-                assert_eq!(e.match_index, 1);
+                let input = e.input.read(cx);
+                let last = input.content.rfind("hello").unwrap();
+                assert_eq!(input.selection_range(), last..last + "hello".len());
                 e.dismiss_search(w, cx);
                 e.input
                     .update(cx, |i, cx| i.replace_text_in_range(None, "world", w, cx));
+                let edited = e.input.read(cx).selection_range();
+                e.step_match(false, cx);
+                assert_eq!(e.input.read(cx).selection_range(), edited);
             })
             .unwrap();
         cx.run_until_parked();

@@ -4,7 +4,24 @@ use vorkspace_ui::radius;
 pub(crate) struct StartOrchestration(pub vorkspace_core::orchestration::Plan);
 pub(crate) struct StopOrchestration;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ManagedAvailability {
+    Pending,
+    Available,
+    Unavailable,
+}
+
 impl Conversation {
+    pub(super) fn selected_turn_mode(&self) -> Option<&'static str> {
+        [
+            (self.settings.orchestrator, "orchestrator"),
+            (self.settings.plan, "plan"),
+            (self.settings.operator, "operator"),
+        ]
+        .into_iter()
+        .find_map(|(selected, mode)| selected.then_some(mode))
+    }
+
     pub(crate) fn set_app_environment(
         &mut self,
         environment: std::collections::HashMap<String, String>,
@@ -14,23 +31,9 @@ impl Conversation {
     /// A restored project pane may still carry its old Operator environment.
     /// Once a Bot owns the conversation, only its configured capability applies.
     pub(super) fn prepare_app_environment(&self, settings: &mut Settings) {
-        if settings.bot.is_some() {
-            return;
-        }
-        if let Some((context, environment)) = self.minion() {
-            settings.minion = Some(context);
-            settings.environment.extend(environment);
-        } else {
+        if settings.bot.is_none() {
             settings.environment.extend(self.app_environment.clone());
         }
-    }
-    /// This session's minion attachment, if it is a minion now.
-    pub(crate) fn minion(&self) -> Option<crate::conversation::MinionAttachment> {
-        self.minions
-            .as_ref()?
-            .borrow()
-            .get(&self.summary.id)
-            .cloned()
     }
     pub(crate) fn enable_mode(&mut self, id: &str, cx: &mut Context<Self>) {
         if self.reject_user_entry(cx) {
@@ -66,7 +69,7 @@ impl Conversation {
     }
     pub(super) fn clear_submitted_mode(&mut self, cx: &mut Context<Self>) {
         // The accepted turn or queue item already owns its mode. The empty
-        // composer starts a fresh draft, matching Composer.tsx's submit reset.
+        // composer starts a fresh draft.
         self.settings.plan = false;
         self.settings.operator = false;
         self.settings.orchestrator = false;
@@ -80,11 +83,6 @@ impl Conversation {
             return;
         }
 
-        if self.is_remote() && matches!(id, "operator" | "orchestrator") {
-            self.status = "This mode is not available on remote projects.".into();
-            cx.notify();
-            return;
-        }
         if id != "draft" {
             self.follow_ups.draft_selected = false;
         }
@@ -516,7 +514,7 @@ impl Conversation {
     ) {
         self.orchestration_progress = progress;
         if self.needs_history_restore() {
-            self.load(cx);
+            self.load_complete(cx);
         }
         cx.notify();
     }
@@ -524,20 +522,25 @@ impl Conversation {
         let rows = self.transcript.read(cx).source_rows();
         let start = rows.iter().rposition(|row| row.role == "user").unwrap_or(0);
         let text = vorkspace_core::response::prose(&rows[start..]);
+        let status = if self.turn_state == TurnState::Settled(TurnOutcome::Cancelled) {
+            "Stopped"
+        } else {
+            self.status.as_str()
+        };
         (
-            self.status == "Ready",
-            vorkspace_core::response::limit(&format!("{}\n{}", self.status, text), 12_000),
+            self.turn_state == TurnState::Settled(TurnOutcome::Completed),
+            vorkspace_core::response::limit(&format!("{status}\n{text}"), 12_000),
         )
     }
     pub(crate) fn ready_for_external(&self, cx: &gpui::App) -> bool {
         !self.user_read_only()
+            && turn_driver::available(&self.store, self.summary.id, cx)
             && Kind::parse(&self.summary.provider).is_some()
             && self.composer_draft.ready_for_replacement()
             && self.pending_attachments.is_empty()
             && self.history_ready()
             && !self.editing_last_turn.pending()
-            && !self.busy
-            && !self.stopping
+            && !self.turn_in_flight()
             && !self.preparing_worktree
             && !self.attaching
             && !self.account_switching
@@ -547,41 +550,64 @@ impl Conversation {
     /// Managed runs must wait for history restoration and worktree setup as
     /// well as the provider, including submissions deferred by the editor.
     pub(crate) fn external_submission_pending(&self) -> bool {
-        self.busy
+        self.turn_in_flight()
+            || self.composer_draft.waiting_to_submit()
             || self.ticket_context.pending()
-            || self.stopping
             || self.preparing_worktree
             || self.attaching
             || self.account_switching
-            || self.loading
+            || self.history_loading()
             || (!self.history_actions.is_empty() && self.history_ready())
             || self.editing_last_turn.pending()
     }
-    /// An evicted history can be restored for a managed run; a user's draft
-    /// or an already accepted message must keep ownership of this composer.
-    pub(crate) fn available_for_managed_run(&self, cx: &gpui::App) -> bool {
-        !self.busy
-            && !self.ticket_context.pending()
-            && !self.stopping
-            && !self.preparing_worktree
-            && !self.attaching
-            && !self.account_switching
-            && !self.editing_last_turn.pending()
-            && self.input.read(cx).content.is_empty()
-            && self.attachments.is_empty()
-            && self.follow_ups.state.messages.is_empty()
-            && self.follow_ups.state.draft.is_none()
-            && !self.settings.worktree_removed
+    pub(crate) fn managed_availability(&self, cx: &gpui::App) -> ManagedAvailability {
+        let input = self.input.read(cx);
+        if self.settings.bot.is_some()
+            || self.user_read_only()
+            || self.summary.archived
+            || self.settings.worktree_removed
+            || self.settings.pending_provider_switch.is_some()
+            || self.settings.usage_limit.is_some()
+            || !turn_driver::available(&self.store, self.summary.id, cx)
+            || self.turn_in_flight()
+            || self.unconfirmed_submission.is_some()
+            || self.needs_approval()
+            || self.ticket_context.pending()
+            || self.preparing_worktree
+            || self.attaching
+            || self.account_switching
+            || self.editing_last_turn.pending()
+            || !self.history_actions.is_empty()
+            || self.history_read == history::ReadState::Failed
+            || self.composer_draft.error.is_some()
+            || self.composer_draft.submitting()
+            || self.composer_draft.waiting_to_submit()
+            || !input.content.is_empty()
+            || input.is_composing()
+            || !self.attachments.is_empty()
+            || !self.pending_attachments.is_empty()
+            || !self.follow_ups.state.messages.is_empty()
+            || self.has_saved_draft()
+            || self.follow_ups.edit.is_some()
+            || self.follow_ups.sending.is_some()
+            || self.follow_ups.state.revision != self.follow_ups.persisted
+        {
+            ManagedAvailability::Unavailable
+        } else if !self.history_ready() || self.composer_draft.is_hydrating() {
+            ManagedAvailability::Pending
+        } else if self.composer_draft.ready_for_replacement() && !self.composer_draft.has_recovery()
+        {
+            ManagedAvailability::Available
+        } else {
+            ManagedAvailability::Unavailable
+        }
     }
     pub(crate) fn send_coordinator_report(&mut self, prompt: String, cx: &mut Context<Self>) {
-        if !self.history_ready() || self.stopping {
+        if !self.history_ready() || self.is_stopping() {
             self.defer_history_action(move |this, cx| this.send_coordinator_report(prompt, cx), cx);
             return;
         }
-        let internal = self.settings.internal_message;
-        self.settings.internal_message = true;
-        self.launch_prompt(prompt, cx);
-        self.settings.internal_message = internal;
+        self.launch_coordinator_prompt(prompt, cx);
     }
     pub(super) fn orchestration_card(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         if self.orchestration_plan.is_none()

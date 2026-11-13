@@ -36,7 +36,7 @@ fn chat(cx: &mut TestAppContext) -> WindowHandle<Conversation> {
     cx.update(|cx| {
         vorkspace_ui::clock::use_test_clock(cx);
         input::bind(cx);
-        let store = Store::open(Path::new(":memory:")).unwrap();
+        let store = Store::test(Path::new(":memory:")).unwrap();
         let summary = store.create("codex", "/private/tmp/bot-queue-ui").unwrap();
         cx.open_window(Default::default(), |_, cx| {
             cx.new(|cx| {
@@ -69,11 +69,11 @@ fn island_status_distinguishes_finished_work_from_attention_and_active_turns(
     let window = chat(cx);
     window
         .update(cx, |view, _, _| {
-            view.loading = false;
+            view.history_read = history::ReadState::Idle;
             view.status = "Ready".into();
             view.summary.has_messages = true;
             assert_eq!(view.bot_status_label(), "Done");
-            view.busy = true;
+            view.set_running_for_test(true);
             view.status = "Thinking…".into();
             assert_eq!(view.bot_status_label(), "Thinking");
             view.status = "Running a tool".into();
@@ -81,7 +81,7 @@ fn island_status_distinguishes_finished_work_from_attention_and_active_turns(
             view.settings.usage_limit = Some(Default::default());
             assert_eq!(view.bot_status_label(), "Usage limit reached");
             view.settings.usage_limit = None;
-            view.busy = false;
+            view.set_running_for_test(false);
             view.status = "Provider disconnected".into();
             assert_eq!(
                 view.bot_status_label(),
@@ -164,7 +164,7 @@ fn successive_draft_edits_survive_an_intermediate_delivery_receipt(cx: &mut Test
     let path = dir.path().join("draft-versions.sqlite");
     let attachment = dir.path().join("attachment.txt");
     std::fs::write(&attachment, "saved attachment").unwrap();
-    let store = Store::open(&path).unwrap();
+    let store = Store::test(&path).unwrap();
     let summary = store.create("codex", "/tmp").unwrap();
     let session = summary.id;
     let mut roster = vorkspace_core::bot::Roster::default();
@@ -232,7 +232,7 @@ fn successive_draft_edits_survive_an_intermediate_delivery_receipt(cx: &mut Test
 
     // The second connection queues exactly the intermediate snapshot while
     // the first window keeps the same editor open.
-    let mut other = Store::open(&path).unwrap();
+    let mut other = Store::test(&path).unwrap();
     let stale_state = other.follow_ups(session).unwrap();
     let intermediate = stale_state.draft.as_ref().unwrap().clone();
     assert_eq!(intermediate.text, "Intermediate");
@@ -274,10 +274,9 @@ fn successive_draft_edits_survive_an_intermediate_delivery_receipt(cx: &mut Test
     .unwrap();
     assert_eq!(marker["id"], predecessor.id);
     assert_eq!(marker["nextId"], final_draft.id);
-    assert_eq!(
-        final_draft.replaces_draft_id.as_deref(),
-        Some(predecessor.id.as_str())
-    );
+    // Replacement lineage is durable in the origin marker; this field is
+    // used while writing the draft and is not part of its stored block.
+    assert!(final_draft.replaces_draft_id.is_none());
     assert_eq!(final_draft.attachments.len(), 1);
     assert_eq!(
         std::fs::read(&final_draft.attachments[0]).unwrap(),
@@ -308,14 +307,16 @@ fn successive_draft_edits_survive_an_intermediate_delivery_receipt(cx: &mut Test
     other
         .write_rows_with_message(session, 0, &transcript.rows, Some(&queued.id))
         .unwrap();
+    let mut live_draft = final_draft.clone();
+    live_draft.replaces_draft_id = Some(predecessor.id);
     window
         .update(visual, |view, _, cx| {
             view.bot_draft_outbox_saved(&queued, cx);
-            assert_eq!(view.follow_ups.state.draft.as_ref(), Some(&final_draft));
+            assert_eq!(view.follow_ups.state.draft.as_ref(), Some(&live_draft));
         })
         .unwrap();
     drop(other);
-    let reopened = Store::open(&path).unwrap();
+    let reopened = Store::test(&path).unwrap();
     assert!(
         reopened
             .setting(&format!("bot-delivered:{session}:{}", intermediate.id))
@@ -462,7 +463,7 @@ fn saved_bot_draft_survives_reopen_and_transfers_the_same_attachment_and_identit
     image::RgbaImage::from_pixel(100, 80, image::Rgba([255, 255, 255, 255]))
         .save(&source)
         .unwrap();
-    let store = Store::open(&path).unwrap();
+    let store = Store::test(&path).unwrap();
     let summary = store.create("codex", "/private/tmp/bot-draft").unwrap();
     let session = summary.id;
     let window = cx.update(|cx| {
@@ -547,7 +548,7 @@ fn saved_bot_draft_survives_reopen_and_transfers_the_same_attachment_and_identit
         .unwrap();
     drop(owner);
     std::fs::write(&source, "changed bytes").unwrap();
-    let store = Store::open(&path).unwrap();
+    let store = Store::test(&path).unwrap();
     let summary = store
         .sessions()
         .unwrap()
@@ -673,7 +674,7 @@ fn saved_bot_draft_survives_reopen_and_transfers_the_same_attachment_and_identit
 fn older_outbox_ack_cannot_remove_an_edited_draft_from_another_connection(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("ownership.sqlite");
-    let store = Store::open(&path).unwrap();
+    let store = Store::test(&path).unwrap();
     let summary = store.create("codex", "/tmp").unwrap();
     let id = summary.id;
     let window = cx.update(|cx| {
@@ -696,7 +697,7 @@ fn older_outbox_ack_cannot_remove_an_edited_draft_from_another_connection(cx: &m
             view.follow_ups.state.draft.clone().unwrap()
         })
         .unwrap();
-    let other = Store::open(&path).unwrap();
+    let other = Store::test(&path).unwrap();
     let mut newer = other.follow_ups(id).unwrap();
     newer.revision += 1;
     newer.draft.as_mut().unwrap().id = "edited-version".into();
@@ -722,8 +723,8 @@ fn restart_consumes_only_the_composer_revision_that_became_a_saved_bot_draft(
     cx: &mut TestAppContext,
 ) {
     for (open, newer) in [
-        (Store::open as fn(&Path) -> Result<Store, String>, false),
-        (Store::open, true),
+        (Store::test as fn(&Path) -> Result<Store, String>, false),
+        (Store::test, true),
         (Store::open_vorkspace, false),
         (Store::open_vorkspace, true),
     ] {
@@ -817,12 +818,12 @@ fn native_bot_draft_and_add_menu_capture() {
             theme: if light { "light" } else { "dark" }.into(),
             ..Default::default()
         };
-        vorkspace_ui::theme::configure(&prefs, false, true);
+        vorkspace_ui::theme::configure(&prefs, false);
         cx.update(|cx| {
             cx.set_global(prefs);
             input::bind(cx);
         });
-        let store = Store::open(Path::new(":memory:")).unwrap();
+        let store = Store::test(Path::new(":memory:")).unwrap();
         let summary = store.create("codex", "/tmp").unwrap();
         let captured_chat = Rc::new(RefCell::new(None));
         let captured = captured_chat.clone();
@@ -889,7 +890,7 @@ fn native_bot_draft_and_add_menu_capture() {
         cx.update_window(window.into(), |_, window, _| window.remove_window())
             .unwrap();
     }
-    vorkspace_ui::theme::configure(&Default::default(), false, true);
+    vorkspace_ui::theme::configure(&Default::default(), false);
 }
 
 #[gpui::test]
@@ -998,7 +999,7 @@ fn automatic_updates_stay_quiet_and_peer_delivery_keeps_one_transcript_message(
         visual.simulate_resize(size(px(width), px(600.)));
         window
             .update(visual, |view, _, cx| {
-                view.busy = false;
+                view.set_running_for_test(false);
                 view.bot_ui.pending.clear();
                 view.bot_ui.delivered = None;
                 view.sync_bot_pending(cx);
@@ -1009,7 +1010,7 @@ fn automatic_updates_stay_quiet_and_peer_delivery_keeps_one_transcript_message(
         let composer = visual.debug_bounds("composer-box").unwrap();
         window
             .update(visual, |view, _, cx| {
-                view.busy = true;
+                view.set_running_for_test(true);
                 view.bot_ui.pending = vec![
                     message("background", "[Delegated work completed]", true),
                     peer_message(),
@@ -1027,12 +1028,12 @@ fn automatic_updates_stay_quiet_and_peer_delivery_keeps_one_transcript_message(
 
         window
             .update(visual, |view, _, cx| {
-                view.busy = false;
+                view.set_running_for_test(false);
                 view.bot_post("bot-system", peer_message().text, cx)
                     .unwrap();
                 view.bot_ui.delivered = Some("peer".into());
                 view.sync_bot_pending(cx);
-                view.busy = true;
+                view.set_running_for_test(true);
                 cx.notify();
             })
             .unwrap();
@@ -1147,7 +1148,7 @@ fn only_the_users_own_message_steers_a_running_bot_turn(cx: &mut TestAppContext)
                     .push((event.id.clone(), event.error.clone()));
             })
             .detach();
-            view.busy = true;
+            view.set_running_for_test(true);
             view.controls = Some(controls);
             let user = Message {
                 prepared_prompt: Some("Saved MCP context\n\nUse the other approach".into()),
@@ -1198,7 +1199,7 @@ fn a_final_update_keeps_the_accepted_steer_receipt(cx: &mut TestAppContext) {
     let (controls, _received) = std::sync::mpsc::channel();
     window
         .update(cx, |view, _, cx| {
-            view.busy = true;
+            view.set_running_for_test(true);
             view.controls = Some(controls);
             view.follow_ups.ready = true;
             assert!(view.bot_steer(&message("steer", "Change course", false), cx));
@@ -1284,7 +1285,7 @@ fn card_save_admission_stays_responsive_and_publishes_latest_at_the_current_row(
         })
         .unwrap();
     drop(guard);
-    cx.update(|cx| vorkspace_runtime::runtime::card_persistence::finish_for_test(cx));
+    cx.update(|cx| crate::card_saves::finish_for_test(cx));
     cx.run_until_parked();
     window
         .update(cx, |view, _, cx| {
@@ -1331,7 +1332,7 @@ fn committed_card_refresh_survives_a_new_submission_and_the_next_refresh(cx: &mu
         drop(guard);
         // Wait for the actual worker's commit without handling the UI receipt
         // or closing the worker that must perform the following refresh.
-        cx.update(|cx| vorkspace_runtime::runtime::card_persistence::wait_for_saves_for_test(cx));
+        cx.update(|cx| crate::card_saves::wait_for_saves_for_test(cx));
         assert_eq!(
             serde_json::from_str::<serde_json::Value>(
                 &locked(&store).unwrap().load(session).unwrap().rows[index].text
@@ -1388,7 +1389,7 @@ fn committed_card_refresh_survives_a_new_submission_and_the_next_refresh(cx: &mu
                 assert!(!view.bot_ui.card_versions.is_empty());
             })
             .unwrap();
-        cx.update(|cx| vorkspace_runtime::runtime::card_persistence::wait_for_saves_for_test(cx));
+        cx.update(|cx| crate::card_saves::wait_for_saves_for_test(cx));
         cx.run_until_parked();
         window
             .update(cx, |view, _, cx| {
@@ -1407,7 +1408,7 @@ fn committed_card_refresh_survives_a_new_submission_and_the_next_refresh(cx: &mu
             "Latest"
         );
     }
-    cx.update(|cx| vorkspace_runtime::runtime::card_persistence::finish_for_test(cx));
+    cx.update(|cx| crate::card_saves::finish_for_test(cx));
 }
 
 #[gpui::test]
@@ -1446,7 +1447,7 @@ fn card_save_completion_keeps_replacements_and_reconciles_new_submissions(cx: &m
     }
     drop(guard1);
     drop(guard2);
-    cx.update(|cx| vorkspace_runtime::runtime::card_persistence::finish_for_test(cx));
+    cx.update(|cx| crate::card_saves::finish_for_test(cx));
     cx.run_until_parked();
     for (fixture, replacement) in [(&first, true), (&second, false)] {
         let (window, store, id, index, _) = fixture;
@@ -1579,7 +1580,7 @@ fn bot_plus_offers_upload_and_queue_and_queue_applies_to_one_message(cx: &mut Te
             view.send(cx);
             assert!(!view.bot_ui.queue, "queueing applies to one message");
             assert_eq!(view.input.read(cx).content, "Unsent draft");
-            let id = view.bot_ui.direct_sending.as_ref().unwrap().0.clone();
+            let id = view.bot_ui.direct_sending.as_ref().unwrap().id.clone();
             view.bot_draft_outbox_saved(&message(&id, "Unsent draft", false), cx);
             view.input
                 .update(cx, |input, cx| input.set_text("Next".into(), cx));
@@ -1611,7 +1612,7 @@ fn direct_bot_send_retains_recovery_until_outbox_ack_and_reuses_retry_identity(
             view.send(cx);
             assert_eq!(view.input.read(cx).content, "Keep this message");
             let pending = view.bot_ui.direct_sending.as_ref().unwrap();
-            assert!(!pending.4);
+            assert!(!pending.retry);
             let db = locked(&view.store).unwrap();
             assert_eq!(
                 db.composer_recoveries(view.summary.id).unwrap()[0].payload["text"],
@@ -1620,16 +1621,16 @@ fn direct_bot_send_retains_recovery_until_outbox_ack_and_reuses_retry_identity(
             let recovery = db.composer_recoveries(view.summary.id).unwrap();
             assert_eq!(recovery[0].payload["botSubmission"]["mode"], "plan");
             assert_eq!(recovery[0].payload["botSubmission"]["queue"], true);
-            pending.0.clone()
+            pending.id.clone()
         })
         .unwrap();
     window
         .update(cx, |view, _, cx| {
             view.bot_draft_outbox_failed(&id, "disk failure", cx);
             assert_eq!(view.input.read(cx).content, "Keep this message");
-            assert!(view.bot_ui.direct_sending.as_ref().unwrap().4);
+            assert!(view.bot_ui.direct_sending.as_ref().unwrap().retry);
             view.send(cx);
-            assert_eq!(view.bot_ui.direct_sending.as_ref().unwrap().0, id);
+            assert_eq!(view.bot_ui.direct_sending.as_ref().unwrap().id, id);
             view.input
                 .update(cx, |input, cx| input.select_utf16(0..0, cx));
             view.bot_draft_outbox_saved(&message(&id, "Keep this message", false), cx);
@@ -1770,7 +1771,7 @@ fn failed_composer_clear_keeps_the_submission_recovery(cx: &mut TestAppContext) 
         chat.input
             .update(cx, |input, cx| input.set_text("Pending".into(), cx));
         chat.send(cx);
-        chat.bot_ui.direct_sending.as_ref().unwrap().0.clone()
+        chat.bot_ui.direct_sending.as_ref().unwrap().id.clone()
     });
     let other = Store::open_vorkspace(&path).unwrap();
     let saved = other.composer_draft(id).unwrap().unwrap();

@@ -9,7 +9,7 @@ impl Bot {
     pub fn is_retired(&self) -> bool {
         self.minion.as_ref().is_some_and(|m| m.retired)
     }
-    pub fn storage_id(&self) -> &str {
+    pub(crate) fn storage_id(&self) -> &str {
         self.minion.as_ref().map_or(&self.id, |m| &m.parent_id)
     }
 }
@@ -42,7 +42,7 @@ impl Roster {
         let owner = self.get(actor.storage_id())?;
         (!owner.is_minion()).then_some(owner)
     }
-    pub fn can_read_peer(&self, from: &str, to: &str) -> bool {
+    pub(crate) fn can_read_peer(&self, from: &str, to: &str) -> bool {
         let (Some(a), Some(b)) = (self.get(from), self.get(to)) else {
             return false;
         };
@@ -182,27 +182,27 @@ impl Roster {
     /// cannot regain admission merely because a view was reconstructed.
     pub fn sanitize_team_queues(&mut self) {
         let roster: &Roster = self;
-        let invalid = roster
+        let invalid: Vec<_> = roster
             .bots
             .iter()
-            .flat_map(|b| {
-                b.outbox.iter().filter_map(move |m| {
-                    let allowed = roster.is_active(&b.id)
-                        && if let Some(peer) = &m.peer {
-                            roster.can_communicate(&peer.from, &b.id)
-                        } else {
-                            !b.is_minion()
-                        };
-                    (!allowed).then_some(m.id.clone())
-                })
+            .enumerate()
+            .flat_map(|(bot_index, bot)| {
+                bot.outbox
+                    .iter()
+                    .enumerate()
+                    .filter_map(move |(message_index, message)| {
+                        let allowed = roster.is_active(&bot.id)
+                            && match &message.peer {
+                                Some(peer) => roster.can_communicate(&peer.from, &bot.id),
+                                None => !bot.is_minion(),
+                            };
+                        (!allowed).then_some((bot_index, message_index))
+                    })
             })
-            .collect::<HashSet<_>>();
-        for bot in &mut self.bots {
-            for message in &mut bot.outbox {
-                if invalid.contains(&message.id) {
-                    message.error = Some("Team membership no longer permits this work".into());
-                }
-            }
+            .collect();
+        for (bot, message) in invalid {
+            self.bots[bot].outbox[message].error =
+                Some("Team membership no longer permits this work".into());
         }
     }
     pub(crate) fn migrate_minions(&mut self) {

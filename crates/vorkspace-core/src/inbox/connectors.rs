@@ -40,53 +40,8 @@ impl Connectors {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::Store;
-    use crate::{
-        desktop_preferences::DesktopPreferences,
-        inbox::{Item, Service, ViewState},
-    };
-    use serde_json::json;
-    use std::{path::Path, sync::Arc};
-
-    #[test]
-    fn desktop_switches_survive_native_view_state_and_saved_native_edits() {
-        let directory = tempfile::tempdir().unwrap();
-        let database = directory.path().join("data.sqlite");
-        let preferences = Arc::new(DesktopPreferences::from_values(&[(
-            "vorkspace.inboxConnectors.v1",
-            json!({"github":false,"gitlab":true,"jira":false,"linear":true,"azuredevops":true}),
-        )]));
-        let store = Store::open_vorkspace_with_preferences_for_test(&database, preferences.clone())
-            .unwrap();
-        // A native 1.0 view-state file must not mask the older connector switches.
-        store
-            .save_setting(
-                "native-inbox-state",
-                r#"{"source":"linear","seen":{"seeded":true}}"#,
-            )
-            .unwrap();
-        let mut state = ViewState::load(&store);
-        assert_eq!(
-            state.connectors.enabled_providers().collect::<Vec<_>>(),
-            ["gitlab"]
-        );
-        assert_eq!(state.source, "gitlab");
-        let credential = directory.path().join("gitlab-config.json");
-        std::fs::write(&credential, "saved private connection").unwrap();
-        state.connectors.set("gitlab", false).unwrap();
-        state.connectors.save(&store).unwrap();
-        drop(store);
-        let reopened =
-            Store::open_vorkspace_with_preferences_for_test(&database, preferences).unwrap();
-        let state = ViewState::load(&reopened);
-        assert!(state.connectors.enabled_providers().next().is_none());
-        assert_eq!(state.source, "");
-        assert!(state.seen.seeded);
-        assert_eq!(
-            std::fs::read_to_string(credential).unwrap(),
-            "saved private connection"
-        );
-    }
+    use crate::inbox::{Item, Service, ViewState};
+    use std::path::Path;
 
     #[test]
     fn disabled_connectors_do_not_create_polling_or_connection_results() {
@@ -126,8 +81,9 @@ mod tests {
                     .unwrap_err(),
                 "Unsupported connector"
             );
-            assert_eq!(service.details(&item).unwrap_err(), "Unsupported connector");
-            assert_eq!(service.thread(&item).unwrap_err(), "Unsupported connector");
+            assert!(
+                matches!(service.discussion(&item), Err(error) if error == "Unsupported connector")
+            );
             assert_eq!(
                 service
                     .comment(&item, "comment".into(), String::new())

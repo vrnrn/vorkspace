@@ -9,7 +9,7 @@ use gpui::{
     point, prelude::*, px, relative, rgb, size,
 };
 use std::{borrow::Cow, ops::Range};
-use unicode_segmentation::UnicodeSegmentation;
+use unicode_segmentation::{GraphemeCursor, UnicodeSegmentation};
 
 mod code;
 mod command;
@@ -73,10 +73,6 @@ actions!(
 );
 pub struct Submitted;
 pub struct Changed;
-pub(crate) enum CodeAction {
-    Stage(usize),
-    Revert(usize),
-}
 pub struct Rejected(pub &'static str);
 
 pub fn bind(cx: &mut App) {
@@ -215,7 +211,6 @@ pub struct Input {
 impl EventEmitter<Submitted> for Input {}
 impl EventEmitter<Changed> for Input {}
 impl EventEmitter<Rejected> for Input {}
-impl EventEmitter<CodeAction> for Input {}
 impl Focusable for Input {
     fn focus_handle(&self, _: &App) -> FocusHandle {
         self.focus.clone()
@@ -231,8 +226,8 @@ impl Input {
     }
 
     /// Keep authentication text out of drawing, accessibility and clipboard.
-    pub(crate) fn set_secret(&mut self, secret: bool) {
-        self.secret = secret;
+    pub(crate) fn set_secret(&mut self) {
+        self.secret = true;
     }
     pub fn new(cx: &mut Context<Self>) -> Self {
         Self {
@@ -367,7 +362,7 @@ impl Input {
         self.placeholder = self.label.clone();
         cx.notify();
     }
-    /// NewHabitPage's three-row AutoTextarea, capped like React's AutoTextarea.
+    /// The new-habit instructions field: a capped, auto-growing three-row textarea.
     pub(crate) fn habit_instructions(cx: &mut Context<Self>) -> Self {
         let mut input = Self::commit_message(cx);
         input.label = "What it does".into();
@@ -415,8 +410,8 @@ impl Input {
     pub(crate) fn set_font_size(&mut self, size: f32) {
         self.font_size = size;
     }
-    pub(crate) fn set_centered(&mut self, centered: bool) {
-        self.centered = centered;
+    pub(crate) fn set_centered(&mut self) {
+        self.centered = true;
     }
     pub(crate) fn set_line_height(&mut self, height: f32) {
         self.line_height = height;
@@ -432,7 +427,7 @@ impl Input {
         input.secondary_submit = false;
         input
     }
-    /// MessageQueue.tsx keeps its one-row textarea height while Shift+Enter
+    /// A queued message keeps its one-row textarea height while Shift+Enter
     /// inserts newlines; the field scrolls to the caret within that row.
     pub(crate) fn queued_message(cx: &mut Context<Self>) -> Self {
         let mut input = Self::memory_fact("Edit queued message", cx);
@@ -464,8 +459,7 @@ impl Input {
         Some(text)
     }
     /// An empty composer hands its document and line keys (Cmd+arrows) on to
-    /// the workspace's session and project navigation, as React's
-    /// `emptyComposer` condition does. Returns whether it did.
+    /// the workspace's session and project navigation. Returns whether it did.
     fn yields_navigation(&self, cx: &mut Context<Self>) -> bool {
         let yields = self.code.is_none()
             && !self.single_line
@@ -652,31 +646,20 @@ impl Input {
         if let Some(at) = self.folded_boundary(at, true) {
             return at;
         }
-        if self.code.is_some() {
-            return self.content[..at]
-                .grapheme_indices(true)
-                .next_back()
-                .map_or(0, |(at, _)| at);
-        }
-        self.content
-            .grapheme_indices(true)
-            .rev()
-            .find_map(|(ix, _)| (ix < at).then_some(ix))
+        GraphemeCursor::new(at, self.content.len(), true)
+            .prev_boundary(&self.content, 0)
+            .ok()
+            .flatten()
             .unwrap_or(0)
     }
     fn next(&self, at: usize) -> usize {
         if let Some(at) = self.folded_boundary(at, false) {
             return at;
         }
-        if self.code.is_some() {
-            return self.content[at..]
-                .grapheme_indices(true)
-                .nth(1)
-                .map_or(self.content.len(), |(next, _)| at + next);
-        }
-        self.content
-            .grapheme_indices(true)
-            .find_map(|(ix, _)| (ix > at).then_some(ix))
+        GraphemeCursor::new(at, self.content.len(), true)
+            .next_boundary(&self.content, 0)
+            .ok()
+            .flatten()
             .unwrap_or(self.content.len())
     }
     fn from16(&self, offset: usize) -> usize {
@@ -702,17 +685,19 @@ impl Input {
         })
     }
     fn previous_word(&self) -> usize {
+        let cursor = self.cursor();
         self.content
             .unicode_word_indices()
             .rev()
-            .find_map(|(start, _)| (start < self.cursor()).then_some(start))
+            .find_map(|(start, _)| (start < cursor).then_some(start))
             .unwrap_or(0)
     }
     fn next_word(&self) -> usize {
+        let cursor = self.cursor();
         self.content
             .unicode_word_indices()
             .map(|(start, word)| start + word.len())
-            .find(|end| *end > self.cursor())
+            .find(|end| *end > cursor)
             .unwrap_or(self.content.len())
     }
     fn line_edge(&self, end: bool) -> usize {
@@ -754,6 +739,38 @@ impl Input {
         } else {
             Cow::Borrowed(text)
         }
+    }
+    fn apply_replacement(
+        &mut self,
+        range: &Range<usize>,
+        text: &str,
+        cx: &mut Context<Self>,
+    ) -> Option<usize> {
+        let normalized = self.normalized(text);
+        if self.code.is_some() && !self.accept_code_edit(range, &normalized, cx) {
+            return None;
+        }
+        let text = self.max_chars.map_or(normalized.as_ref(), |limit| {
+            let outside = self.content[..range.start].encode_utf16().count()
+                + self.content[range.end..].encode_utf16().count();
+            limit_utf16(&normalized, limit.saturating_sub(outside))
+        });
+        let base_bytes = self.content.len() - range.len();
+        let byte_limit = if self.code.is_some() {
+            vorkspace_core::files::document::MAX_TEXT_BYTES
+        } else {
+            MAX_BYTES
+        };
+        let text = bounded(text, byte_limit.saturating_sub(base_bytes));
+        self.record_undo();
+        self.map_code_folds(range, text.len());
+        let mut updated = String::with_capacity(base_bytes + text.len());
+        updated.push_str(&self.content[..range.start]);
+        updated.push_str(text);
+        updated.push_str(&self.content[range.end..]);
+        self.content = updated.into();
+        self.code_changed();
+        Some(range.start + text.len())
     }
     fn position(&self, at: usize) -> Point<Pixels> {
         if self.code.is_some() {
@@ -1052,7 +1069,6 @@ impl Input {
         self.code_scrollbar_up();
     }
     fn mouse_move(&mut self, e: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
-        self.code_hover(e, cx);
         if self.code_scrollbar_move(e, cx) {
             return;
         }
@@ -1177,38 +1193,9 @@ impl EntityInputHandler for Input {
             .inline_commands
             .then(|| Command::leading(&self.content))
             .flatten();
-        let normalized = self.normalized(text);
-        if self.code.is_some() && !self.accept_code_edit(&r, &normalized, cx) {
+        let Some(end) = self.apply_replacement(&r, text, cx) else {
             return;
-        }
-        let mut normalized = normalized.into_owned();
-        if let Some(limit) = self.max_chars {
-            let remaining = limit.saturating_sub(
-                self.content[..r.start].encode_utf16().count()
-                    + self.content[r.end..].encode_utf16().count(),
-            );
-            normalized = limit_utf16(&normalized, remaining);
-        }
-        self.record_undo();
-        let text = bounded(
-            &normalized,
-            (if self.code.is_some() {
-                vorkspace_core::files::document::MAX_TEXT_BYTES
-            } else {
-                MAX_BYTES
-            })
-            .saturating_sub(self.content.len() - (r.end - r.start)),
-        );
-        self.map_code_folds(&r, text.len());
-        self.content = format!(
-            "{}{}{}",
-            &self.content[..r.start],
-            text,
-            &self.content[r.end..]
-        )
-        .into();
-        let end = r.start + text.len();
-        self.code_changed();
+        };
         self.selection = end..end;
         self.reversed = false;
         self.marked = None;
@@ -1230,42 +1217,14 @@ impl EntityInputHandler for Input {
         self.manual_scroll = false;
         self.reveal_pending = self.reveal_in_parent;
         let r = self.replacement_range(r);
-        let normalized = self.normalized(text);
-        if self.code.is_some() && !self.accept_code_edit(&r, &normalized, cx) {
+        let Some(end) = self.apply_replacement(&r, text, cx) else {
             return;
-        }
-        let mut normalized = normalized.into_owned();
-        if let Some(limit) = self.max_chars {
-            let remaining = limit.saturating_sub(
-                self.content[..r.start].encode_utf16().count()
-                    + self.content[r.end..].encode_utf16().count(),
-            );
-            normalized = limit_utf16(&normalized, remaining);
-        }
-        self.record_undo();
-        let text = bounded(
-            &normalized,
-            (if self.code.is_some() {
-                vorkspace_core::files::document::MAX_TEXT_BYTES
-            } else {
-                MAX_BYTES
-            })
-            .saturating_sub(self.content.len() - (r.end - r.start)),
-        );
-        self.map_code_folds(&r, text.len());
-        self.content = format!(
-            "{}{}{}",
-            &self.content[..r.start],
-            text,
-            &self.content[r.end..]
-        )
-        .into();
-        let text = text.to_owned();
-        self.code_changed();
-        self.marked = (!text.is_empty()).then_some(r.start..r.start + text.len());
+        };
+        let inserted = &self.content[r.start..end];
+        self.marked = (!inserted.is_empty()).then_some(r.start..end);
         let selection = selection
-            .map(|s| r.start + from16(&text, s.start)..r.start + from16(&text, s.end))
-            .unwrap_or(r.start + text.len()..r.start + text.len());
+            .map(|s| r.start + from16(inserted, s.start)..r.start + from16(inserted, s.end))
+            .unwrap_or(end..end);
         self.selection = self.clip_range(selection);
         self.reversed = false;
         cx.emit(Changed);
@@ -1292,14 +1251,14 @@ impl EntityInputHandler for Input {
         Some(self.to16(self.mouse_index(p)))
     }
 }
-fn limit_utf16(text: &str, units: usize) -> String {
-    let mut used = 0;
-    text.chars()
-        .take_while(|c| {
-            used += c.len_utf16();
-            used <= units
-        })
-        .collect()
+fn limit_utf16(text: &str, mut units: usize) -> &str {
+    for (byte, character) in text.char_indices() {
+        let Some(remaining) = units.checked_sub(character.len_utf16()) else {
+            return &text[..byte];
+        };
+        units = remaining;
+    }
+    text
 }
 fn bounded(text: &str, max: usize) -> &str {
     let mut n = max.min(text.len());
@@ -1645,6 +1604,7 @@ impl Element for InputElement {
 }
 impl Render for Input {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let input = cx.weak_entity();
         div()
             .id("native-composer")
             .relative()
@@ -1656,10 +1616,21 @@ impl Render for Input {
                 Role::MultilineTextInput
             })
             .aria_label(self.label.clone())
+            .aria_read_only(self.read_only)
             .aria_value(if self.secret {
                 "*".repeat(self.content.chars().count()).into()
             } else {
                 self.content.clone()
+            })
+            .when(!self.read_only, |d| {
+                d.on_a11y_action(gpui::AccessibleAction::SetValue, move |data, window, cx| {
+                    if let Some(gpui::accesskit::ActionData::Value(value)) = data {
+                        let _ = input.update(cx, |input, cx| {
+                            let range = 0..input.content.encode_utf16().count();
+                            input.replace_text_in_range(Some(range), value, window, cx);
+                        });
+                    }
+                })
             })
             .tab_index(0)
             .w_full()
@@ -1733,7 +1704,6 @@ impl Render for Input {
             })
             .children(self.code_tooltip())
             .children(self.completion_popup(cx))
-            .children(self.hunk_actions(cx))
     }
 }
 

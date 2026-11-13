@@ -40,8 +40,8 @@ impl AccessMode {
             _ => Self::Supervised,
         }
     }
-    /// codexProtocol.ts::runtimeModeToCodexConfig.
-    pub fn codex(self) -> (Value, &'static str, Value, &'static str) {
+    /// Codex's approval and sandbox settings for this access mode.
+    pub(crate) fn codex(self) -> (Value, &'static str, Value, &'static str) {
         match self {
             Self::ReadOnly => (
                 json!("never"),
@@ -75,7 +75,7 @@ impl AccessMode {
             ),
         }
     }
-    pub fn claude(self) -> &'static str {
+    pub(crate) fn claude(self) -> &'static str {
         match self {
             Self::ReadOnly => "plan",
             Self::Supervised => "default",
@@ -85,12 +85,10 @@ impl AccessMode {
         }
     }
 }
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
-    /// Native remote control invocation, never saved as provider configuration.
-    #[serde(skip)]
-    pub remote_action: Option<serde_json::Value>,
     pub account: crate::accounts::Profile,
     pub usage_limit: Option<crate::limit::Limit>,
     /// Isolated background text jobs; never persisted as conversation settings.
@@ -117,9 +115,6 @@ pub struct Settings {
     pub environment: std::collections::HashMap<String, String>,
     #[serde(skip)]
     pub bot: Option<BotContext>,
-    /// A Bot's minion: its parent's context, without Bot chat behaviour.
-    #[serde(skip)]
-    pub minion: Option<MinionContext>,
     #[serde(skip)]
     pub bot_message_id: Option<String>,
     #[serde(skip)]
@@ -148,6 +143,30 @@ pub struct Settings {
     pub pending_provider_switch: Option<ProviderSwitch>,
     pub turns: std::collections::HashMap<usize, TurnInfo>,
 }
+impl Settings {
+    /// A new delegated conversation inherits execution choices without the
+    /// source turn's capabilities, history, or saved continuation.
+    pub fn for_child_launch(&self, same_provider: bool, same_project: bool) -> Self {
+        let mut child = Self {
+            access: self.access,
+            ..Self::default()
+        };
+        if same_provider {
+            child.account.clone_from(&self.account);
+            child.model.clone_from(&self.model);
+            child.effort.clone_from(&self.effort);
+            child.fast = self.fast;
+            child.service_tier.clone_from(&self.service_tier);
+            child.thinking = self.thinking;
+            child.model_settings.clone_from(&self.model_settings);
+        }
+        if same_project {
+            child.worktree_cwd.clone_from(&self.worktree_cwd);
+        }
+        child
+    }
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ProviderSwitch {
@@ -163,13 +182,83 @@ pub struct ProviderSwitch {
     pub account: crate::accounts::Profile,
     pub provider_id: Option<String>,
 }
-#[derive(Clone, Debug)]
-pub struct MinionContext {
-    /// The parent Bot.
-    pub bot: crate::bot_model::Bot,
-    pub name: String,
-    pub root: std::path::PathBuf,
-    pub executable: std::path::PathBuf,
+
+/// Configuration learned from the running provider, separate from the user's next choice.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ConfigurationPatch {
+    pub model: Option<String>,
+    pub model_settings: std::collections::HashMap<String, String>,
+}
+
+impl ConfigurationPatch {
+    pub fn merge(&mut self, next: Self) {
+        if next.model.is_some() {
+            self.model = next.model;
+        }
+        self.model_settings.extend(next.model_settings);
+    }
+
+    pub fn apply(&self, settings: &mut Settings) {
+        self.apply_fields(
+            &mut settings.model,
+            &mut settings.model_settings,
+            &mut settings.effort,
+            &mut settings.fast,
+            &mut settings.service_tier,
+            &mut settings.thinking,
+        );
+    }
+
+    pub fn apply_to_switch(&self, pending: &mut ProviderSwitch) {
+        self.apply_fields(
+            &mut pending.model,
+            &mut pending.model_settings,
+            &mut pending.effort,
+            &mut pending.fast,
+            &mut pending.service_tier,
+            &mut pending.thinking,
+        );
+    }
+
+    fn apply_fields(
+        &self,
+        model: &mut Option<String>,
+        model_settings: &mut std::collections::HashMap<String, String>,
+        effort: &mut Option<String>,
+        fast: &mut bool,
+        service_tier: &mut Option<String>,
+        thinking: &mut Option<bool>,
+    ) {
+        if let Some(next) = &self.model {
+            *model = Some(next.clone());
+        }
+        if let Some(next) = self
+            .model_settings
+            .get("fast")
+            .and_then(|value| value.parse().ok())
+        {
+            *fast = next;
+        }
+        if let Some(next) = self.model_settings.get("thinking") {
+            *thinking = next.parse().ok();
+        }
+        if let Some(next) = [
+            "effort",
+            "reasoning",
+            "reasoningEffort",
+            "reasoning_effort",
+            "variant",
+        ]
+        .into_iter()
+        .find_map(|key| self.model_settings.get(key))
+        {
+            *effort = (!next.is_empty()).then(|| next.clone());
+        }
+        if let Some(next) = self.model_settings.get("serviceTier") {
+            *service_tier = (!next.is_empty()).then(|| next.clone());
+        }
+        model_settings.extend(self.model_settings.clone());
+    }
 }
 #[derive(Clone, Debug)]
 pub struct BotContext {
@@ -196,7 +285,7 @@ impl TurnInfo {
         self.duration_known || self.duration_ms > 0
     }
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Handoff {
     pub from: String,
     pub brief: String,

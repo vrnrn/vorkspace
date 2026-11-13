@@ -1,10 +1,9 @@
-//! One file per Settings page, each a port of its SettingsView.tsx function.
+//! One file per Settings page.
 mod appearance;
 mod archive;
 mod bots;
 mod chat;
 mod clipboard;
-mod connections;
 pub(super) mod connectors;
 mod general;
 mod inbox;
@@ -16,7 +15,6 @@ mod vox;
 mod worktrees;
 
 pub(super) use appearance::parse_hex;
-pub(super) use connections::ConnectionsState;
 pub(super) use inbox::InboxState;
 pub(super) use keybindings::command_shortcut;
 
@@ -28,7 +26,6 @@ impl SettingsView {
         match self.section {
             Section::General => self.general_page(cx),
             Section::Vox => self.vox_page(cx),
-            Section::Connections => self.connections_page(cx),
             Section::Appearance => self.appearance_page(window, cx),
             Section::Keybindings => self.keybindings_page(window, cx),
             Section::Chat => self.chat_page(cx),

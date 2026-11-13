@@ -1,5 +1,4 @@
-//! App-wide preferences the Settings pages edit. Defaults are the React
-//! app's (`settings.ts`, `appearance.ts`, `displayPrefs.ts`, `sounds.ts`).
+//! App-wide preferences the Settings pages edit, with their defaults.
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -14,7 +13,6 @@ pub struct Preferences {
     pub notifications: bool,
     pub project_notifications: serde_json::Value,
     pub notification_projects: serde_json::Value,
-    pub file_tabs: String,
     pub file_word_wrap: bool,
     pub file_view_mode: String,
     pub tab_animations: bool,
@@ -30,9 +28,6 @@ pub struct Preferences {
     // Appearance
     pub theme: String,
     pub workspace_theme: String,
-    // Retain the legacy inset-only key when reading and saving preferences.
-    // Window materials now use the shared opacity and main-pane glass values.
-    pub inset_glass: bool,
     pub accent_color: Option<String>,
     pub diff_palette: String,
     pub theme_hue: u32,
@@ -129,7 +124,6 @@ impl Default for Preferences {
             notifications: false,
             project_notifications: serde_json::json!({}),
             notification_projects: serde_json::json!([]),
-            file_tabs: "pane".into(),
             file_word_wrap: true,
             file_view_mode: "preview".into(),
             tab_animations: false,
@@ -144,7 +138,6 @@ impl Default for Preferences {
             close_to_tray: true,
             theme: "dark".into(),
             workspace_theme: "default".into(),
-            inset_glass: true,
             accent_color: None,
             diff_palette: "default".into(),
             theme_hue: 240,
@@ -198,6 +191,34 @@ impl Default for Preferences {
 }
 
 impl Preferences {
+    /// Apply the fields edited against a snapshot to the current preferences.
+    pub fn apply_edits(&mut self, before: &Self, next: &Self) {
+        if before == next {
+            return;
+        }
+        if self == before {
+            self.clone_from(next);
+            return;
+        }
+        let encode = |value: &Self| {
+            let serde_json::Value::Object(fields) =
+                serde_json::to_value(value).expect("serialize preferences")
+            else {
+                unreachable!("preferences serialize as an object");
+            };
+            fields
+        };
+        let before = encode(before);
+        let mut current = encode(self);
+        for (key, value) in encode(next) {
+            if before.get(&key) != Some(&value) {
+                current.insert(key, value);
+            }
+        }
+        *self = serde_json::from_value(serde_json::Value::Object(current))
+            .expect("deserialize preferences");
+    }
+
     /// The saved cost monitoring link, only when it is a plain web link.
     pub fn cost_link(&self) -> Option<&str> {
         let url = self.bedrock_cost_url.trim();
@@ -266,7 +287,6 @@ impl Preferences {
         self.theme_saturation = d.theme_saturation;
         self.theme_dark_lightness = d.theme_dark_lightness;
         self.body_glass = d.body_glass;
-        self.inset_glass = d.inset_glass;
         self.show_excluded_files = d.show_excluded_files;
         self.chat_background_empty = d.chat_background_empty;
         self.chat_background_session = d.chat_background_session;
@@ -293,6 +313,10 @@ pub fn model_key(provider: &str, model: &str) -> String {
 impl gpui::Global for Preferences {}
 impl Preferences {
     pub fn model_hidden(&self, provider: &str, model: &str) -> bool {
-        self.hidden_models.contains(&model_key(provider, model))
+        self.hidden_models.iter().any(|key| {
+            key.strip_prefix(provider)
+                .and_then(|suffix| suffix.strip_prefix(':'))
+                == Some(model)
+        })
     }
 }

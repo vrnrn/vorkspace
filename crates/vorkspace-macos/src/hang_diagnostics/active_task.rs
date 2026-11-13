@@ -98,6 +98,39 @@ mod tests {
     }
 
     #[test]
+    fn longest_blocking_polls_are_ranked_independently_of_time_waiting_between_polls() {
+        // Use an unregistered thread so the synthetic timing owner cannot
+        // remove another test's live thread from GPUI's profiler registry.
+        std::thread::spawn(|| {
+            use gpui::profiler::{ThreadTimings, YieldTime};
+
+            let mut timings = ThreadTimings::new(None, std::thread::current().id());
+            let start = TaskTiming::placeholder().start;
+            for millis in 1..=6 {
+                let mut active = running();
+                active.start = start;
+                active.spawned.0 = if millis <= 5 {
+                    start - Duration::from_secs(3600)
+                } else {
+                    start
+                };
+                timings.running = Some(active);
+                timings.save_task_timing(YieldTime(start + Duration::from_millis(millis)));
+            }
+            let mut polls = timings
+                .stats
+                .longest_poll_times
+                .map(|task| task.poll_duration());
+            polls.sort_unstable();
+            assert_eq!(polls, [2, 3, 4, 5, 6].map(Duration::from_millis));
+            assert_eq!(timings.stats.poll_time_to_beat, Duration::from_millis(2));
+            assert!(timings.stats.runtime_to_beat >= Duration::from_secs(3600));
+        })
+        .join()
+        .unwrap();
+    }
+
+    #[test]
     fn reports_a_still_running_poll_once_and_admits_its_successor() {
         let mut observer = Observer::new();
         let first = running();

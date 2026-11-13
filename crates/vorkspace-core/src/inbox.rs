@@ -1,15 +1,16 @@
-//! Native Inbox services and the desktop app's existing credential formats.
+//! Native Inbox services and their existing credential formats.
 mod avatar;
 mod bounded;
 pub(crate) mod connectors;
 pub use connectors::Connectors;
 mod notifications;
+mod target;
 pub use notifications::NotificationProject;
 mod media;
 pub use avatar::png as avatar_png;
 pub use media::png as media_png;
 mod github;
-pub mod gitlab;
+pub(crate) mod gitlab;
 pub mod jira;
 
 use crate::session_groups::WorkItem;
@@ -120,6 +121,22 @@ impl Item {
         };
         format!("{}:{identity}", self.provider)
     }
+
+    /// Pinned panes keep the server-qualified identity when a connector changes.
+    /// List and history keys retain their persisted format.
+    pub fn detail_key(&self) -> String {
+        let key = self.key();
+        if !matches!(self.provider.as_str(), "jira" | "gitlab") {
+            return key;
+        }
+        let Ok(mut url) = url::Url::parse(&self.url) else {
+            return format!("{key}\n{}", self.url);
+        };
+        url.set_query(None);
+        url.set_fragment(None);
+        let url = url.as_str().trim_end_matches('/');
+        format!("{key}\n{url}")
+    }
     pub fn reference(&self) -> String {
         if self.identifier.is_empty() {
             format!("#{}", self.number)
@@ -153,14 +170,9 @@ impl Item {
             url: self.url.clone(),
         }
     }
-    pub fn prompt(&self, body: &str, ask: bool) -> String {
+    pub fn prompt(&self, body: &str) -> String {
         format!(
-            "{}\n\n{} {}: {}\n{}\n\n{}",
-            if ask {
-                "Help me understand and discuss this work item."
-            } else {
-                "Work on this item. Read its description and discussion, inspect the project, and implement the required changes."
-            },
+            "Work on this item. Read its description and discussion, inspect the project, and implement the required changes.\n\n{} {}: {}\n{}\n\n{}",
             provider_label(&self.provider),
             self.reference(),
             self.title,
@@ -173,22 +185,6 @@ pub fn timestamp_ms(value: &str) -> i64 {
     chrono::DateTime::parse_from_rfc3339(value)
         .map(|at| at.timestamp_millis())
         .unwrap_or(0)
-}
-pub fn relative_time(value: &str) -> String {
-    let at = timestamp_ms(value);
-    if at == 0 {
-        return String::new();
-    }
-    let seconds = ((crate::time::now_ms() as i64 - at).max(0)) / 1000;
-    match seconds {
-        0..60 => "now".into(),
-        60..3600 => format!("{}m", seconds / 60),
-        3600..86400 => format!("{}h", seconds / 3600),
-        86400..604800 => format!("{}d", seconds / 86400),
-        _ => chrono::DateTime::from_timestamp_millis(at)
-            .map(|d| d.format("%b %-d").to_string())
-            .unwrap_or_default(),
-    }
 }
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -236,6 +232,11 @@ pub struct Thread {
     pub base_ref_name: String,
     pub head_ref_name: String,
 }
+
+pub struct Discussion {
+    pub details: Result<Details, String>,
+    pub thread: Result<Thread, String>,
+}
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct DiffFile {
@@ -268,7 +269,7 @@ pub struct Checks {
     pub head_oid: String,
     pub checks: Vec<Check>,
 }
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Status {
     pub connected: bool,
@@ -278,7 +279,7 @@ pub struct Status {
     pub site: String,
     pub email: String,
 }
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OptionRow {
     pub id: String,
     pub name: String,
@@ -314,7 +315,7 @@ impl Default for Filters {
     }
 }
 impl Filters {
-    pub fn fetch_state(&self) -> &str {
+    pub(crate) fn fetch_state(&self) -> &str {
         if self.status.closed || self.status.merged || !(self.status.open || self.status.draft) {
             "all"
         } else {
@@ -322,20 +323,52 @@ impl Filters {
         }
     }
     pub fn matches(&self, item: &Item, source: &str, search: &str) -> bool {
+        self.prepare(search).matches(item, source)
+    }
+    pub fn prepare(&self, search: &str) -> PreparedFilter<'_> {
+        let start = match self.time.as_str() {
+            "today" => {
+                let now = Local::now();
+                Local
+                    .with_ymd_and_hms(now.year(), now.month(), now.day(), 0, 0, 0)
+                    .single()
+                    .map_or(0, |day| day.timestamp_millis())
+            }
+            "7d" => Local::now().timestamp_millis() - 7 * 86400000,
+            "30d" => Local::now().timestamp_millis() - 30 * 86400000,
+            _ => 0,
+        };
+        PreparedFilter {
+            filters: self,
+            start,
+            words: search.split_whitespace().map(str::to_lowercase).collect(),
+        }
+    }
+}
+
+pub struct PreparedFilter<'a> {
+    filters: &'a Filters,
+    start: i64,
+    words: Vec<String>,
+}
+
+impl PreparedFilter<'_> {
+    pub fn matches(&self, item: &Item, source: &str) -> bool {
         if item.provider != source {
             return false;
         }
+        let filters = self.filters;
         let tracker = is_tracker(source);
         if !tracker
-            && !(source == "gitlab" && self.assigned_to_me)
-            && self.hidden_projects.contains(&item.project_path)
+            && !(source == "gitlab" && filters.assigned_to_me)
+            && filters.hidden_projects.contains(&item.project_path)
         {
             return false;
         }
-        if !tracker && self.hidden_kinds.contains(&item.kind) {
+        if !tracker && filters.hidden_kinds.contains(&item.kind) {
             return false;
         }
-        let s = &self.status;
+        let s = &filters.status;
         if (s.open || s.closed || (!tracker && (s.draft || s.merged)))
             && !match item.status() {
                 "Open" => s.open,
@@ -347,19 +380,11 @@ impl Filters {
         {
             return false;
         }
-        let now = Local::now();
-        let start = match self.time.as_str() {
-            "today" => Local
-                .with_ymd_and_hms(now.year(), now.month(), now.day(), 0, 0, 0)
-                .single()
-                .map(|d| d.timestamp_millis())
-                .unwrap_or(0),
-            "7d" => now.timestamp_millis() - 7 * 86400000,
-            "30d" => now.timestamp_millis() - 30 * 86400000,
-            _ => 0,
-        };
-        if start > 0 && item.updated_ms() < start {
+        if self.start > 0 && item.updated_ms() < self.start {
             return false;
+        }
+        if self.words.is_empty() {
+            return true;
         }
         let text = format!(
             "{} {} {} {} {} {}",
@@ -375,9 +400,7 @@ impl Filters {
                 .join(" ")
         )
         .to_lowercase();
-        search
-            .split_whitespace()
-            .all(|word| text.contains(&word.to_lowercase()))
+        self.words.iter().all(|word| text.contains(word))
     }
 }
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -453,30 +476,20 @@ impl ViewState {
             .collect::<Vec<_>>();
         paths.sort();
         paths.dedup();
-        let mut jira = self.hidden_jira_projects.clone();
-        jira.sort();
-        format!(
-            "{}:{}:{}:{}:{}",
-            self.connectors
-                .enabled_providers()
-                .map(|provider| {
-                    let filters = self.filters_for(provider);
-                    format!(
-                        "{provider}:{}:{}",
-                        filters.assigned_to_me,
-                        filters.fetch_state()
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join(","),
-            paths.join("|"),
-            self.connectors
-                .enabled_providers()
-                .collect::<Vec<_>>()
-                .join(","),
-            jira.join(","),
-            serde_json::to_string(&self.jira_filter).unwrap_or_default()
-        )
+        let filters = self
+            .connectors
+            .enabled_providers()
+            .map(|provider| {
+                let filters = self.filters_for(provider);
+                (provider, filters.assigned_to_me, filters.fetch_state())
+            })
+            .collect::<Vec<_>>();
+        let jira = self.connectors.enabled("jira").then(|| {
+            let mut hidden = self.hidden_jira_projects.iter().collect::<Vec<_>>();
+            hidden.sort_unstable();
+            (&self.jira_filter, hidden)
+        });
+        serde_json::to_string(&(paths, filters, jira)).expect("encode connector list scope")
     }
     pub fn normalize_source(&mut self) {
         if !self.connectors.enabled(&self.source) {
@@ -489,7 +502,7 @@ impl ViewState {
         }
     }
 }
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Snapshot {
     pub items: Vec<Item>,
     pub errors: BTreeMap<String, String>,
@@ -512,6 +525,10 @@ pub struct Observation {
     pub changed: Vec<Item>,
 }
 impl NotificationTracker {
+    pub fn reset_provider(&mut self, provider: &str) {
+        self.primed.remove(provider);
+    }
+
     pub fn observe(&mut self, snapshot: &Snapshot, scope: String) -> Vec<Item> {
         self.observe_snapshot(snapshot, scope).appeared
     }
@@ -568,7 +585,7 @@ fn convert<T: Serialize, U: DeserializeOwned>(value: T) -> Result<U, String> {
         .map_err(|e| e.to_string())
 }
 impl Service {
-    pub fn status(&self, provider: &str) -> Result<Status, String> {
+    pub(crate) fn status(&self, provider: &str) -> Result<Status, String> {
         match provider {
             "jira" => convert(jira::jira_status(self.data_dir.clone())?),
             "gitlab" => convert(gitlab::gitlab_status(self.data_dir.clone())?),
@@ -726,7 +743,6 @@ impl Service {
                                     self.data_dir.clone(),
                                     project.to_string_lossy().into_owned(),
                                     kind.into(),
-                                    false,
                                     filters.fetch_state().into(),
                                     Some(limit),
                                 )?)?,
@@ -759,27 +775,6 @@ impl Service {
         snapshot.items.retain(|i| seen.insert(i.key()));
         snapshot
     }
-    pub fn details(&self, item: &Item) -> Result<Details, String> {
-        match item.provider.as_str() {
-            "jira" => convert(jira::jira_issue_details(
-                self.data_dir.clone(),
-                item.identifier.clone(),
-            )?),
-            "gitlab" => convert(gitlab::gitlab_work_item_details(
-                self.data_dir.clone(),
-                item.repo.clone(),
-                item.kind.clone(),
-                item.number,
-            )?),
-            "github" => convert(github::git_github_work_item_details_for(
-                self.project(item),
-                &item.repo,
-                &item.kind,
-                item.number,
-            )?),
-            _ => Err("Unsupported connector".into()),
-        }
-    }
     fn project<'a>(&'a self, item: &'a Item) -> &'a Path {
         if item.project_path.is_empty() {
             &self.cwd
@@ -787,26 +782,43 @@ impl Service {
             Path::new(&item.project_path)
         }
     }
-    pub fn thread(&self, item: &Item) -> Result<Thread, String> {
-        match item.provider.as_str() {
-            "jira" => convert(jira::jira_issue_thread(
-                self.data_dir.clone(),
-                item.identifier.clone(),
-            )?),
-            "gitlab" => convert(gitlab::gitlab_work_item_thread(
-                self.data_dir.clone(),
-                item.repo.clone(),
-                item.kind.clone(),
-                item.number,
-            )?),
-            "github" => convert(github::git_github_work_item_thread_for(
-                self.project(item),
-                &item.repo,
-                &item.kind,
-                item.number,
-            )?),
-            _ => Err("Unsupported connector".into()),
-        }
+    pub fn discussion(&self, item: &Item) -> Result<Discussion, String> {
+        Ok(match item.provider.as_str() {
+            "jira" => {
+                let target = jira::Issue::bind(&self.data_dir, item)?;
+                Discussion {
+                    details: target.details().and_then(convert),
+                    thread: target.thread().and_then(convert),
+                }
+            }
+            "gitlab" => {
+                let target = gitlab::WorkItem::bind(&self.data_dir, item)?;
+                Discussion {
+                    details: target.details().and_then(convert),
+                    thread: target.thread().and_then(convert),
+                }
+            }
+            "github" => {
+                let project = self.project(item);
+                Discussion {
+                    details: github::git_github_work_item_details_for(
+                        project,
+                        &item.repo,
+                        &item.kind,
+                        item.number,
+                    )
+                    .and_then(convert),
+                    thread: github::git_github_work_item_thread_for(
+                        project,
+                        &item.repo,
+                        &item.kind,
+                        item.number,
+                    )
+                    .and_then(convert),
+                }
+            }
+            _ => return Err("Unsupported connector".into()),
+        })
     }
     pub fn comment(
         &self,
@@ -815,16 +827,8 @@ impl Service {
         reply_to: String,
     ) -> Result<CommentReceipt, String> {
         match item.provider.as_str() {
-            "jira" => {
-                jira::jira_issue_comment(self.data_dir.clone(), item.identifier.clone(), body)
-            }
-            "gitlab" => gitlab::gitlab_work_item_comment(
-                self.data_dir.clone(),
-                item.repo.clone(),
-                item.kind.clone(),
-                item.number,
-                body,
-            ),
+            "jira" => jira::Issue::bind(&self.data_dir, item)?.comment(&body),
+            "gitlab" => gitlab::WorkItem::bind(&self.data_dir, item)?.comment(&body),
             "github" => github::git_github_work_item_comment_for(
                 self.project(item),
                 &item.repo,
@@ -838,11 +842,7 @@ impl Service {
     }
     pub fn diff(&self, item: &Item) -> Result<Diff, String> {
         match item.provider.as_str() {
-            "gitlab" => convert(gitlab::gitlab_mr_diff(
-                self.data_dir.clone(),
-                item.repo.clone(),
-                item.number,
-            )?),
+            "gitlab" => convert(gitlab::WorkItem::bind(&self.data_dir, item)?.diff()?),
             "github" => convert(github::git_github_pr_diff_for(
                 self.project(item),
                 &item.repo,
@@ -1028,7 +1028,7 @@ mod notification_tests {
     }
 
     #[test]
-    fn seen_keys_match_desktop_identity_rules() {
+    fn seen_keys_match_stored_identity_rules() {
         let mut github = item(12, "github");
         github.url = "https://GitHub.com/Acme/App/pull/12/".into();
         assert_eq!(github.key(), "github:acme/app:issue:12");

@@ -168,20 +168,16 @@ impl Bots {
             if run.view.read(cx).needs_approval() {
                 views.push(run.view.clone());
             }
-            {
-                for launch in self
-                    .roster
-                    .bots
-                    .iter()
-                    .flat_map(|m| m.launches.iter())
-                    .filter(|l| {
-                        (l.origin_turn >> 32) as i64 == session && !l.completed && !l.dismissed
-                    })
-                {
+            if let Some(bot) = self.roster.get(id) {
+                for launch in bot.launches.iter().filter(|launch| {
+                    !launch.completed
+                        && !launch.dismissed
+                        && bot.launch_group(launch).source() == Some(session)
+                }) {
                     if let Some(view) = self
                         .owner
                         .session_entity(launch.session_id, cx)
-                        .filter(|v| v.read(cx).needs_approval())
+                        .filter(|view| view.read(cx).needs_approval())
                     {
                         views.push(view);
                     }
@@ -1248,24 +1244,28 @@ impl Bots {
             })
             .collect();
         for id in timed_out {
-            if let Some(run) = self.running.get_mut(&id) {
-                run.failure = Some("Habit timed out while waiting for work or an answer".into());
-                run.mailbox.clear();
-                run.view.update(cx, |v, cx| v.bot_stop(cx));
-            }
-            let children = self
-                .roster
-                .bots
-                .iter_mut()
-                .flat_map(|m| m.launches.iter_mut())
-                .filter(|l| (l.origin_turn >> 32) as i64 == id && !l.completed && !l.dismissed)
-                .map(|l| {
-                    l.dismissed = true;
-                    l.session_id
-                })
-                .collect::<Vec<_>>();
-            {
-                for child in children {
+            let Some(run) = self.running.get_mut(&id) else {
+                continue;
+            };
+            run.failure = Some("Habit timed out while waiting for work or an answer".into());
+            run.mailbox.clear();
+            run.view.update(cx, |v, cx| v.bot_stop(cx));
+            if let Some(bot) = self.roster.get_mut(&run.bot) {
+                let positions = bot
+                    .launches
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, launch)| {
+                        !launch.completed
+                            && !launch.dismissed
+                            && bot.launch_group(launch).source() == Some(id)
+                    })
+                    .map(|(position, _)| position)
+                    .collect::<Vec<_>>();
+                for position in positions {
+                    let launch = &mut bot.launches[position];
+                    launch.dismissed = true;
+                    let child = launch.session_id;
                     if let Some(view) = self.owner.session_entity(child, cx) {
                         view.update(cx, |v, cx| v.stop_if_busy(cx));
                     }
@@ -1509,13 +1509,13 @@ impl Bots {
             view.install_transfer(settings, None, cx);
             view.configure_bot(bot, root, env, cx);
         });
-        self.observations
-            .push(cx.subscribe(&view, move |this, _, _: &SessionChanged, cx| {
-                this.habit_changed(session, cx);
-            }));
+        let changed = cx.subscribe(&view, move |this, _, _: &SessionChanged, cx| {
+            this.habit_changed(session, cx);
+        });
         self.running.insert(
             session,
             RunningHabit {
+                _changed: changed,
                 bot: target,
                 habit: habit.id.clone(),
                 view: view.clone(),
@@ -1541,21 +1541,27 @@ impl Bots {
             error: None,
             attachments: Vec::new(),
         };
-        view.update(cx, |view, cx| view.bot_dispatch(&message, cx));
+        if !view.update(cx, |view, cx| view.bot_dispatch(&message, cx)) {
+            if let Some(run) = self.running.get_mut(&session) {
+                run.failure = Some("The Habit could not start its provider turn".into());
+            }
+            self.habit_changed(session, cx);
+            return;
+        }
         self.changed(cx);
     }
 
     pub(super) fn habit_changed(&mut self, session: i64, cx: &mut Context<Self>) {
-        cx.emit(NotificationChanged);
+        cx.emit(NotificationChanged(session));
         let Some(run) = self.running.get(&session) else {
             return;
         };
-        if run.view.read(cx).busy {
+        if !run.view.read(cx).bot_settled() {
             self.changed(cx);
             return;
         }
         if let Some(text) = self.running.get_mut(&session).and_then(|r| {
-            if r.mailbox.is_empty() {
+            if r.failure.is_some() || r.mailbox.is_empty() {
                 None
             } else {
                 Some(r.mailbox.remove(0))
@@ -1572,19 +1578,24 @@ impl Bots {
                 error: None,
                 attachments: Vec::new(),
             };
-            view.update(cx, |v, cx| v.bot_dispatch(&message, cx));
-            return;
+            if view.update(cx, |v, cx| v.bot_dispatch(&message, cx)) {
+                return;
+            }
+            if let Some(run) = self.running.get_mut(&session) {
+                run.failure =
+                    Some("The Habit could not start a reply to the delegated work".into());
+            }
         }
         if self
             .roster
-            .bots
-            .iter()
-            .flat_map(|m| m.launches.iter())
-            .any(|l| {
-                (l.origin_turn >> 32) as i64 == session
-                    && l.notify_on_complete
-                    && !l.completed
-                    && !l.dismissed
+            .get(&self.running[&session].bot)
+            .is_some_and(|bot| {
+                bot.launches.iter().any(|launch| {
+                    launch.notify_on_complete
+                        && !launch.completed
+                        && !launch.dismissed
+                        && bot.launch_group(launch).source() == Some(session)
+                })
             })
         {
             self.changed(cx);

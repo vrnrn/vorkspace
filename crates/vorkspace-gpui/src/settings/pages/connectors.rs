@@ -30,6 +30,8 @@ fn feature_label(section: Section) -> gpui::Div {
         .child(section.label())
 }
 
+const CUSTOM_MODEL: &str = "\0custom";
+
 impl SettingsView {
     pub(super) fn connectors_page(&mut self, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let mut rows = Vec::new();
@@ -233,53 +235,16 @@ impl SettingsView {
             editor.prompt.clone(),
             editor.result.clone(),
         );
-        let mut providers = vec![(String::new(), "Choose a provider".into(), None)];
-        providers.extend(
-            Kind::ALL
-                .into_iter()
-                .filter(|kind| {
-                    provider::supports_text_only(*kind)
-                        && (kind.id() == selected
-                            || !self.prefs.hidden_providers.iter().any(|id| id == kind.id()))
-                })
-                .map(|kind| {
-                    (
-                        kind.id().into(),
-                        kind.label().into(),
-                        Some(vorkspace_ui::theme::provider_icon(kind.id(), 16.).into_any_element()),
-                    )
-                }),
-        );
-        let provider = self.select(
-            "meeting-provider",
-            "Summary provider",
-            &selected,
-            providers,
-            Some(208.),
-            cx,
-            |this, value, cx| {
-                if let Some(editor) = &mut this.meeting_editor
-                    && editor.provider != value
-                {
-                    editor.provider = value;
-                    editor.model.clear();
-                    editor
-                        .custom_model
-                        .update(cx, |input, cx| input.set_text(String::new(), cx));
-                    editor.editing_custom_model = false;
-                    editor.effort = None;
-                    editor.result = None;
-                }
-                cx.notify();
-            },
-        );
+        let provider = self.meeting_provider_picker(&selected, cx);
         let kind = Kind::parse(&selected).filter(|kind| provider::supports_text_only(*kind));
         // Keep model capabilities with the account-scoped catalog that supplied
         // the names. Never invent effort levels for an unknown/custom model.
         let models = kind.and_then(|kind| self.discovered_models(kind, cx));
-        let info = models.and_then(|models| models.iter().find(|item| item.id == model));
+        let info = models
+            .as_deref()
+            .and_then(|models| models.iter().find(|item| item.id == model));
         let mut choices = vec![(String::new(), "Choose a model".into(), None)];
-        if let (Some(kind), Some(models)) = (kind, models) {
+        if let (Some(kind), Some(models)) = (kind, models.as_deref()) {
             choices.extend(models.iter().map(|model| {
                 (
                     model.id.clone(),
@@ -287,22 +252,59 @@ impl SettingsView {
                     None,
                 )
             }));
-        } else if let Some(models) = self.ctx.catalogs.get(&selected) {
-            choices.extend(
-                models
-                    .iter()
-                    .map(|(id, name)| (id.clone(), name.clone().into(), None)),
-            );
         }
         if !model.is_empty() && !choices.iter().any(|(id, _, _)| *id == model) {
             choices.push((model.clone(), model.clone().into(), None));
         }
-        const CUSTOM_MODEL: &str = "\0custom";
         choices.push((CUSTOM_MODEL.into(), "Custom model…".into(), None));
+        let model_controls =
+            self.meeting_model_controls(editing_custom, &model, choices, custom_model, cx);
+        let effort_supported = info.is_none_or(|model| !model.efforts.is_empty());
+        let effort_picker = self.meeting_effort_picker(info, &effort, cx);
+        let save = self.meeting_save_button(cx);
+        let mut rows = vec![
+            self.row(
+                Some("meeting-provider"),
+                true,
+                "Provider",
+                Some("Uses the provider account selected for this project.".into()),
+                vec![provider],
+            ),
+            self.row(None, false, "Model", None, model_controls),
+        ];
+        if !model.is_empty() && (effort_supported || effort.is_some()) {
+            rows.push(self.row(
+                Some("meeting-effort"),
+                false,
+                "Effort",
+                None,
+                vec![effort_picker],
+            ));
+        }
+        rows.push(Self::meeting_prompt_row(prompt, save, result).into_any_element());
+        page.push(self.group(
+            Some("meeting-prompt"),
+            false,
+            "AI summaries",
+            Some("Only transcript text is sent to the provider. Audio stays on this Mac.".into()),
+            None,
+            rows,
+        ));
+        page
+    }
+
+    fn meeting_model_controls(
+        &self,
+        editing_custom: bool,
+        model: &str,
+        choices: Vec<(String, SharedString, Option<AnyElement>)>,
+        custom_model: Entity<Input>,
+        cx: &mut Context<Self>,
+    ) -> Vec<AnyElement> {
         let model_picker = self.select(
             "meeting-models",
             "Summary model",
-            if editing_custom { CUSTOM_MODEL } else { &model },
+            if editing_custom { CUSTOM_MODEL } else { model },
             choices,
             Some(208.),
             cx,
@@ -331,44 +333,45 @@ impl SettingsView {
                     .into_any_element(),
             );
         }
-        let effort_supported = info.is_none_or(|model| !model.efforts.is_empty());
-        let mut efforts = vec![(String::new(), "Default".into(), None)];
-        if let Some(info) = info {
-            efforts.extend(info.efforts.iter().map(|value| {
-                (
-                    value.clone(),
-                    crate::conversation::effort_name(value).into(),
-                    None,
-                )
-            }));
-        }
-        // Preserve a saved selection while discovery is unavailable; it remains
-        // visible and can always be reset to the provider's default.
-        if let Some(value) = &effort
-            && !efforts.iter().any(|(id, _, _)| id == value)
-        {
-            efforts.push((
-                value.clone(),
-                crate::conversation::effort_name(value).into(),
-                None,
-            ));
-        }
-        let effort_picker = self.select(
-            "meeting-effort",
-            "Summary effort",
-            effort.as_deref().unwrap_or(""),
-            efforts,
-            Some(208.),
-            cx,
-            |this, value, cx| {
-                if let Some(editor) = &mut this.meeting_editor {
-                    editor.effort = (!value.is_empty()).then_some(value);
-                    editor.result = None;
-                }
-                cx.notify();
-            },
-        );
-        let save = secondary_button(
+
+        model_controls
+    }
+
+    fn meeting_prompt_row(
+        prompt: Entity<Input>,
+        save: gpui::Stateful<gpui::Div>,
+        result: Option<Result<(), String>>,
+    ) -> gpui::Div {
+        div()
+            .px_4()
+            .py(px(14.))
+            .border_t_1()
+            .border_color(content(0.05))
+            .flex()
+            .flex_col()
+            .gap_3()
+            .text_size(px(13.))
+            .child("Summary prompt")
+            .child(
+                crate::controls::page::field_frame()
+                    .h(px(152.))
+                    .child(prompt),
+            )
+            .child(div().flex().items_center().gap_3().child(save).when_some(
+                result,
+                |row, result| {
+                    row.child(
+                        div()
+                            .text_size(px(12.))
+                            .text_color(content(0.6))
+                            .child(result.map_or_else(|error| error, |()| "Saved".into())),
+                    )
+                },
+            ))
+    }
+
+    fn meeting_save_button(&self, cx: &mut Context<Self>) -> gpui::Stateful<gpui::Div> {
+        secondary_button(
             "save-meeting-settings",
             "Save summary settings",
             false,
@@ -395,63 +398,93 @@ impl SettingsView {
                 );
             }
             cx.notify();
-        }));
-        let mut rows = vec![
-            self.row(
-                Some("meeting-provider"),
-                true,
-                "Provider",
-                Some("Uses the provider account selected for this project.".into()),
-                vec![provider],
-            ),
-            self.row(None, false, "Model", None, model_controls),
-        ];
-        if !model.is_empty() && (effort_supported || effort.is_some()) {
-            rows.push(self.row(
-                Some("meeting-effort"),
-                false,
-                "Effort",
+        }))
+    }
+
+    fn meeting_effort_picker(
+        &self,
+        info: Option<&vorkspace_core::catalog::Model>,
+        effort: &Option<String>,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let mut efforts = vec![(String::new(), "Default".into(), None)];
+        if let Some(info) = info {
+            efforts.extend(info.efforts.iter().map(|value| {
+                (
+                    value.clone(),
+                    crate::conversation::effort_name(value).into(),
+                    None,
+                )
+            }));
+        }
+        // Preserve a saved selection while discovery is unavailable; it remains
+        // visible and can always be reset to the provider's default.
+        if let Some(value) = &effort
+            && !efforts.iter().any(|(id, _, _)| id == value)
+        {
+            efforts.push((
+                value.clone(),
+                crate::conversation::effort_name(value).into(),
                 None,
-                vec![effort_picker],
             ));
         }
-        rows.push(
-            div()
-                .px_4()
-                .py(px(14.))
-                .border_t_1()
-                .border_color(content(0.05))
-                .flex()
-                .flex_col()
-                .gap_3()
-                .text_size(px(13.))
-                .child("Summary prompt")
-                .child(
-                    crate::controls::page::field_frame()
-                        .h(px(152.))
-                        .child(prompt),
-                )
-                .child(div().flex().items_center().gap_3().child(save).when_some(
-                    result,
-                    |row, result| {
-                        row.child(
-                            div()
-                                .text_size(px(12.))
-                                .text_color(content(0.6))
-                                .child(result.map_or_else(|error| error, |()| "Saved".into())),
-                        )
-                    },
-                ))
-                .into_any_element(),
+        self.select(
+            "meeting-effort",
+            "Summary effort",
+            effort.as_deref().unwrap_or(""),
+            efforts,
+            Some(208.),
+            cx,
+            |this, value, cx| {
+                if let Some(editor) = &mut this.meeting_editor {
+                    editor.effort = (!value.is_empty()).then_some(value);
+                    editor.result = None;
+                }
+                cx.notify();
+            },
+        )
+    }
+
+    fn meeting_provider_picker(&self, selected: &str, cx: &mut Context<Self>) -> AnyElement {
+        let mut providers = vec![(String::new(), "Choose a provider".into(), None)];
+        providers.extend(
+            Kind::ALL
+                .into_iter()
+                .filter(|kind| {
+                    provider::supports_text_only(*kind)
+                        && (kind.id() == selected
+                            || !self.prefs.hidden_providers.iter().any(|id| id == kind.id()))
+                })
+                .map(|kind| {
+                    (
+                        kind.id().into(),
+                        kind.label().into(),
+                        Some(vorkspace_ui::theme::provider_icon(kind.id(), 16.).into_any_element()),
+                    )
+                }),
         );
-        page.push(self.group(
-            Some("meeting-prompt"),
-            false,
-            "AI summaries",
-            Some("Only transcript text is sent to the provider. Audio stays on this Mac.".into()),
-            None,
-            rows,
-        ));
-        page
+        self.select(
+            "meeting-provider",
+            "Summary provider",
+            selected,
+            providers,
+            Some(208.),
+            cx,
+            |this, value, cx| {
+                if let Some(editor) = &mut this.meeting_editor
+                    && editor.provider != value
+                {
+                    editor.provider = value;
+                    editor.model.clear();
+                    editor
+                        .custom_model
+                        .update(cx, |input, cx| input.set_text(String::new(), cx));
+                    editor.editing_custom_model = false;
+                    editor.effort = None;
+                    editor.result = None;
+                }
+                cx.notify();
+            },
+        )
     }
 }

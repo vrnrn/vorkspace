@@ -1,13 +1,12 @@
-//! The unified review's diff model: unifiedDiff.ts, lineDiff.ts and the hunk
-//! staging in editorGit.ts. Files are compared line by line (each line with
-//! its newline, as git and lineDiff.ts do), then grouped into chunks exactly
+//! The unified review's diff model and hunk staging. Files are compared line
+//! by line (each line with its newline, as git does), then grouped into chunks exactly
 //! as CodeMirror's `Chunk.build` with `presentableDiff` does: changes less
 //! than three UTF-16 units apart merge, and chunks cover whole lines.
 use similar::{capture_diff_deadline, Algorithm, DiffOp};
 use std::time::{Duration, Instant};
 
 pub const CONTEXT_DEFAULT: usize = 3;
-/// lineDiff.ts's line pass budget. Past it, Myers replaces whatever range it
+/// The line pass budget. Past it, Myers replaces whatever range it
 /// has not finished as a whole: still a valid diff, but coarser, and a matter
 /// of wall-clock timing. Chunks are therefore kept, never derived twice.
 const LINE_PASS_TIMEOUT: Duration = Duration::from_millis(200);
@@ -38,14 +37,14 @@ pub enum Block {
         chunk: Option<usize>,
     },
     Fold {
-        id: String,
-        lines: Vec<Line>,
+        line_count: usize,
     },
 }
 impl Block {
     pub fn lines(&self) -> &[Line] {
         match self {
-            Self::Hunk { lines, .. } | Self::Fold { lines, .. } => lines,
+            Self::Hunk { lines, .. } => lines,
+            Self::Fold { .. } => &[],
         }
     }
 }
@@ -54,7 +53,6 @@ impl Block {
 pub struct UnifiedFile {
     pub additions: u32,
     pub deletions: u32,
-    pub lines: Vec<Line>,
     pub blocks: Vec<Block>,
     /// The ranges `Line::chunk` indexes, for `stage_chunk`.
     pub chunks: Vec<Change>,
@@ -71,89 +69,186 @@ fn unified_file(
     context: usize,
     deadline: Option<Instant>,
 ) -> UnifiedFile {
-    let (lines, chunks) = unified_lines(original, current, deadline);
-    let additions = lines.iter().filter(|l| l.kind == LineKind::Add).count() as u32;
-    let deletions = lines.iter().filter(|l| l.kind == LineKind::Del).count() as u32;
-    let blocks = fold_unified_lines(&lines, context);
-    UnifiedFile {
-        additions,
-        deletions,
-        lines,
-        blocks,
-        chunks,
+    if original == current {
+        let line_count = current.split_inclusive('\n').count();
+        return UnifiedFile {
+            blocks: (line_count > 0)
+                .then_some(Block::Fold { line_count })
+                .into_iter()
+                .collect(),
+            ..UnifiedFile::default()
+        };
     }
-}
-
-/// Context beyond `context` lines from any change folds away; the rest
-/// form hunks, each carrying its first line's chunk.
-pub fn fold_unified_lines(lines: &[Line], context: usize) -> Vec<Block> {
-    if lines.is_empty() {
-        return Vec::new();
-    }
-    let mut visible: Vec<bool> = lines.iter().map(|l| l.kind != LineKind::Context).collect();
-    if context > 0 {
-        for (index, line) in lines.iter().enumerate() {
-            if matches!(line.kind, LineKind::Context | LineKind::Hunk) {
-                continue;
-            }
-            let from = index.saturating_sub(context);
-            let to = index.saturating_add(context).min(lines.len() - 1);
-            for inner in from..=to {
-                if lines[inner].kind == LineKind::Context {
-                    visible[inner] = true;
-                }
-            }
-        }
-    }
-    let mut blocks = Vec::new();
-    let mut index = 0;
-    let mut fold_id = 0;
-    while index < lines.len() {
-        let hidden = |i: usize| lines[i].kind == LineKind::Context && !visible[i];
-        if hidden(index) {
-            let start = index;
-            while index < lines.len() && hidden(index) {
-                index += 1;
-            }
-            blocks.push(Block::Fold {
-                id: format!("fold-{fold_id}"),
-                lines: lines[start..index].to_vec(),
-            });
-            fold_id += 1;
-            continue;
-        }
-        let start = index;
-        let mut chunk = None;
-        while index < lines.len() && !hidden(index) {
-            chunk = chunk.or(lines[index].chunk);
-            index += 1;
-        }
-        blocks.push(Block::Hunk {
-            lines: lines[start..index].to_vec(),
-            chunk,
-        });
-    }
-    blocks
-}
-
-/// stageChunkText: `original` with only that chunk of `current` applied. The
-/// chunk is one the view showed for these texts; diffing again here could
-/// miss the line pass budget and resolve its index to a different range.
-pub fn stage_chunk(original: &str, current: &str, range: Change) -> String {
     let old = Doc::new(original);
     let new = Doc::new(current);
-    // applySide: the chunk's lines without their last newline, plus one
-    // when the replaced range ends inside the original.
-    let mut insert = new.slice(range.from_b, range.from_b.max(range.to_b.saturating_sub(1)));
-    if range.from_b != range.to_b && range.to_a <= old.len {
-        insert.push('\n');
+    let ranges = chunks(&old, &new, deadline);
+    let mut output = UnifiedFile {
+        chunks: Vec::with_capacity(ranges.len()),
+        ..UnifiedFile::default()
+    };
+    let mut pending_context = Vec::new();
+    let mut has_preceding_change = false;
+    let (mut old_pos, mut new_pos) = (0, 0);
+    for (index, range) in ranges.into_iter().enumerate() {
+        if new_pos < range.from_b {
+            pending_context.push(ContextSegment::new(
+                &old,
+                &new,
+                old_pos,
+                new_pos..range.from_b,
+            ));
+        }
+        let removed = old.line_range(range.from_a, range.to_a);
+        let added = new.line_range(range.from_b, range.to_b);
+        // A byte edit can have no displayed lines. Keep the context on both
+        // sides of that edit in the same run until a visible change divides it.
+        if !removed.is_empty() || !added.is_empty() {
+            let leading = if has_preceding_change { context } else { 0 };
+            output.append_context(&new, &pending_context, (leading, context));
+            pending_context.clear();
+            has_preceding_change = true;
+            output.deletions += removed.len() as u32;
+            output.additions += added.len() as u32;
+            let removed = removed.map(|ix| Line {
+                kind: LineKind::Del,
+                text: old.lines[ix].to_owned(),
+                old_number: Some((ix + 1) as u32),
+                new_number: None,
+                chunk: Some(index),
+            });
+            let added = added.map(|ix| Line {
+                kind: LineKind::Add,
+                text: new.lines[ix].to_owned(),
+                old_number: None,
+                new_number: Some((ix + 1) as u32),
+                chunk: Some(index),
+            });
+            output.append_hunk(removed.chain(added), Some(index));
+        }
+        output.chunks.push(Change {
+            replace_start: old.byte(range.from_a),
+            replace_end: old.byte(range.to_a.min(old.len)),
+            insert_start: new.byte(range.from_b),
+            insert_end: new.byte(range.from_b.max(range.to_b.saturating_sub(1)).min(new.len)),
+            add_newline: range.from_b != range.to_b && range.to_a <= old.len,
+        });
+        old_pos = range.to_a;
+        new_pos = range.to_b;
     }
-    let from = old.byte(range.from_a);
-    let to = old.byte(range.to_a.min(old.len));
-    format!("{}{}{}", &original[..from], insert, &original[to..])
+    if new_pos < new.len {
+        pending_context.push(ContextSegment::new(&old, &new, old_pos, new_pos..new.len));
+    }
+    let leading = if has_preceding_change { context } else { 0 };
+    output.append_context(&new, &pending_context, (leading, 0));
+    output
 }
 
-/// diffComment.ts's `diffCommentLocation`: `path:line`.
+struct ContextSegment {
+    original: std::ops::Range<usize>,
+    current: std::ops::Range<usize>,
+}
+
+impl ContextSegment {
+    fn new(old: &Doc<'_>, new: &Doc<'_>, old_pos: usize, current: std::ops::Range<usize>) -> Self {
+        Self {
+            original: old.line_range(old_pos, old_pos + current.len()),
+            current: new.line_range(current.start, current.end),
+        }
+    }
+}
+
+impl UnifiedFile {
+    fn append_hunk(&mut self, lines: impl Iterator<Item = Line>, chunk: Option<usize>) {
+        let mut lines = lines.peekable();
+        if lines.peek().is_none() {
+            return;
+        }
+        if let Some(Block::Hunk {
+            lines: prior,
+            chunk: first,
+        }) = self.blocks.last_mut()
+        {
+            prior.extend(lines);
+            *first = first.or(chunk);
+        } else {
+            self.blocks.push(Block::Hunk {
+                lines: lines.collect(),
+                chunk,
+            });
+        }
+    }
+
+    fn append_context(
+        &mut self,
+        new: &Doc<'_>,
+        segments: &[ContextSegment],
+        (leading, trailing): (usize, usize),
+    ) {
+        let count = segments.iter().map(|segment| segment.current.len()).sum();
+        let leading = leading.min(count);
+        let trailing = count - trailing.min(count - leading);
+        let lines = |from: usize, to: usize| {
+            let mut start = 0;
+            segments.iter().flat_map(move |segment| {
+                let len = segment.current.len();
+                let from = from.saturating_sub(start).min(len);
+                let to = to.saturating_sub(start).min(len);
+                start += len;
+                (from..to).map(move |offset| {
+                    let ix = segment.current.start + offset;
+                    let number = (ix + 1) as u32;
+                    Line {
+                        kind: LineKind::Context,
+                        text: new.lines[ix].to_owned(),
+                        old_number: Some(if offset < segment.original.len() {
+                            (segment.original.start + offset + 1) as u32
+                        } else {
+                            number
+                        }),
+                        new_number: Some(number),
+                        chunk: None,
+                    }
+                })
+            })
+        };
+        self.append_hunk(lines(0, leading), None);
+        if leading < trailing {
+            self.blocks.push(Block::Fold {
+                line_count: trailing - leading,
+            });
+        }
+        self.append_hunk(lines(trailing, count), None);
+    }
+}
+
+/// One displayed chunk stores its byte ranges against the two diff inputs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Change {
+    replace_start: usize,
+    replace_end: usize,
+    insert_start: usize,
+    insert_end: usize,
+    add_newline: bool,
+}
+
+/// Apply the displayed chunk without diffing again or rebuilding line indexes.
+pub fn stage_chunk(original: &str, current: &str, change: Change) -> String {
+    let before = &original[..change.replace_start];
+    let insert = &current[change.insert_start..change.insert_end];
+    let after = &original[change.replace_end..];
+    let mut text = String::with_capacity(
+        before.len() + insert.len() + after.len() + usize::from(change.add_newline),
+    );
+    text.push_str(before);
+    text.push_str(insert);
+    if change.add_newline {
+        text.push('\n');
+    }
+    text.push_str(after);
+    text
+}
+
+/// Where a diff comment points: `path:line`.
 pub fn comment_location(path: &str, line: &Line) -> String {
     let number = if line.kind == LineKind::Del {
         line.old_number
@@ -261,20 +356,13 @@ impl<'a> Doc<'a> {
         }
         byte.min(self.source.len())
     }
-    fn slice(&self, from: usize, to: usize) -> String {
-        self.source[self.byte(from)..self.byte(to.min(self.len))].to_owned()
-    }
-    /// linesInRange: 1-based numbers and texts of the lines `from..to` touches.
-    fn lines_in_range(&self, from: usize, to: usize) -> Vec<(u32, &'a str)> {
+    /// The indexes of the lines intersecting a UTF-16 range.
+    fn line_range(&self, from: usize, to: usize) -> std::ops::Range<usize> {
         if from >= to || self.len == 0 {
-            return Vec::new();
+            return 0..0;
         }
         let end = from.max(to - 1).min(self.len.saturating_sub(1));
-        let first = self.line_at(from.min(self.len));
-        let last = self.line_at(end);
-        (first..=last)
-            .map(|i| (i as u32 + 1, self.lines[i]))
-            .collect()
+        self.line_at(from.min(self.len))..self.line_at(end) + 1
     }
 }
 fn utf16_len(text: &str) -> usize {
@@ -282,33 +370,23 @@ fn utf16_len(text: &str) -> usize {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Change {
+struct UnitChange {
     from_a: usize,
     to_a: usize,
     from_b: usize,
     to_b: usize,
 }
 
-/// lineDiff.ts: each line with its newline is one symbol; the result maps
+/// Each line with its newline is one symbol; the result maps
 /// back to UTF-16 offsets.
-fn line_changes(old: &Doc, new: &Doc, deadline: Option<Instant>) -> Vec<Change> {
+fn line_changes(old: &Doc, new: &Doc, deadline: Option<Instant>) -> Vec<UnitChange> {
     fn tokens(source: &str) -> Vec<&str> {
         source.split_inclusive('\n').collect()
     }
-    fn offsets(tokens: &[&str]) -> Vec<usize> {
-        let mut out = Vec::with_capacity(tokens.len() + 1);
-        let mut at = 0;
-        out.push(0);
-        for token in tokens {
-            at += utf16_len(token);
-            out.push(at);
-        }
-        out
-    }
     let (a, b) = (tokens(old.source), tokens(new.source));
-    let (oa, ob) = (offsets(&a), offsets(&b));
+    let offset = |doc: &Doc<'_>, line| doc.starts.get(line).copied().unwrap_or(doc.len);
     let ops = capture_diff_deadline(Algorithm::Myers, &a, 0..a.len(), &b, 0..b.len(), deadline);
-    let mut changes: Vec<Change> = Vec::new();
+    let mut changes: Vec<UnitChange> = Vec::new();
     for op in ops {
         let (old_range, new_range) = match op {
             DiffOp::Equal { .. } => continue,
@@ -332,11 +410,11 @@ fn line_changes(old: &Doc, new: &Doc, deadline: Option<Instant>) -> Vec<Change> 
                 new_index..new_index + new_len,
             ),
         };
-        let change = Change {
-            from_a: oa[old_range.start],
-            to_a: oa[old_range.end],
-            from_b: ob[new_range.start],
-            to_b: ob[new_range.end],
+        let change = UnitChange {
+            from_a: offset(old, old_range.start),
+            to_a: offset(old, old_range.end),
+            from_b: offset(new, new_range.start),
+            to_b: offset(new, new_range.end),
         };
         match changes.last_mut() {
             Some(last) if last.to_a == change.from_a && last.to_b == change.from_b => {
@@ -350,26 +428,22 @@ fn line_changes(old: &Doc, new: &Doc, deadline: Option<Instant>) -> Vec<Change> 
 }
 
 /// `presentableDiff`'s final `mergeAdjacent(changes, 3)`.
-fn merge_adjacent(changes: &mut Vec<Change>, min_gap: usize) {
-    let mut i = 1;
-    while i < changes.len() {
-        let (prev, cur) = (changes[i - 1], changes[i]);
-        if prev.to_a + min_gap > cur.from_a && prev.to_b + min_gap > cur.from_b {
-            changes[i - 1] = Change {
-                from_a: prev.from_a,
-                to_a: cur.to_a,
-                from_b: prev.from_b,
-                to_b: cur.to_b,
-            };
-            changes.remove(i);
+fn merge_adjacent(changes: &mut Vec<UnitChange>, min_gap: usize) {
+    changes.dedup_by(|next, prior| {
+        if prior.to_a.saturating_add(min_gap) > next.from_a
+            && prior.to_b.saturating_add(min_gap) > next.from_b
+        {
+            prior.to_a = next.to_a;
+            prior.to_b = next.to_b;
+            true
         } else {
-            i += 1;
+            false
         }
-    }
+    });
 }
 
 /// `toChunks`: changes widened to whole lines, merging those that touch.
-fn chunks(old: &Doc, new: &Doc, deadline: Option<Instant>) -> Vec<Change> {
+fn chunks(old: &Doc, new: &Doc, deadline: Option<Instant>) -> Vec<UnitChange> {
     let mut changes = line_changes(old, new, deadline);
     merge_adjacent(&mut changes, 3);
     let from_line = |fa: usize, fb: usize| {
@@ -403,7 +477,7 @@ fn chunks(old: &Doc, new: &Doc, deadline: Option<Instant>) -> Vec<Change> {
             (to_a, to_b) = to_line(next.to_a, next.to_b);
             i += 1;
         }
-        out.push(Change {
+        out.push(UnitChange {
             from_a,
             to_a: from_a.max(to_a),
             from_b,
@@ -412,72 +486,6 @@ fn chunks(old: &Doc, new: &Doc, deadline: Option<Instant>) -> Vec<Change> {
         i += 1;
     }
     out
-}
-
-/// unifiedLinesFromTexts.
-fn unified_lines(
-    original: &str,
-    current: &str,
-    deadline: Option<Instant>,
-) -> (Vec<Line>, Vec<Change>) {
-    let old = Doc::new(original);
-    let new = Doc::new(current);
-    let context = |from_b: usize, to_b: usize, from_a: usize| -> Vec<Line> {
-        let inserted = new.lines_in_range(from_b, to_b);
-        if inserted.is_empty() {
-            return Vec::new();
-        }
-        let deleted = old.lines_in_range(from_a, from_a + (to_b - from_b));
-        inserted
-            .iter()
-            .enumerate()
-            .map(|(i, (number, text))| Line {
-                kind: LineKind::Context,
-                text: (*text).to_owned(),
-                old_number: Some(deleted.get(i).map_or(*number, |d| d.0)),
-                new_number: Some(*number),
-                chunk: None,
-            })
-            .collect()
-    };
-    if original == current {
-        return (context(0, new.len, 0), Vec::new());
-    }
-    let chunks = chunks(&old, &new, deadline);
-    if chunks.is_empty() {
-        return (context(0, new.len, 0), chunks);
-    }
-    let mut lines = Vec::new();
-    let (mut old_pos, mut new_pos) = (0, 0);
-    for (index, chunk) in chunks.iter().enumerate() {
-        if new_pos < chunk.from_b {
-            lines.extend(context(new_pos, chunk.from_b, old_pos));
-        }
-        for (number, text) in old.lines_in_range(chunk.from_a, chunk.to_a) {
-            lines.push(Line {
-                kind: LineKind::Del,
-                text: text.to_owned(),
-                old_number: Some(number),
-                new_number: None,
-                chunk: Some(index),
-            });
-        }
-        for (number, text) in new.lines_in_range(chunk.from_b, chunk.to_b) {
-            lines.push(Line {
-                kind: LineKind::Add,
-                text: text.to_owned(),
-                old_number: None,
-                new_number: Some(number),
-                chunk: Some(index),
-            });
-        }
-        old_pos = chunk.to_a;
-        new_pos = chunk.to_b;
-    }
-    if new_pos < new.len {
-        lines.extend(context(new_pos, new.len, old_pos));
-    }
-    (lines, chunks)
 }
 
 #[cfg(test)]

@@ -165,17 +165,16 @@ impl Bots {
             .find(|view| view.read(cx).summary.id == caller)
             .map(|view| view.read(cx).bot_turn)
             .unwrap_or(0);
-        let launch = Launch {
+        let mut launch = Launch {
             session_id: start.summary.id,
             cwd: start.summary.cwd.clone(),
             title: start.summary.title.clone(),
             harness: start.summary.provider.clone(),
             model: start.settings.model.clone(),
-            origin_turn: ((caller as u64) << 32) | origin,
             notify_on_complete: flag(&call.input, "notifyOnComplete", !start.draft),
-            completed: false,
-            dismissed: false,
+            ..Default::default()
         };
+        launch.set_origin(caller, origin);
         let owner = self.owner.clone();
         let manager = cx.entity().downgrade();
         let handle = window.window_handle();
@@ -203,197 +202,17 @@ impl Bots {
         });
     }
     pub(super) fn app_call(&mut self, call: Call, window: &mut Window, cx: &mut Context<Self>) {
-        let bot = self
-            .roster
-            .of_session(call.session)
-            .or_else(|| {
-                self.running
-                    .get(&call.session)
-                    .and_then(|r| self.roster.get(&r.bot))
-            })
-            .cloned();
-
-        let Some(actor) = bot
-            .and_then(|b| self.roster.effective_bot(&b.id))
-            .filter(|b| {
-                self.roster.is_active(&b.id)
-                    && !self.shared_roster.read(cx).removed.contains_key(&b.id)
-                    && (!b.is_minion() || (self.prefs.bots && self.prefs.minions))
-            })
-        else {
-            let _ = call.reply.send(Err(
-                "This Bot no longer owns an active app capability".into()
-            ));
+        let Some((actor, bot, permit)) = self.app_call_actors(&call, cx) else {
             return;
         };
-        let bot = self.roster.storage_owner(&actor.id).unwrap().clone();
-        let permit = if actor.is_minion() {
-            match self
-                .shared_roster
-                .read(cx)
-                .minion_permit(&actor.id, &bot.projects)
-            {
-                Ok(permit) => Some(permit),
-                Err(error) => {
-                    let _ = call.reply.send(Err(error));
-                    return;
-                }
-            }
-        } else {
-            None
-        };
-        if actor.is_minion() && !bot::api::minion_allowed(&call.action) {
-            let _ = call
-                .reply
-                .send(Err(format!("Minions cannot use {}", call.action)));
+        if !self.admit_app_call(&call) {
             return;
-        }
-        if matches!(call.action.as_str(), "minions.spawn" | "minions.hire") && !self.prefs.minions {
-            let _ = call.reply.send(Err(
-                "Minions are experimental; turn them on in Settings › Bots first".into(),
-            ));
-            return;
-        }
-        if call.action.starts_with("habits.")
-            && call.action != "habits.list"
-            && self.running.contains_key(&call.session)
-        {
-            let _ = call
-                .reply
-                .send(Err("A habit run cannot schedule more runs".into()));
-            return;
-        }
-        if let Err(error) = bot::api::validate(&call.action, &call.input) {
-            let _ = call.reply.send(Err(error));
-            return;
-        }
-        let needs_admission = locked(&self.store)
-            .and_then(|store| store.app_command_known(call.session, &call.request_id))
-            .map(|known| known || !bot::api::is_read_only(&call.action));
-        let needs_admission = match needs_admission {
-            Ok(value) => value,
-            Err(error) => {
-                let _ = call.reply.send(Err(error));
-                return;
-            }
-        };
-        if needs_admission {
-            let admission = (|| {
-                let store = locked(&self.store)?;
-                // Existing completed receipts remain read-through compatibility.
-                // A newer admitted receipt always wins over this older cache.
-                if !store.app_command_known(call.session, &call.request_id)? {
-                    let key = format!(
-                        "bot-app-receipt:{}:{}",
-                        call.session,
-                        files::content_hash(&call.request_id)
-                    );
-                    if let Some(raw) = store.setting(&key)? {
-                        let (saved,result):(String,Result<Value,String>)=serde_json::from_str(&raw).map_err(|e|format!("Cannot verify the prior command result; it was not replayed: {e}"))?;
-                        if saved != fingerprint(&call) {
-                            return Err(
-                                "Request ID was already used with different action or input".into(),
-                            );
-                        }
-                        return Ok(vorkspace_core::store::AppCommandAdmission::Completed(
-                            result,
-                        ));
-                    }
-                }
-                store.admit_app_command(call.session, &call.request_id, &call.action, &call.input)
-            })();
-            match admission {
-                Ok(vorkspace_core::store::AppCommandAdmission::Admitted) => (),
-                Ok(vorkspace_core::store::AppCommandAdmission::Completed(result)) => {
-                    let _ = call.reply.send(result);
-                    return;
-                }
-                Err(error) => {
-                    let _ = call.reply.send(Err(error));
-                    return;
-                }
-            }
         }
         if matches!(
             call.action.as_str(),
             "bots.read" | "bots.historyStatus" | "bots.recoverHistory"
         ) {
-            let target = self
-                .roster
-                .resolve_peer(
-                    &actor.id,
-                    call.input["bot"].as_str().unwrap_or_default(),
-                    true,
-                )
-                .and_then(|target| {
-                    if target.id == actor.id {
-                        return Err("Use your own conversation history".into());
-                    }
-                    Ok((
-                        target
-                            .session_id
-                            .ok_or("That Bot's conversation is unavailable")?,
-                        json!({"id":target.id,"name":target.label()}),
-                    ))
-                });
-            let (session, target) = match target {
-                Ok(target) => target,
-                Err(error) => {
-                    self.finish_call(call, Err(error), cx);
-                    return;
-                }
-            };
-            if call.action != "bots.read" {
-                let root = self.root.clone();
-                let recovery = (call.action == "bots.recoverHistory").then(|| {
-                    call.input["expectedHistory"]
-                        .as_str()
-                        .unwrap_or_default()
-                        .to_owned()
-                });
-                self.call_work(
-                    call,
-                    &actor.id,
-                    bot.id.clone(),
-                    move |store| {
-                        if let Some(expected) = recovery {
-                            vorkspace_runtime::runtime::native_history::recover(
-                                &store, session, &root, &expected,
-                            )?;
-                            Ok((json!({"bot":target,"recovered":true}), Effect::None))
-                        } else {
-                            let result = vorkspace_runtime::runtime::native_history::sync(
-                                &store, session, &root,
-                            )?;
-                            Ok((
-                                json!({"bot":target,"unfinished":result.active,
-                            "expectedHistory":result.recovery,"more":result.more,
-                            "superseded":result.superseded}),
-                                Effect::None,
-                            ))
-                        }
-                    },
-                    cx,
-                );
-                return;
-            }
-            let before = call.input["before"].as_u64();
-            let limit = call.input["limit"].as_u64().unwrap_or(40).clamp(1, 100) as usize;
-            let max = call.input["maxChars"]
-                .as_u64()
-                .unwrap_or(24_000)
-                .clamp(100, 100_000) as usize;
-            self.call_work(
-                call,
-                &actor.id,
-                bot.id.clone(),
-                move |store| {
-                    let mut page = locked(&store)?.peer_history(session, before, limit, max)?;
-                    page["bot"] = target;
-                    Ok((page, Effect::None))
-                },
-                cx,
-            );
+            self.app_peer_history(call, &actor, &bot, cx);
             return;
         }
         if call.action.starts_with("bots.") {
@@ -431,20 +250,7 @@ impl Bots {
                     return;
                 }
             };
-            let root = input
-                .get("worktreeCwd")
-                .and_then(Value::as_str)
-                .map(str::to_owned)
-                .or_else(|| {
-                    source.as_ref().and_then(|view| {
-                        let view = view.read(cx);
-                        (vorkspace_core::files::path_key(&view.summary.cwd)
-                            == vorkspace_core::files::path_key(&project))
-                        .then(|| view.settings.worktree_cwd.clone())
-                        .flatten()
-                    })
-                })
-                .unwrap_or_else(|| project.clone());
+            let root = Self::app_codebase_root(&input, &source, &project, cx);
             self.call_work(
                 call,
                 &actor.id,
@@ -519,11 +325,7 @@ impl Bots {
                 },cx);return;
             }
             "worktrees.remove"=>{
-                let path=match text(&input,"path",4096){Ok(path)=>path,Err(error)=>{self.finish_call(call,Err(error),cx);return;}};
-                let bots=cx.weak_entity();
-                self.owner.remove_worktree(project,path,Box::new(move|result,cx|{
-                    let _=bots.update(cx,|bots,cx|bots.finish_call(call,result.map(|()|json!({"removed":true})),cx));
-                }),cx);return;
+                self.app_remove_worktree(call,&input,project,cx);return;
             }
             "minions.list"=>{
                 Ok(json!(self.roster.team(&bot.id).filter(|b|b.is_minion()).map(|b|self.minion_value(b,cx)).collect::<Vec<_>>()))
@@ -561,10 +363,7 @@ impl Bots {
                 Ok(value)
             }
             "minions.fire"=>{
-                let query=match text(&input,"minion",160){Ok(v)=>v,Err(e)=>{self.finish_call(call,Err(e),cx);return;}};
-                let member=match self.roster.resolve_peer(&actor.id,&query,true){Ok(b)=>b.id.clone(),Err(e)=>{self.finish_call(call,Err(e),cx);return;}};
-                self.fire_minion(call, actor.id, member, cx);
-                return;
+                self.app_fire_minion(call,&input,actor.id,cx);return;
             }
             "minions.retry"|"minions.discard"=>{
                 let query=match text(&input,"minion",160){Ok(v)=>v,Err(e)=>{self.finish_call(call,Err(e),cx);return;}};
@@ -610,7 +409,7 @@ impl Bots {
                 if self.protected_app_target(session,cx) { self.finish_call(call,Err("Protected sessions cannot receive app-directed input".into()),cx);return; }
                 let view=self.owner.ensure_session(session,cx);
                 let Some(view)=view else {self.finish_call(call,Err("Session is unavailable".into()),cx);return;};
-                view.update(cx,|view,cx|view.load(cx));
+                view.update(cx,|view,cx|view.load_complete(cx));
                 if !view.read(cx).ready_for_external(cx) {self.finish_call(call,Err("Session is busy, loading, or has an unsent draft".into()),cx);return;}
                 match text(&input,"prompt",65536) {
                     Ok(prompt)=>{
@@ -618,8 +417,26 @@ impl Bots {
                         if let Err(error)=sent {self.finish_call(call,Err(error),cx);return;}
                         if flag(&input,"notifyOnComplete",false) && let Some(bot)=self.roster.get_mut(&bot.id) {
                             let origin=source.map(|v|v.read(cx).bot_turn).unwrap_or(0);
-                            if let Some(launch)=bot.launches.iter_mut().find(|launch|launch.session_id==session) {launch.completed=false;launch.dismissed=false;launch.notify_on_complete=true;launch.origin_turn=((call.session as u64)<<32)|origin;}
-                            else {let summary=&view.read(cx).summary;bot.launches.push(Launch{session_id:session,cwd:summary.cwd.clone(),title:summary.title.clone(),harness:summary.provider.clone(),model:view.read(cx).bot_model(),origin_turn:((call.session as u64)<<32)|origin,notify_on_complete:true,completed:false,dismissed:false});}
+                            if let Some(launch) = bot.launches.iter_mut().find(|launch| launch.session_id == session) {
+                                launch.completed = false;
+                                launch.dismissed = false;
+                                launch.notify_on_complete = true;
+                                launch.set_origin(call.session, origin);
+                            } else {
+                                let conversation = view.read(cx);
+                                let summary = &conversation.summary;
+                                let mut launch = Launch {
+                                    session_id: session,
+                                    cwd: summary.cwd.clone(),
+                                    title: summary.title.clone(),
+                                    harness: summary.provider.clone(),
+                                    model: conversation.bot_model(),
+                                    notify_on_complete: true,
+                                    ..Default::default()
+                                };
+                                launch.set_origin(call.session, origin);
+                                bot.launches.push(launch);
+                            }
                         }
                         Ok(json!({"accepted":true}))
                     }
@@ -628,15 +445,7 @@ impl Bots {
             }
             "folders.list"=>Ok(json!(self.owner.groups(&project,cx).folders)),
             "folders.move"=>{
-                let session=match id(&input,"sessionId"){Ok(id)=>id,Err(e)=>{self.finish_call(call,Err(e),cx);return;}};
-                let allowed=self.owner.ensure_session(session,cx).is_some_and(|v|v.read(cx).summary.cwd==project);
-                if !allowed{self.finish_call(call,Err("Session is outside this project".into()),cx);return;}
-                self.call_work(call,&actor.id,target,move|store|{
-                    locked(&store)?.edit_groups(&project, |groups| groups.move_session(
-                        session, input["folderId"].as_str(), input["newFolderName"].as_str(),
-                    ))?;
-                    Ok((json!({"moved":true}),Effect::Groups(project)))
-                },cx);return;
+                self.app_move_to_folder(call,input,project,&actor.id,target,cx);return;
             }
             "artifacts.list"=>Ok(json!(bot.documents.iter().filter(|d|input.get("kind").and_then(Value::as_str).is_none_or(|k|k==d.kind)).skip(input.get("offset").and_then(Value::as_u64).unwrap_or(0) as usize).take(input.get("limit").and_then(Value::as_u64).unwrap_or(50).min(200) as usize).collect::<Vec<_>>())),
             "artifacts.read"=>input.get("id").and_then(Value::as_str).and_then(|id|bot.documents.iter().find(|d|d.id==id)).map(|d|json!(d)).ok_or("Document not found".into()),
@@ -647,7 +456,7 @@ impl Bots {
                     let session=card["sessionId"].as_i64().unwrap();
                     let view=self.owner.ensure_session(session,cx).filter(|v|bot.works_on(&v.read(cx).summary.cwd));
                     let Some(view)=view else{self.finish_call(call,Err("Session is outside assigned projects".into()),cx);return;};
-                    card["title"]=json!(view.read(cx).summary.title);card["state"]=json!(if view.read(cx).busy{"Working"}else{"Saved"});
+                    card["title"]=json!(view.read(cx).summary.title);card["state"]=json!(if view.read(cx).responding(){"Working"}else{"Saved"});
                 }
                 if card["type"]=="pr"{
                     let cwd=bot.projects.first().cloned().unwrap_or_else(||std::env::var("HOME").unwrap_or_else(|_|".".into()));
@@ -684,29 +493,476 @@ impl Bots {
                 },cx);return;
             }
             "soul.read"|"soul.update"|"memory.read"|"memory.search"|"memory.add"|"memory.replace"|"memory.remove"|"habits.list"|"habits.add"|"habits.update"|"habits.run"|"habits.remove"|"worktrees.list"|"worktrees.create"=>{
-                self.call_work(call,&actor.id,target.clone(),move|store|{
-                    let value=match action.as_str(){
-                        "soul.read"=>json!(files::read(&root,&target,None,"SOUL.md")?),
-                        "soul.update"=>{let body=input.get("text").and_then(Value::as_str).filter(|t|t.len()<=128*1024).ok_or("Provide text")?;let expected=text(&input,"expectedHash",128)?;json!({"hash":files::save(&root,&target,None,"SOUL.md",body,Some(&expected))?})},
-                        "memory.read"=>json!(memory::read(&root,&target,input.get("topic").and_then(Value::as_str))?),
-                        "memory.search"=>json!(memory::search(&root,&target,&text(&input,"query",4000)?,input.get("since").and_then(Value::as_str))?),
-                        "memory.add"|"memory.replace"|"memory.remove"=>{let entry=if action=="memory.remove"{None}else{Some(memory::entry(&text(&input,"fact",4000)?,&memory::date(),input.get("until").and_then(Value::as_str))?)};let find=input.get("find").and_then(Value::as_str).unwrap_or_default();let hash=memory::edit(&root,&target,input.get("topic").and_then(Value::as_str),|old|if action=="memory.add"{Ok(memory::add(old,entry.as_deref().unwrap()))}else{memory::replace(old,find,entry.as_deref(),&memory::date())})?;json!({"hash":hash})},
-                        "habits.list"=>json!(habits::load(&root,&target)?),
-                        "habits.add"=>{let schedule:habits::Schedule=serde_json::from_value(input.get("schedule").cloned().ok_or("Provide schedule")?).map_err(|e|e.to_string())?;let h=Habit::new(text(&input,"name",480)?,text(&input,"instructions",32000)?,schedule,now_ms())?;habits::update(&root,&target,|all|{all.push(h.clone());Ok(())})?;json!(h)},
-                        "habits.update"|"habits.run"|"habits.remove"=>{let id=text(&input,"id",128)?;habits::update(&root,&target,|all|{let index=all.iter().position(|h|h.id==id).ok_or("Habit not found")?;if action=="habits.remove"{all.remove(index);return Ok(json!({"removed":true}));}let h=&mut all[index];if action=="habits.run"{h.run_requested=true;}else{if let Some(name)=input.get("name").and_then(Value::as_str){if name.trim().is_empty()||name.chars().count()>120{return Err("Invalid habit name".into());}h.name=name.trim().into();}
-if let Some(instructions)=input.get("instructions").and_then(Value::as_str){if instructions.trim().is_empty()||instructions.len()>32000{return Err("Invalid habit instructions".into());}h.instructions=instructions.into();}
-if let Some(schedule)=input.get("schedule"){h.schedule=serde_json::from_value(schedule.clone()).map_err(|e|e.to_string())?;h.schedule.validate()?;h.next_run_at=h.schedule.next(now_ms())?;}
-if let Some(enabled)=input.get("enabled").and_then(Value::as_bool){h.enabled=enabled;if enabled{h.next_run_at=h.schedule.next(now_ms())?;}}}Ok(json!(h))})?},
-                        "worktrees.list"=>vorkspace_core::store::describe_worktrees(Path::new(&project),&store)?,
-                        "worktrees.create"=>{let branch=text(&input,"branch",240)?;let tree=vorkspace_core::git::create_project_worktree(Path::new(&project),&branch,input.get("base").and_then(Value::as_str),flag(&input,"existing",false))?;json!({"path":tree.path,"branch":tree.branch})},
-                        _=>unreachable!(),
-                    };Ok((value,Effect::None))
-                },cx);return;
+                self.call_work(call,&actor.id,target.clone(),move |store| Self::app_storage_action(store, root, target, project, action, input),cx);return;
             }
             _=>Err("Unknown action. Run app help to see supported actions".into()),
         };
         self.finish_call(call, result, cx);
     }
+
+    fn app_remove_worktree(
+        &mut self,
+        call: Call,
+        input: &Value,
+        project: String,
+        cx: &mut Context<Self>,
+    ) {
+        let path = match text(input, "path", 4096) {
+            Ok(path) => path,
+            Err(error) => {
+                self.finish_call(call, Err(error), cx);
+                return;
+            }
+        };
+        let bots = cx.weak_entity();
+        self.owner.remove_worktree(
+            project,
+            path,
+            Box::new(move |result, cx| {
+                let _ = bots.update(cx, |bots, cx| {
+                    bots.finish_call(call, result.map(|()| json!({"removed":true})), cx)
+                });
+            }),
+            cx,
+        );
+    }
+
+    fn app_fire_minion(
+        &mut self,
+        call: Call,
+        input: &Value,
+        actor_id: String,
+        cx: &mut Context<Self>,
+    ) {
+        let query = match text(input, "minion", 160) {
+            Ok(v) => v,
+            Err(e) => {
+                self.finish_call(call, Err(e), cx);
+                return;
+            }
+        };
+        let member = match self.roster.resolve_peer(&actor_id, &query, true) {
+            Ok(b) => b.id.clone(),
+            Err(e) => {
+                self.finish_call(call, Err(e), cx);
+                return;
+            }
+        };
+        self.fire_minion(call, actor_id, member, cx);
+    }
+
+    fn app_move_to_folder(
+        &mut self,
+        call: Call,
+        input: Value,
+        project: String,
+        actor_id: &str,
+        target: String,
+        cx: &mut Context<Self>,
+    ) {
+        let session = match id(&input, "sessionId") {
+            Ok(id) => id,
+            Err(e) => {
+                self.finish_call(call, Err(e), cx);
+                return;
+            }
+        };
+        let allowed = self
+            .owner
+            .ensure_session(session, cx)
+            .is_some_and(|v| v.read(cx).summary.cwd == project);
+        if !allowed {
+            self.finish_call(call, Err("Session is outside this project".into()), cx);
+            return;
+        }
+        self.call_work(
+            call,
+            actor_id,
+            target,
+            move |store| {
+                let destination = vorkspace_core::session_groups::FolderDestination::from_parts(
+                    input["folderId"].as_str(),
+                    input["newFolderName"].as_str(),
+                );
+                locked(&store)?.move_sessions_to_folder(&project, &[session], destination)?;
+                Ok((json!({"moved":true}), Effect::Groups(project)))
+            },
+            cx,
+        );
+    }
+
+    fn app_codebase_root(
+        input: &Value,
+        source: &Option<Entity<Conversation>>,
+        project: &str,
+        cx: &App,
+    ) -> String {
+        input
+            .get("worktreeCwd")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .or_else(|| {
+                source.as_ref().and_then(|view| {
+                    let view = view.read(cx);
+                    (vorkspace_core::files::path_key(&view.summary.cwd)
+                        == vorkspace_core::files::path_key(project))
+                    .then(|| view.settings.worktree_cwd.clone())
+                    .flatten()
+                })
+            })
+            .unwrap_or_else(|| project.to_owned())
+    }
+
+    fn app_call_actors(
+        &self,
+        call: &Call,
+        cx: &App,
+    ) -> Option<(Bot, Bot, Option<super::effects::Permit>)> {
+        let bot = self
+            .roster
+            .of_session(call.session)
+            .or_else(|| {
+                self.running
+                    .get(&call.session)
+                    .and_then(|r| self.roster.get(&r.bot))
+            })
+            .cloned();
+
+        let Some(actor) = bot
+            .and_then(|b| self.roster.effective_bot(&b.id))
+            .filter(|b| {
+                self.roster.is_active(&b.id)
+                    && !self.shared_roster.read(cx).removed.contains_key(&b.id)
+                    && (!b.is_minion() || (self.prefs.bots && self.prefs.minions))
+            })
+        else {
+            let _ = call.reply.send(Err(
+                "This Bot no longer owns an active app capability".into()
+            ));
+            return None;
+        };
+        let bot = self.roster.storage_owner(&actor.id).unwrap().clone();
+        let permit = if actor.is_minion() {
+            match self
+                .shared_roster
+                .read(cx)
+                .minion_permit(&actor.id, &bot.projects)
+            {
+                Ok(permit) => Some(permit),
+                Err(error) => {
+                    let _ = call.reply.send(Err(error));
+                    return None;
+                }
+            }
+        } else {
+            None
+        };
+        if actor.is_minion() && !bot::api::minion_allowed(&call.action) {
+            let _ = call
+                .reply
+                .send(Err(format!("Minions cannot use {}", call.action)));
+            return None;
+        }
+        if matches!(call.action.as_str(), "minions.spawn" | "minions.hire") && !self.prefs.minions {
+            let _ = call.reply.send(Err(
+                "Minions are experimental; turn them on in Settings › Bots first".into(),
+            ));
+            return None;
+        }
+        if call.action.starts_with("habits.")
+            && call.action != "habits.list"
+            && self.running.contains_key(&call.session)
+        {
+            let _ = call
+                .reply
+                .send(Err("A habit run cannot schedule more runs".into()));
+            return None;
+        }
+        if let Err(error) = bot::api::validate(&call.action, &call.input) {
+            let _ = call.reply.send(Err(error));
+            return None;
+        }
+
+        Some((actor, bot, permit))
+    }
+
+    fn admit_app_call(&self, call: &Call) -> bool {
+        let needs_admission = locked(&self.store)
+            .and_then(|store| store.app_command_known(call.session, &call.request_id))
+            .map(|known| known || !bot::api::is_read_only(&call.action));
+        let needs_admission = match needs_admission {
+            Ok(value) => value,
+            Err(error) => {
+                let _ = call.reply.send(Err(error));
+                return false;
+            }
+        };
+        if needs_admission {
+            let admission = (|| {
+                let store = locked(&self.store)?;
+                // Existing completed receipts remain read-through compatibility.
+                // A newer admitted receipt always wins over this older cache.
+                if !store.app_command_known(call.session, &call.request_id)? {
+                    let key = format!(
+                        "bot-app-receipt:{}:{}",
+                        call.session,
+                        files::content_hash(&call.request_id)
+                    );
+                    if let Some(raw) = store.setting(&key)? {
+                        let (saved,result):(String,Result<Value,String>)=serde_json::from_str(&raw).map_err(|e|format!("Cannot verify the prior command result; it was not replayed: {e}"))?;
+                        if saved != fingerprint(call) {
+                            return Err(
+                                "Request ID was already used with different action or input".into(),
+                            );
+                        }
+                        return Ok(vorkspace_core::store::AppCommandAdmission::Completed(
+                            result,
+                        ));
+                    }
+                }
+                store.admit_app_command(call.session, &call.request_id, &call.action, &call.input)
+            })();
+            match admission {
+                Ok(vorkspace_core::store::AppCommandAdmission::Admitted) => (),
+                Ok(vorkspace_core::store::AppCommandAdmission::Completed(result)) => {
+                    let _ = call.reply.send(result);
+                    return false;
+                }
+                Err(error) => {
+                    let _ = call.reply.send(Err(error));
+                    return false;
+                }
+            }
+        }
+
+        true
+    }
+
+    fn app_peer_history(&mut self, call: Call, actor: &Bot, bot: &Bot, cx: &mut Context<Self>) {
+        let target = self
+            .roster
+            .resolve_peer(
+                &actor.id,
+                call.input["bot"].as_str().unwrap_or_default(),
+                true,
+            )
+            .and_then(|target| {
+                if target.id == actor.id {
+                    return Err("Use your own conversation history".into());
+                }
+                Ok((
+                    target
+                        .session_id
+                        .ok_or("That Bot's conversation is unavailable")?,
+                    json!({"id":target.id,"name":target.label()}),
+                ))
+            });
+        let (session, target) = match target {
+            Ok(target) => target,
+            Err(error) => {
+                self.finish_call(call, Err(error), cx);
+                return;
+            }
+        };
+        if call.action != "bots.read" {
+            let root = self.root.clone();
+            let recovery = (call.action == "bots.recoverHistory").then(|| {
+                call.input["expectedHistory"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_owned()
+            });
+            self.call_work(
+                call,
+                &actor.id,
+                bot.id.clone(),
+                move |store| {
+                    if let Some(expected) = recovery {
+                        vorkspace_runtime::runtime::native_history::recover(
+                            &store, session, &root, &expected,
+                        )?;
+                        Ok((json!({"bot":target,"recovered":true}), Effect::None))
+                    } else {
+                        let result = vorkspace_runtime::runtime::native_history::sync(
+                            &store, session, &root,
+                        )?;
+                        Ok((
+                            json!({"bot":target,"unfinished":result.active,
+                        "expectedHistory":result.recovery,"more":result.more,
+                        "superseded":result.superseded}),
+                            Effect::None,
+                        ))
+                    }
+                },
+                cx,
+            );
+            return;
+        }
+        let before = call.input["before"].as_u64();
+        let limit = call.input["limit"].as_u64().unwrap_or(40).clamp(1, 100) as usize;
+        let max = call.input["maxChars"]
+            .as_u64()
+            .unwrap_or(24_000)
+            .clamp(100, 100_000) as usize;
+        self.call_work(
+            call,
+            &actor.id,
+            bot.id.clone(),
+            move |store| {
+                let mut page = locked(&store)?.peer_history(session, before, limit, max)?;
+                page["bot"] = target;
+                Ok((page, Effect::None))
+            },
+            cx,
+        );
+    }
+
+    fn app_storage_action(
+        store: Database,
+        root: PathBuf,
+        target: String,
+        project: String,
+        action: String,
+        input: Value,
+    ) -> Result<(Value, Effect), String> {
+        let value = match action.as_str() {
+            "soul.read" => json!(files::read(&root, &target, None, "SOUL.md")?),
+            "soul.update" => {
+                let body = input
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .filter(|t| t.len() <= 128 * 1024)
+                    .ok_or("Provide text")?;
+                let expected = text(&input, "expectedHash", 128)?;
+                json!({"hash":files::save(&root,&target,None,"SOUL.md",body,Some(&expected))?})
+            }
+            "memory.read" => json!(memory::read(
+                &root,
+                &target,
+                input.get("topic").and_then(Value::as_str)
+            )?),
+            "memory.search" => json!(memory::search(
+                &root,
+                &target,
+                &text(&input, "query", 4000)?,
+                input.get("since").and_then(Value::as_str)
+            )?),
+            "memory.add" | "memory.replace" | "memory.remove" => {
+                let entry = if action == "memory.remove" {
+                    None
+                } else {
+                    Some(memory::entry(
+                        &text(&input, "fact", 4000)?,
+                        &memory::date(),
+                        input.get("until").and_then(Value::as_str),
+                    )?)
+                };
+                let find = input
+                    .get("find")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                let hash = memory::edit(
+                    &root,
+                    &target,
+                    input.get("topic").and_then(Value::as_str),
+                    |old| {
+                        if action == "memory.add" {
+                            Ok(memory::add(old, entry.as_deref().unwrap()))
+                        } else {
+                            memory::replace(old, find, entry.as_deref(), &memory::date())
+                        }
+                    },
+                )?;
+                json!({"hash":hash})
+            }
+            "habits.list" => json!(habits::load(&root, &target)?),
+            "habits.add" => {
+                let schedule: habits::Schedule = serde_json::from_value(
+                    input.get("schedule").cloned().ok_or("Provide schedule")?,
+                )
+                .map_err(|e| e.to_string())?;
+                let h = Habit::new(
+                    text(&input, "name", 480)?,
+                    text(&input, "instructions", 32000)?,
+                    schedule,
+                    now_ms(),
+                )?;
+                habits::update(&root, &target, |all| {
+                    all.push(h.clone());
+                    Ok(())
+                })?;
+                json!(h)
+            }
+            "habits.update" | "habits.run" | "habits.remove" => {
+                Self::app_update_habit(root, target, action, input)?
+            }
+            "worktrees.list" => {
+                vorkspace_core::store::describe_worktrees(Path::new(&project), &store)?
+            }
+            "worktrees.create" => {
+                let branch = text(&input, "branch", 240)?;
+                let tree = vorkspace_core::git::create_project_worktree(
+                    Path::new(&project),
+                    &branch,
+                    input.get("base").and_then(Value::as_str),
+                    flag(&input, "existing", false),
+                )?;
+                json!({"path":tree.path,"branch":tree.branch})
+            }
+            _ => unreachable!(),
+        };
+        Ok((value, Effect::None))
+    }
+
+    fn app_update_habit(
+        root: PathBuf,
+        target: String,
+        action: String,
+        input: Value,
+    ) -> Result<Value, String> {
+        let id = text(&input, "id", 128)?;
+        habits::update(&root, &target, |all| {
+            let index = all
+                .iter()
+                .position(|h| h.id == id)
+                .ok_or("Habit not found")?;
+            if action == "habits.remove" {
+                all.remove(index);
+                return Ok(json!({"removed":true}));
+            }
+            let h = &mut all[index];
+            if action == "habits.run" {
+                h.run_requested = true;
+            } else {
+                if let Some(name) = input.get("name").and_then(Value::as_str) {
+                    if name.trim().is_empty() || name.chars().count() > 120 {
+                        return Err("Invalid habit name".into());
+                    }
+                    h.name = name.trim().into();
+                }
+                if let Some(instructions) = input.get("instructions").and_then(Value::as_str) {
+                    if instructions.trim().is_empty() || instructions.len() > 32000 {
+                        return Err("Invalid habit instructions".into());
+                    }
+                    h.instructions = instructions.into();
+                }
+                if let Some(schedule) = input.get("schedule") {
+                    h.schedule =
+                        serde_json::from_value(schedule.clone()).map_err(|e| e.to_string())?;
+                    h.schedule.validate()?;
+                    h.next_run_at = h.schedule.next(now_ms())?;
+                }
+                if let Some(enabled) = input.get("enabled").and_then(Value::as_bool) {
+                    h.enabled = enabled;
+                    if enabled {
+                        h.next_run_at = h.schedule.next(now_ms())?;
+                    }
+                }
+            }
+            Ok(json!(h))
+        })
+    }
+
     pub(super) fn group_launch(&mut self, id: &str, session: i64, cx: &mut Context<Self>) {
         let Some(bot) = self
             .roster
@@ -754,87 +1010,6 @@ if let Some(enabled)=input.get("enabled").and_then(Value::as_bool){h.enabled=ena
             }
         })
         .detach();
-    }
-    pub(super) fn check_completions(&mut self, cx: &mut Context<Self>) {
-        let views = self.owner.session_views(cx);
-        let mut ready = Vec::new();
-        for bot in &self.roster.bots {
-            let groups: HashSet<_> = bot
-                .launches
-                .iter()
-                .filter(|l| l.notify_on_complete && !l.completed && !l.dismissed)
-                .map(|l| l.origin_turn)
-                .collect();
-            for group in groups {
-                let source = (group >> 32) as i64;
-                if self
-                    .chats
-                    .values()
-                    .chain(self.running.values().map(|r| &r.view))
-                    .any(|v| v.read(cx).summary.id == source && v.read(cx).busy)
-                {
-                    continue;
-                }
-                let children: Vec<_> = bot
-                    .launches
-                    .iter()
-                    .filter(|l| {
-                        l.origin_turn == group
-                            && l.notify_on_complete
-                            && !l.completed
-                            && !l.dismissed
-                    })
-                    .collect();
-                if !children.is_empty()
-                    && children.iter().all(|l| {
-                        views
-                            .iter()
-                            .find(|v| v.id == l.session_id)
-                            .is_none_or(|v| !v.busy && v.has_messages)
-                    })
-                    && !self.completion_work.contains(&(bot.id.clone(), group))
-                {
-                    ready.push((
-                        bot.id.clone(),
-                        group,
-                        children
-                            .iter()
-                            .map(|l| (l.session_id, l.title.clone()))
-                            .collect::<Vec<_>>(),
-                    ));
-                }
-            }
-        }
-        for (id, group, children) in ready {
-            self.completion_work.insert((id.clone(), group));
-            let store = self.store.clone();
-            let work = cx.background_executor().spawn(async move {
-                children
-                    .into_iter()
-                    .map(|(id, title)| {
-                        let rows = locked(&store)
-                            .and_then(|db| db.load(id))
-                            .map(|t| vorkspace_core::response::prose(&t.rows))
-                            .unwrap_or_else(|_| "Session was removed".into());
-                        format!(
-                            "Session {id}: {title}\n{}",
-                            vorkspace_core::response::limit(&rows, 12000)
-                        )
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n\n")
-            });
-            cx.spawn(async move |this,cx| {
-                let report=work.await;
-                let _=this.update(cx,|this,cx|{
-                    this.completion_work.remove(&(id.clone(),group));
-                    if let Some(bot)=this.roster.get_mut(&id){for launch in &mut bot.launches{if launch.origin_turn==group{launch.completed=true;}}}
-                    let message=format!("[Delegated work completed]\nAll sessions in this group have stopped. Inspect their results and give an integrated update.\n\n{report}");
-                    let source=(group>>32) as i64;
-                    if let Some(run)=this.running.get_mut(&source){run.mailbox.push(message);this.save(cx);this.habit_changed(source,cx);}else{this.enqueue(&id,message,Vec::new(),true,cx);this.ensure_chat(&id,cx);}
-                });
-            }).detach();
-        }
     }
 }
 
@@ -909,7 +1084,10 @@ impl Bots {
     pub(crate) fn minion_value(&self, member: &Bot, cx: &App) -> Value {
         let metadata = member.minion.as_ref().unwrap();
         let owner = self.roster.storage_owner(&member.id);
-        let working = self.chats.get(&member.id).is_some_and(|v| v.read(cx).busy);
+        let working = self
+            .chats
+            .get(&member.id)
+            .is_some_and(|v| v.read(cx).responding());
         json!({"id":member.id,"name":member.label(),"parentId":metadata.parent_id,"role":metadata.role,"specialties":metadata.specialties,"retired":metadata.retired,"createdAt":metadata.created_at,"sessionId":member.session_id,"working":working,"status":if metadata.retired {"retired"} else {self.member_status(&member.id,cx)},"pendingMessages":member.outbox.iter().map(|m|json!({"id":m.id,"error":m.error})).collect::<Vec<_>>(),"projects":owner.map(|p|&p.projects),"accepted":true})
     }
     fn next_minion_name(&self, parent: &str) -> String {
@@ -923,12 +1101,9 @@ impl Bots {
             })
             .unwrap()
     }
-    /// Kept as the Shell's shared attachment registry for source compatibility.
-    /// Persistent members now receive Bot context through their own executor.
-    pub(super) fn sync_minions(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn sync_minions(&self, cx: &mut Context<Self>) {
         self.shared_roster.update(cx, |shared, _| {
             shared.configure_minions(self.prefs.bots && self.prefs.minions);
         });
-        self.minion_registry.borrow_mut().clear();
     }
 }

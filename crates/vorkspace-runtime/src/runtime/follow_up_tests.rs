@@ -77,6 +77,7 @@ for line in sys.stdin:
     let worker = std::thread::spawn(move || {
         run_turn_using(
             TurnInput {
+                composer_origin: None,
                 summary,
                 prompt: "Start working".into(),
                 settings: Settings {
@@ -102,8 +103,13 @@ for line in sys.stdin:
         let update = receive
             .recv_blocking()
             .expect("Runtime closed before its final update");
-        if update.rows.iter().any(|row| row.role == "tool") && !receipt_seen {
-            assert_eq!(update.activity.as_deref(), Some("Run cargo check"));
+        if update
+            .transcript
+            .rows()
+            .iter()
+            .any(|row| row.role == "tool")
+            && !receipt_seen
+        {
             tool_seen = true;
         }
         if update.turn_ready {
@@ -114,16 +120,17 @@ for line in sys.stdin:
                 })
                 .unwrap();
         }
-        if !update.finished && update.follow_up_delivered.contains(&message.id) {
-            assert!(
-                update.activity.is_none(),
-                "a delivered steer resets latest tool activity"
-            );
-            let prompt = update.rows.iter().position(Row::is_prompt).unwrap();
-            let response = update.rows.last().unwrap();
+        if !update.finished() && update.follow_up_delivered.contains(&message.id) {
+            let prompt = update
+                .transcript
+                .rows()
+                .iter()
+                .position(Row::is_prompt)
+                .unwrap();
+            let response = update.transcript.rows().last().unwrap();
             assert_eq!(response.role, "assistant");
             assert!(response.first && response.text.is_empty());
-            assert!(prompt < update.rows.len() - 1);
+            assert!(prompt < update.transcript.rows().len() - 1);
             let store = locked(&store).unwrap();
             assert!(store.follow_ups(session).unwrap().messages.is_empty());
             let receipts = store.local_submissions(session).unwrap();
@@ -144,7 +151,7 @@ for line in sys.stdin:
             receipt_seen = true;
             std::fs::write(fixture.0.join("receipt-observed"), "ready").unwrap();
         }
-        if update.finished {
+        if update.finished() {
             break update.status;
         }
     };
@@ -195,6 +202,7 @@ for line in sys.stdin:
         let binary = binary.clone();
         run_turn_using(
             TurnInput {
+                composer_origin: None,
                 summary: summary.clone(),
                 prompt: "Saved request".into(),
                 settings: Settings {
@@ -210,7 +218,7 @@ for line in sys.stdin:
             |_| Some(binary),
         );
         let updates: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
-        assert!(updates.last().unwrap().finished);
+        assert!(updates.last().unwrap().finished());
         if retry {
             assert!(updates.last().unwrap().status.contains("not replayed"));
             assert!(!directory.path().join("provider-received").exists());

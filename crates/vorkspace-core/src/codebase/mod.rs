@@ -23,7 +23,7 @@ use std::{
 
 const SETTING: &str = "codebase-enabled-projects";
 type Database = Arc<Mutex<Store>>;
-pub type Reply = async_channel::Receiver<Result<Value, String>>;
+pub(crate) type Reply = async_channel::Receiver<Result<Value, String>>;
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -134,9 +134,6 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(|e| e.into_inner())
 }
 fn canonical(path: &str) -> Result<String, String> {
-    if crate::files::remote::is_remote(Path::new(path)) {
-        return Err("Codebase Memory currently supports local projects".into());
-    }
     let path = Path::new(path)
         .canonicalize()
         .map_err(|e| format!("Working copy unavailable: {e}"))?;
@@ -291,15 +288,15 @@ impl Service {
         {
             return Err("Eight working copies are still active or stopping. Disable Codebase Memory for an unused project or retry after it stops.".into());
         }
-        let mut previous_worker = state.workers.remove(&root_key);
-        let retirement = previous_worker
-            .as_ref()
+        let retirement = state
+            .workers
+            .get(&root_key)
             .map(|worker| worker.retirement.clone())
             .unwrap_or_default();
-        let previous = Arc::new(Mutex::new(previous_worker.as_mut().and_then(|worker| {
-            worker.cancel.store(true, Ordering::Release);
-            worker.thread.take()
-        })));
+        // The replacement waits until its thread exists and owns the slot.
+        // If spawning fails, the current worker can still serve the index.
+        let previous = Arc::new(Mutex::new(None::<JoinHandle<()>>));
+        let mut predecessor_slot = lock(&previous);
         let predecessor = previous.clone();
         let snapshot = Arc::new(Mutex::new(Snapshot {
             enabled: true,
@@ -419,17 +416,12 @@ impl Service {
                     publish("error", None, Some(error));
                 }
             });
-        worker.thread = Some(match spawned {
-            Ok(thread) => thread,
-            Err(error) => {
-                if let Some(mut old) = previous_worker {
-                    old.thread = lock(&previous).take();
-                    state.workers.insert(key, old);
-                }
-                return Err(error.to_string());
-            }
-        });
-        state.workers.insert(key, worker);
+        worker.thread = Some(spawned.map_err(|error| error.to_string())?);
+        if let Some(mut old) = state.workers.insert(key, worker) {
+            old.cancel.store(true, Ordering::Release);
+            *predecessor_slot = old.thread.take();
+        }
+        drop(predecessor_slot);
         let _ = self.changes.try_send(());
         Ok(())
     }

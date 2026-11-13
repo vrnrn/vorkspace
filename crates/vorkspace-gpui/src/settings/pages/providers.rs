@@ -1,5 +1,5 @@
 use crate::settings::{
-    SettingsView,
+    Preferences, SettingsView,
     widgets::{note, secondary_button},
 };
 use gpui::{AnyElement, Context, SharedString, div, prelude::*, px};
@@ -21,75 +21,43 @@ impl SettingsView {
         } else {
             vec![note("Provider accounts load with the workspace.")]
         };
-        let usage = vec![
-            self.row(
-                Some("show-remaining-usage"),
-                true,
-                "Show remaining usage",
-                Some("Show remaining capacity in usage meters.".into()),
-                vec![self.toggle(
-                    "show-remaining-usage",
-                    "Show remaining usage",
-                    p.show_remaining_usage,
-                    false,
-                    cx,
-                    |this, on, cx| this.update(cx, |p| p.show_remaining_usage = on),
-                )],
-            ),
-            self.row(
-                Some("mask-emails"),
-                false,
-                "Mask account emails",
-                Some("Hide email addresses until clicked.".into()),
-                vec![self.toggle(
-                    "mask-emails",
-                    "Mask account emails",
-                    p.mask_emails,
-                    false,
-                    cx,
-                    |this, on, cx| this.update(cx, |p| p.mask_emails = on),
-                )],
-            ),
-        ];
-        let mut usage = usage;
-        let bedrock = crate::accounts::get(cx).is_some_and(|center| {
-            center.read(cx).usage.values().any(|cached| {
-                cached
-                    .snapshot
-                    .as_ref()
-                    .is_some_and(|s| s.external_billing.as_deref() == Some("AWS Bedrock"))
-            })
-        });
-        if bedrock {
-            let invalid = !p.bedrock_cost_url.trim().is_empty() && p.cost_link().is_none();
-            usage.push(self.row(
-                None,
-                false,
-                "Cost monitoring link",
-                Some(
-                    if invalid {
-                        "Enter a full link starting with https://."
-                    } else {
-                        "Opens when you click AWS Bedrock in Subscriptions, such as your AWS Cost Explorer or Budgets page."
-                    }
-                    .into(),
-                ),
-                vec![
-                    div()
-                        .debug_selector(|| "bedrock-cost-link".into())
-                        .w(px(320.))
-                        .px_2()
-                        .py_1()
-                        .rounded(px(radius::CONTROL))
-                        .border_1()
-                        .border_color(content(0.1))
-                        .bg(content(0.05))
-                        .child(self.bedrock_url.clone())
-                        .into_any_element(),
-                ],
-            ));
-        }
+        let usage = self.provider_usage_rows(&p, cx);
         let binaries = self.discovery.binaries.clone();
+        let mut clis = self.provider_cli_rows(&p, &binaries, cx);
+        if self.discovery_loading {
+            clis.insert(0, note("Checking installed CLIs…"));
+        }
+        let advanced=vec![
+            self.row(Some("idle-agents"),true,"Keep idle agents ready",Some("Keep up to this many idle agents running for faster follow-ups. Uses additional memory.".into()),vec![self.segmented("idle-agents","Keep idle agents ready",&p.idle_agents.to_string(),&[("0","None"),("1","1"),("2","2"),("3","3"),("5","5")],cx,|this,value,cx|if let Ok(value)=value.parse(){this.update(cx,|p|p.idle_agents=value)})]),
+            self.row(Some("claude-hooks"),false,"Claude Code hooks",Some("Run your configured Claude Code hooks. Changes apply on the next turn.".into()),vec![self.toggle("claude-hooks","Claude Code hooks",p.claude_hooks,false,cx,|this,on,cx|this.update(cx,|p|p.claude_hooks=on))])];
+        vec![
+            self.group(
+                Some("provider-accounts"),
+                true,
+                "Accounts",
+                Some("Manage sign-ins and choose accounts for each project.".into()),
+                Some(self.refresh_button("refresh-provider-accounts", "Refresh", cx)),
+                accounts,
+            ),
+            self.group(None, false, "Usage and privacy", None, None, usage),
+            self.group(
+                Some("agent-clis"),
+                false,
+                "Agent CLIs",
+                Some("Choose available agents and default models for new conversations.".into()),
+                None,
+                clis,
+            ),
+            self.group(None, false, "Advanced", None, None, advanced),
+        ]
+    }
+
+    fn provider_cli_rows(
+        &self,
+        p: &Preferences,
+        binaries: &[(Kind, Option<std::path::PathBuf>)],
+        cx: &mut Context<Self>,
+    ) -> Vec<AnyElement> {
         let mut clis = Vec::new();
         for (index, kind) in Kind::ALL.into_iter().enumerate() {
             let installed = binaries
@@ -98,101 +66,31 @@ impl SettingsView {
                 .and_then(|(_, p)| p.as_ref());
             let selected = p.default_provider.as_deref() == Some(kind.id());
             let visible = !p.hidden_providers.iter().any(|id| id == kind.id());
-            // Open conversations know their account's catalog best; otherwise
-            // use the one loaded here, so providers without a session still list.
             let models = self
-                .ctx
-                .catalogs
-                .get(kind.id())
-                .cloned()
-                .or_else(|| {
-                    self.discovered_models(kind, cx).map(|models| {
-                        models
-                            .iter()
-                            .map(|model| {
-                                (
-                                    model.id.clone(),
-                                    crate::pickers::model_display_name(
-                                        kind,
-                                        &model.id,
-                                        &model.name,
-                                    )
-                                    .to_string(),
-                                )
-                            })
-                            .collect()
-                    })
+                .discovered_models(kind, cx)
+                .unwrap_or_default()
+                .iter()
+                .map(|model| {
+                    (
+                        model.id.clone(),
+                        crate::pickers::model_display_name(kind, &model.id, &model.name)
+                            .to_string(),
+                    )
                 })
-                .unwrap_or_default();
+                .collect::<Vec<_>>();
             let selected_model = p
                 .default_models
                 .get(kind.id())
                 .cloned()
                 .or_else(|| models.first().map(|m| m.0.clone()));
-            let label = div()
-                .flex()
-                .items_center()
-                .gap_2()
-                .child(provider_icon(kind.id(), 16.))
-                .child(kind.label())
-                .child({
-                    let slot = self
-                        .binary_anchors
-                        .borrow_mut()
-                        .entry(kind)
-                        .or_default()
-                        .clone();
-                    secondary_button(
-                        SharedString::from(format!("binary-{}", kind.id())),
-                        format!("Show {} CLI details", kind.label()),
-                        false,
-                        false,
-                    )
-                    .relative()
-                    .size_6()
-                    .p_0()
-                    .justify_center()
-                    .child(slot.probe())
-                    .child(icon("folder-open", 14.))
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.open_management(
-                            super::super::management::Target::Cli(kind),
-                            window,
-                            cx,
-                        )
-                    }))
-                })
-                .child(if installed.is_some() {
-                    vorkspace_ui::fluid::badge("Installed", vorkspace_ui::theme::success())
-                } else {
-                    vorkspace_ui::fluid::badge("Not installed", content(0.3))
-                });
-            let mut controls = vec![
-                secondary_button(
-                    SharedString::from(format!("default-provider-{}", kind.id())),
-                    if selected {
-                        "Default"
-                    } else {
-                        "Use by default"
-                    },
-                    false,
-                    selected || selected_model.is_none() || installed.is_none(),
-                )
-                .child(if selected {
-                    "Default"
-                } else {
-                    "Use by default"
-                })
-                .when(
-                    !selected && selected_model.is_some() && installed.is_some(),
-                    |d| {
-                        d.on_click(cx.listener(move |this, _, _, cx| {
-                            this.update(cx, |p| p.default_provider = Some(kind.id().into()))
-                        }))
-                    },
-                )
-                .into_any_element(),
-            ];
+            let label = self.provider_cli_label(kind, installed, cx);
+            let mut controls = vec![Self::provider_default_button(
+                kind,
+                selected,
+                &selected_model,
+                installed,
+                cx,
+            )];
             if let Some(model) = &selected_model {
                 controls.insert(
                     0,
@@ -239,48 +137,180 @@ impl SettingsView {
                         .into_any_element(),
                 );
             }
-            let description = installed
-                .map(|_| {
-                    format!(
-                        "{} {} available.",
-                        models.len(),
-                        if models.len() == 1 { "model" } else { "models" }
-                    )
-                })
-                .unwrap_or_else(|| {
-                    format!(
-                        "Install {} and sign in with {}.",
-                        kind.label(),
-                        kind.login_hint()
-                    )
-                });
+            let description = Self::provider_cli_description(kind, installed, &models);
             clis.push(self.row(None, index == 0, label, Some(description.into()), controls));
         }
-        if self.discovery_loading {
-            clis.insert(0, note("Checking installed CLIs…"));
-        }
-        let advanced=vec![
-            self.row(Some("idle-agents"),true,"Keep idle agents ready",Some("Keep up to this many idle agents running for faster follow-ups. Uses additional memory.".into()),vec![self.segmented("idle-agents","Keep idle agents ready",&p.idle_agents.to_string(),&[("0","None"),("1","1"),("2","2"),("3","3"),("5","5")],cx,|this,value,cx|if let Ok(value)=value.parse(){this.update(cx,|p|p.idle_agents=value)})]),
-            self.row(Some("claude-hooks"),false,"Claude Code hooks",Some("Run your configured Claude Code hooks. Changes apply on the next turn.".into()),vec![self.toggle("claude-hooks","Claude Code hooks",p.claude_hooks,false,cx,|this,on,cx|this.update(cx,|p|p.claude_hooks=on))])];
-        vec![
-            self.group(
-                Some("provider-accounts"),
+
+        clis
+    }
+
+    fn provider_default_button(
+        kind: Kind,
+        selected: bool,
+        selected_model: &Option<String>,
+        installed: Option<&std::path::PathBuf>,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        secondary_button(
+            SharedString::from(format!("default-provider-{}", kind.id())),
+            if selected {
+                "Default"
+            } else {
+                "Use by default"
+            },
+            false,
+            selected || selected_model.is_none() || installed.is_none(),
+        )
+        .child(if selected {
+            "Default"
+        } else {
+            "Use by default"
+        })
+        .when(
+            !selected && selected_model.is_some() && installed.is_some(),
+            |d| {
+                d.on_click(cx.listener(move |this, _, _, cx| {
+                    this.update(cx, |p| p.default_provider = Some(kind.id().into()))
+                }))
+            },
+        )
+        .into_any_element()
+    }
+
+    fn provider_cli_description(
+        kind: Kind,
+        installed: Option<&std::path::PathBuf>,
+        models: &[(String, String)],
+    ) -> String {
+        installed
+            .map(|_| {
+                format!(
+                    "{} {} available.",
+                    models.len(),
+                    if models.len() == 1 { "model" } else { "models" }
+                )
+            })
+            .unwrap_or_else(|| {
+                format!(
+                    "Install {} and sign in with {}.",
+                    kind.label(),
+                    kind.login_hint()
+                )
+            })
+    }
+
+    fn provider_cli_label(
+        &self,
+        kind: Kind,
+        installed: Option<&std::path::PathBuf>,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
+        div()
+            .flex()
+            .items_center()
+            .gap_2()
+            .child(provider_icon(kind.id(), 16.))
+            .child(kind.label())
+            .child({
+                let slot = self
+                    .binary_anchors
+                    .borrow_mut()
+                    .entry(kind)
+                    .or_default()
+                    .clone();
+                secondary_button(
+                    SharedString::from(format!("binary-{}", kind.id())),
+                    format!("Show {} CLI details", kind.label()),
+                    false,
+                    false,
+                )
+                .relative()
+                .size_6()
+                .p_0()
+                .justify_center()
+                .child(slot.probe())
+                .child(icon("folder-open", 14.))
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.open_management(super::super::management::Target::Cli(kind), window, cx)
+                }))
+            })
+            .child(if installed.is_some() {
+                vorkspace_ui::fluid::badge("Installed", vorkspace_ui::theme::success())
+            } else {
+                vorkspace_ui::fluid::badge("Not installed", content(0.3))
+            })
+    }
+
+    fn provider_usage_rows(&self, p: &Preferences, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let usage = vec![
+            self.row(
+                Some("show-remaining-usage"),
                 true,
-                "Accounts",
-                Some("Manage sign-ins and choose accounts for each project.".into()),
-                Some(self.refresh_button("refresh-provider-accounts", "Refresh", cx)),
-                accounts,
+                "Show remaining usage",
+                Some("Show remaining capacity in usage meters.".into()),
+                vec![self.toggle(
+                    "show-remaining-usage",
+                    "Show remaining usage",
+                    p.show_remaining_usage,
+                    false,
+                    cx,
+                    |this, on, cx| this.update(cx, |p| p.show_remaining_usage = on),
+                )],
             ),
-            self.group(None, false, "Usage and privacy", None, None, usage),
-            self.group(
-                Some("agent-clis"),
+            self.row(
+                Some("mask-emails"),
                 false,
-                "Agent CLIs",
-                Some("Choose available agents and default models for new conversations.".into()),
-                None,
-                clis,
+                "Mask account emails",
+                Some("Hide email addresses until clicked.".into()),
+                vec![self.toggle(
+                    "mask-emails",
+                    "Mask account emails",
+                    p.mask_emails,
+                    false,
+                    cx,
+                    |this, on, cx| this.update(cx, |p| p.mask_emails = on),
+                )],
             ),
-            self.group(None, false, "Advanced", None, None, advanced),
-        ]
+        ];
+        let mut usage = usage;
+        let bedrock = crate::accounts::get(cx).is_some_and(|center| {
+            center.read(cx).usage.values().any(|cached| {
+                cached
+                    .snapshot
+                    .as_ref()
+                    .is_some_and(|s| s.external_billing.as_deref() == Some("AWS Bedrock"))
+            })
+        });
+        if bedrock {
+            let invalid = !p.bedrock_cost_url.trim().is_empty() && p.cost_link().is_none();
+            usage.push(self.row(
+                        None,
+                        false,
+                        "Cost monitoring link",
+                        Some(
+                            if invalid {
+                                "Enter a full link starting with https://."
+                            } else {
+                                "Opens when you click AWS Bedrock in Subscriptions, such as your AWS Cost Explorer or Budgets page."
+                            }
+                            .into(),
+                        ),
+                        vec![
+                            div()
+                                .debug_selector(|| "bedrock-cost-link".into())
+                                .w(px(320.))
+                                .px_2()
+                                .py_1()
+                                .rounded(px(radius::CONTROL))
+                                .border_1()
+                                .border_color(content(0.1))
+                                .bg(content(0.05))
+                                .child(self.bedrock_url.clone())
+                                .into_any_element(),
+                        ],
+                    ));
+        }
+
+        usage
     }
 }

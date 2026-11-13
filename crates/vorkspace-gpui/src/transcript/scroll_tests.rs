@@ -10,9 +10,7 @@ fn row(role: &str, text: &str) -> Row {
     }
 }
 fn settle(view: &mut TranscriptView, cx: &mut Context<TranscriptView>) {
-    for reveal in view.reveals.values_mut() {
-        reveal.settle(Instant::now());
-    }
+    view.reveals.settle_through(view.source.len());
     view.prompt_rise = None;
     view.motions.clear();
     view.rebuild(0, cx);
@@ -133,6 +131,30 @@ fn settled_tab_switches_preserve_rows_layout_and_scroll(cx: &mut TestAppContext)
 }
 
 #[gpui::test]
+fn opening_settled_history_builds_prose_without_reveal_state(cx: &mut TestAppContext) {
+    let view = cx.new(|_| TranscriptView::new());
+    view.update(cx, |view, cx| {
+        let rows = (0..200)
+            .flat_map(|_| {
+                [
+                    row("user", "Question"),
+                    row("assistant", "A complete answer."),
+                ]
+            })
+            .collect();
+        view.patch(0, rows, cx);
+        assert!(view.reveals.active.is_empty());
+        assert_eq!(
+            view.rows
+                .iter()
+                .filter(|row| matches!(row.body, Body::Markdown(_)))
+                .count(),
+            200
+        );
+    });
+}
+
+#[gpui::test]
 fn hiding_settles_live_text_and_showing_reuses_hidden_updates(cx: &mut TestAppContext) {
     let view = cx.new(|_| TranscriptView::new());
     view.update(cx, |view, cx| {
@@ -146,21 +168,13 @@ fn hiding_settles_live_text_and_showing_reuses_hidden_updates(cx: &mut TestAppCo
             ],
             cx,
         );
-        // Reproduce a response still catching up to its received text.
-        view.reveals.insert(
-            1,
-            PacedText::new(
-                "The complete live answer has arrived.",
-                true,
-                Instant::now(),
-            ),
-        );
-        assert!(view.reveals[&1].behind());
+        assert!(view.reveals.active[&1].behind());
         let before = view.rebuild_passes;
         view.visible(false, cx);
         assert_eq!(view.rebuild_passes, before + 1);
-        assert!(!view.reveals[&1].behind());
+        assert!(view.reveals.active.is_empty());
         view.patch(1, vec![row("assistant", "Updated while hidden.")], cx);
+        assert!(view.reveals.active.is_empty());
         let updated = view.rebuild_passes;
         view.visible(true, cx);
         assert_eq!(view.rebuild_passes, updated);
@@ -797,7 +811,7 @@ fn bot_turns_merge_follow_ups_keep_inline_work_and_queue_above_the_work(cx: &mut
 }
 
 #[gpui::test]
-fn desktop_work_metadata_renders_once_after_the_reply_and_never_as_prose(cx: &mut TestAppContext) {
+fn bot_work_metadata_renders_once_after_the_reply_and_never_as_prose(cx: &mut TestAppContext) {
     let view = cx.new(|_| {
         let mut view = TranscriptView::new();
         view.bot_mode("cat", 0xe86b5f, "BotCat");
@@ -1137,7 +1151,10 @@ fn steered_prompts_take_the_top_anchor_without_restarting_the_provider_turn(
         window
             .update(cx, |view, window, cx| {
                 let prompt = view.messages.iter().find(|m| m.start == start).unwrap();
-                let bounds = view.list.bounds_for_item(prompt.display_start).unwrap();
+                let bounds = view
+                    .list
+                    .bounds_for_item(prompt.display_start.unwrap())
+                    .unwrap();
                 assert!(
                     (bounds.top() - view.viewport.top()).abs() < px(1.),
                     "each accepted steer must replace the previous prompt's top anchor"
@@ -1153,7 +1170,10 @@ fn steered_prompts_take_the_top_anchor_without_restarting_the_provider_turn(
     window
         .update(cx, |view, _, cx| {
             let prompt = view.messages.iter().find(|m| m.start == 7).unwrap();
-            let bounds = view.list.bounds_for_item(prompt.display_start).unwrap();
+            let bounds = view
+                .list
+                .bounds_for_item(prompt.display_start.unwrap())
+                .unwrap();
             assert!((bounds.top() - view.viewport.top()).abs() < px(1.));
             view.list.scroll_by(px(-100.));
             let offset = view.list.logical_scroll_top();

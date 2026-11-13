@@ -7,7 +7,7 @@ use std::time::Duration;
 
 /// The spinner repaints at about 30fps so its fades stay smooth.
 /// The spinner's frame step: the dot grid changes no faster than this.
-pub const TICK_MS: u64 = 33;
+pub(crate) const TICK_MS: u64 = 33;
 /// One wave across the grid, as TerminalSpinner's `vorkspace-spinner-wave`.
 const CYCLE_SECS: f32 = 1.2;
 /// Slate, peach and pink, top row to bottom.
@@ -49,69 +49,6 @@ fn dots(color: Option<u32>, elapsed_ms: Option<u64>) -> gpui::Div {
                     .child(div().size(px(2.5 * scale)).rounded_full().bg(color))
             }))
         }))
-}
-
-/// A project's mark: the working grid in its colour, still while idle and
-/// waving while any of its sessions works. Only a working mark ticks.
-pub struct ProjectMark {
-    color: u32,
-    frame: usize,
-    animation: Option<Task<()>>,
-}
-impl ProjectMark {
-    pub fn new(color: u32) -> Self {
-        Self {
-            color,
-            frame: 0,
-            animation: None,
-        }
-    }
-    /// A removed row may still be retained by a cached element or a caller.
-    /// Cancel its presentation task explicitly before releasing the rail owner.
-    pub fn hide(&mut self) {
-        self.animation = None;
-    }
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn animation_state(&self) -> (usize, bool) {
-        (self.frame, self.animation.is_some())
-    }
-    pub fn set(&mut self, color: u32, working: bool, cx: &mut Context<Self>) {
-        if self.color != color {
-            self.color = color;
-            cx.notify();
-        }
-        if working == self.animation.is_some() {
-            return;
-        }
-        self.frame = 0;
-        self.animation = working.then(|| {
-            cx.spawn(async move |this, cx| {
-                loop {
-                    cx.background_executor()
-                        .timer(Duration::from_millis(TICK_MS))
-                        .await;
-                    let ticked = this.update(cx, |this, cx| {
-                        this.frame = this.frame.wrapping_add(1);
-                        cx.notify();
-                    });
-                    if ticked.is_err() {
-                        break;
-                    }
-                }
-            })
-        });
-        cx.notify();
-    }
-}
-impl Render for ProjectMark {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        let working = self.animation.is_some();
-        dots(
-            Some(self.color),
-            working.then(|| self.frame as u64 * TICK_MS),
-        )
-        .flex_shrink_0()
-    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -156,12 +93,6 @@ impl SessionMark {
     #[cfg(any(test, feature = "test-support"))]
     pub fn state(&self) -> State {
         self.state
-    }
-    pub fn set_size(&mut self, side: f32, cx: &mut Context<Self>) {
-        if self.side != side {
-            self.side = side;
-            cx.notify();
-        }
     }
     pub fn set_color(&mut self, color: u32, cx: &mut Context<Self>) {
         if self.color != Some(color) {
@@ -210,7 +141,7 @@ impl Render for SessionMark {
                 .role(Role::Image)
                 .aria_label("Working")
                 .into_any_element(),
-            // Tailwind teal-400 and amber-400, as TitleBar.tsx.
+            // Tailwind teal-400 and amber-400.
             State::Done => div()
                 .id("session-done")
                 .role(Role::Image)

@@ -20,21 +20,13 @@ define_class!(
     #[unsafe(super(NSView))]
     #[name = "VorkspaceArtifactClip"]
     #[thread_kind = MainThreadOnly]
-    #[ivars = std::cell::Cell<bool>]
+    #[ivars = ()]
     struct ArtifactClip;
     unsafe impl NSObjectProtocol for ArtifactClip {}
     impl ArtifactClip {
         #[unsafe(method(isFlipped))]
         fn flipped(&self) -> bool { true }
 
-        #[unsafe(method_id(hitTest:))]
-        fn hit_test(&self, point: NSPoint) -> Option<Retained<NSView>> {
-            if !self.ivars().get() {
-                None
-            } else {
-                unsafe { msg_send![super(self), hitTest: point] }
-            }
-        }
     }
 );
 define_class!(
@@ -86,7 +78,6 @@ struct Markup {
 }
 pub(crate) struct Html {
     body: String,
-    interactive: bool,
     markup: Option<Markup>,
     view: Rc<RefCell<Option<Hosted>>>,
 }
@@ -174,7 +165,6 @@ impl Html {
     pub(crate) fn new(body: String) -> Self {
         Self {
             body,
-            interactive: true,
             markup: None,
             view: Rc::new(RefCell::new(None)),
         }
@@ -195,11 +185,6 @@ impl Html {
         }
         self.markup.as_ref().unwrap().html.clone()
     }
-    pub(crate) fn set_interactive(&mut self, interactive: bool) {
-        if self.interactive != interactive {
-            self.interactive = interactive;
-        }
-    }
     pub(crate) fn hide(&self) {
         #[cfg(target_os = "macos")]
         if let Some(view) = self.view.borrow().as_ref()
@@ -216,7 +201,6 @@ impl gpui::Render for Html {
             let view = self.view.clone();
             let html = self.markup();
             let app = cx.to_async();
-            let interactive = self.interactive;
             canvas(
                 |_, _, _| {},
                 move |bounds, _, window, _| {
@@ -268,8 +252,7 @@ impl gpui::Render for Html {
                         };
                         // The artifact WebView has no script message handlers.
                         let hosted = unsafe {
-                            let clip = ArtifactClip::alloc(mtm)
-                                .set_ivars(std::cell::Cell::new(interactive));
+                            let clip = ArtifactClip::alloc(mtm).set_ivars(());
                             let clip: Retained<ArtifactClip> =
                                 msg_send![super(clip), initWithFrame: rect];
                             clip.setWantsLayer(true);
@@ -325,7 +308,6 @@ impl gpui::Render for Html {
                                 None,
                             );
                         }
-                        view.clip.ivars().set(interactive);
                         if view.clip.frame() != rect {
                             view.clip.setFrame(rect);
                             cursor_rects_changed = true;

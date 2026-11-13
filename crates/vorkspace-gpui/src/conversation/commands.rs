@@ -1,7 +1,7 @@
 //! Composer commands are handled before taking a draft or entering the turn queue.
 use super::*;
 use vorkspace_core::provider;
-use vorkspace_runtime::runtime::manual_compaction::{self, Started};
+use vorkspace_runtime::runtime::manual_compaction::Started;
 
 impl Conversation {
     /// Returns true when this input belongs to a local command, including failures.
@@ -38,7 +38,7 @@ impl Conversation {
             return;
         }
         if self.editing_last_turn.pending()
-            || self.stopping
+            || self.is_stopping()
             || self.attaching
             || self.input.read(cx).is_composing()
             || self.account_switching
@@ -48,7 +48,7 @@ impl Conversation {
         {
             return;
         }
-        if self.busy || !self.follow_ups.state.messages.is_empty() {
+        if self.responding() || !self.follow_ups.state.messages.is_empty() {
             self.status =
                 "Wait for the current turn and queued messages before compacting context.".into();
             cx.notify();
@@ -82,20 +82,28 @@ impl Conversation {
         let summary = source.clone();
         let account = settings.account.id.clone();
         let cwd = self.execution_cwd().to_owned();
-        self.cancel = Arc::new(AtomicBool::new(false));
-        let cancel = self.cancel.clone();
-        self.busy = true;
+        let view = cx.weak_entity();
+        let Some(admission) = turn_driver::admit(&self.store, self.summary.id, view, cx) else {
+            self.status = turn_driver::ALREADY_ACTIVE.into();
+            cx.notify();
+            return;
+        };
+        self.cancel = admission.cancel_handle();
+        self.turn_state = TurnState::Running;
+        self.notification_cancelled = false;
+        self.review
+            .update(cx, |review, cx| review.set_busy(true, cx));
         self.submission_generation = self.submission_generation.wrapping_add(1);
         let generation = self.submission_generation;
         self.status = "Compacting context…".into();
         let compact_draft = self.input.read(cx).content.clone();
         let clear_command = compact_draft.trim().eq_ignore_ascii_case("/compact");
-        let store = self.store.clone();
         self.completion
             .update(cx, |completion, cx| completion.dismiss(cx));
         let (publish, progress) = async_channel::bounded(1);
+        let (worker, projection_owner) = admission.into_worker();
         let work = cx.background_executor().spawn(async move {
-            manual_compaction::run(summary, settings, store, cancel, move |history| {
+            worker.compact(summary, settings, move |history| {
                 let _ = publish.try_send(history);
             })
         });
@@ -115,7 +123,7 @@ impl Conversation {
                 if this.submission_generation == generation
                     && this.summary.id == source.id
                     && source_selected(this)
-                    && !this.stopping
+                    && !this.is_stopping()
                     && let Some(history) = started.take()
                 {
                     visible_row = history.rows.last().cloned();
@@ -123,12 +131,22 @@ impl Conversation {
                 }
             });
             let finished = work.await;
+            if !cx.update(|cx| projection_owner.release(cx)) {
+                return;
+            }
             let _ = this.update(cx, |this, cx| {
                 if this.submission_generation != generation || this.summary.id != source.id {
                     return;
                 }
-                this.busy = false;
-                this.stopping = false;
+                use vorkspace_runtime::runtime::TurnOutcome;
+                let outcome = match &finished.result {
+                    Ok(()) => TurnOutcome::Completed,
+                    Err(error) if error == "Stopped" => TurnOutcome::Cancelled,
+                    Err(_) => TurnOutcome::Failed,
+                };
+                this.turn_state = TurnState::Settled(outcome);
+                this.review
+                    .update(cx, |review, cx| review.set_busy(false, cx));
                 let source_selected = source_selected(this);
                 let mut refresh_history = finished.row.is_none() || !source_selected;
                 if let Some((start, row)) = finished.row.filter(|_| source_selected) {
@@ -177,15 +195,16 @@ impl Conversation {
                     }
                 }
                 this.refresh_submission_recovery(cx);
-                if this.status == "Ready" {
+                if matches!(outcome, TurnOutcome::Completed | TurnOutcome::Cancelled) {
                     this.run_history_actions(cx);
                     this.pump_follow_ups(cx);
                 }
-                cx.emit(SessionChanged);
+                cx.emit(SessionChanged::Loaded);
                 cx.notify();
             });
         })
         .detach();
+        cx.emit(SessionChanged::Turn);
         cx.notify();
     }
 

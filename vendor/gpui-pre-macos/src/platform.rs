@@ -1,3 +1,4 @@
+// Modified by Vorkspace for native window reopen and menu dispatch. See NOTICE.
 use crate::{
     AppleActivity, AppleDispatcher, BoolExt, MacDisplay, MacKeyboardLayout, MacKeyboardMapper,
     MacWindow, events::key_to_native, ns_string, pasteboard::Pasteboard, renderer,
@@ -97,7 +98,7 @@ unsafe fn build_classes() {
             );
             decl.add_method(
                 sel!(applicationShouldHandleReopen:hasVisibleWindows:),
-                should_handle_reopen as extern "C" fn(&mut Object, Sel, id, bool),
+                should_handle_reopen as extern "C" fn(&mut Object, Sel, id, BOOL) -> BOOL,
             );
             decl.add_method(
                 sel!(applicationWillTerminate:),
@@ -134,7 +135,7 @@ unsafe fn build_classes() {
             );
             decl.add_method(
                 sel!(validateMenuItem:),
-                validate_menu_item as extern "C" fn(&mut Object, Sel, id) -> bool,
+                validate_menu_item as extern "C" fn(&mut Object, Sel, id) -> BOOL,
             );
             decl.add_method(
                 sel!(menuWillOpen:),
@@ -739,19 +740,6 @@ impl Platform for MacPlatform {
 
     fn on_displays_changed(&self, callback: Box<dyn FnMut()>) {
         self.0.lock().on_displays_changed = Some(callback);
-    }
-
-    #[cfg(feature = "screen-capture")]
-    fn is_screen_capture_supported(&self) -> bool {
-        let min_version = cocoa::foundation::NSOperatingSystemVersion::new(12, 3, 0);
-        crate::is_macos_version_at_least(min_version)
-    }
-
-    #[cfg(feature = "screen-capture")]
-    fn screen_capture_sources(
-        &self,
-    ) -> oneshot::Receiver<Result<Vec<Rc<dyn gpui::ScreenCaptureSource>>>> {
-        crate::screen_capture::get_sources(self.1)
     }
 
     fn active_window(&self) -> Option<AnyWindowHandle> {
@@ -1364,13 +1352,16 @@ fn register_system_power_observers(observer: &AnyObject) {
 
 // AppKit counts floating panels as open windows, so a visible Vox notch must not
 // stop a Dock click from reaching a hidden workspace.
-extern "C" fn should_handle_reopen(this: &mut Object, _: Sel, _: id, _: bool) {
+extern "C" fn should_handle_reopen(this: &mut Object, _: Sel, _: id, _: BOOL) -> BOOL {
     let platform = unsafe { get_mac_platform(this) };
     let mut lock = platform.0.lock();
     if let Some(mut callback) = lock.reopen.take() {
         drop(lock);
         callback();
         platform.0.lock().reopen.get_or_insert(callback);
+        NO
+    } else {
+        YES
     }
 }
 
@@ -1499,10 +1490,12 @@ extern "C" fn handle_menu_item(this: &mut Object, _: Sel, item: id) {
         let mut lock = platform.0.lock();
         if let Some(mut callback) = lock.menu_command.take() {
             let tag: NSInteger = msg_send![item, tag];
-            let index = tag as usize;
-            if let Some(action) = lock.menu_actions.get(index) {
-                let action = action.boxed_clone();
-                drop(lock);
+            let action = lock
+                .menu_actions
+                .get(tag as usize)
+                .map(|action| action.boxed_clone());
+            drop(lock);
+            if let Some(action) = action {
                 callback(&*action);
             }
             platform.0.lock().menu_command.get_or_insert(callback);
@@ -1510,26 +1503,26 @@ extern "C" fn handle_menu_item(this: &mut Object, _: Sel, item: id) {
     }
 }
 
-extern "C" fn validate_menu_item(this: &mut Object, _: Sel, item: id) -> bool {
+extern "C" fn validate_menu_item(this: &mut Object, _: Sel, item: id) -> BOOL {
     unsafe {
-        let mut result = false;
         let platform = get_mac_platform(this);
         let mut lock = platform.0.lock();
-        if let Some(mut callback) = lock.validate_menu_command.take() {
-            let tag: NSInteger = msg_send![item, tag];
-            let index = tag as usize;
-            if let Some(action) = lock.menu_actions.get(index) {
-                let action = action.boxed_clone();
-                drop(lock);
-                result = callback(action.as_ref());
-            }
-            platform
-                .0
-                .lock()
-                .validate_menu_command
-                .get_or_insert(callback);
-        }
-        result
+        let Some(mut callback) = lock.validate_menu_command.take() else {
+            return NO;
+        };
+        let tag: NSInteger = msg_send![item, tag];
+        let action = lock
+            .menu_actions
+            .get(tag as usize)
+            .map(|action| action.boxed_clone());
+        drop(lock);
+        let result = action.is_some_and(|action| callback(action.as_ref()));
+        platform
+            .0
+            .lock()
+            .validate_menu_command
+            .get_or_insert(callback);
+        result.to_objc()
     }
 }
 

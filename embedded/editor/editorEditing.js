@@ -1,22 +1,18 @@
-import { closeBrackets, closeBracketsKeymap } from "@codemirror/autocomplete";
 import {
   getIndentUnit,
-  indentOnInput,
   indentUnit,
   syntaxTree,
 } from "@codemirror/language";
-import { Facet, Prec } from "@codemirror/state";
-import { keymap } from "@codemirror/view";
+import { Facet } from "@codemirror/state";
 import { basename } from "./path.js";
-export function editorTyping(path) {
+export function emmetExtension(path) {
   const syntax = syntaxForPath(path);
-  return [
-    closeBrackets(),
-    indentOnInput(),
-    Prec.high(keymap.of(closeBracketsKeymap)),
-    syntax ? emmetSyntax.of(syntax) : [],
-  ];
+  return syntax ? emmetSyntax.of(syntax) : [];
 }
+const MAX_ABBREVIATION = 256;
+const MAX_EXPANDED_ELEMENTS = 200;
+const MAX_DEPTH = 16;
+
 export function tryExpandEmmet(view) {
   const syntax = view.state.facet(emmetSyntax);
   if (!syntax || view.state.readOnly) return false;
@@ -34,6 +30,7 @@ export function tryExpandEmmet(view) {
   const pieces = parseAbbr(abbr);
   if (!pieces) return false;
   const indent = line.text.match(/^\s*/)?.[0] ?? "";
+  if (indent.length > MAX_ABBREVIATION) return false;
   const unit =
     view.state.facet(indentUnit) || " ".repeat(getIndentUnit(view.state));
   const expanded = expandPieces(pieces, syntax === "jsx", indent, unit);
@@ -104,9 +101,9 @@ function abbreviationBefore(text, column) {
   let start = before.length;
   while (start > 0 && !/[\s=;,{()"'`]/.test(before[start - 1] ?? "")) {
     start -= 1;
+    if (before.length - start > MAX_ABBREVIATION) return null;
   }
-  const abbr = before.slice(start);
-  return abbr || null;
+  return start < before.length ? before.slice(start) : null;
 }
 function isEmmetAbbr(abbr, syntax) {
   if (abbr.startsWith(".") || abbr.startsWith("#")) return true;
@@ -140,11 +137,16 @@ function canExpandAt(state, pos) {
 }
 function parseAbbr(abbr) {
   const parts = abbr.split(">").map((part) => part.trim());
-  if (!parts.length || parts.some((part) => !part)) return null;
+  if (parts.length > MAX_DEPTH || parts.some((part) => !part)) return null;
   const pieces = [];
+  let levelElements = 1;
+  let total = 0;
   for (const part of parts) {
     const piece = parsePiece(part);
     if (!piece) return null;
+    levelElements *= piece.count;
+    total += levelElements;
+    if (total > MAX_EXPANDED_ELEMENTS) return null;
     pieces.push(piece);
   }
   return pieces;

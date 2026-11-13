@@ -12,7 +12,7 @@ impl TranscriptView {
             return;
         }
         if !self.list.is_following_tail() {
-            // Hand the painted position to native scrolling once, like React's pause.
+            // Hand the painted position to native scrolling once.
             self.list.scroll_by(px(-self.follow.offset));
             self.follow = Follow::default();
             return;
@@ -26,11 +26,12 @@ impl TranscriptView {
             .rposition(|r| r.is_prompt())
             .map_or(0, |ix| ix + 1);
         let prompt = self.prompt_start(self.bot_group_start(turn));
-        let group = self
-            .messages
-            .iter()
-            .find(|m| m.start >= prompt)
-            .map_or(0, |m| m.display_start);
+        let message = self.messages.partition_point(|m| m.start < prompt);
+        let group = if message < self.messages.len() {
+            self.message_display_start(message)
+        } else {
+            0
+        };
         let tail = self.rows.len().saturating_sub(FOLLOW_ROWS);
         let baseline = group.max(tail);
         // Include the previous anchor for the handover to a new turn. Store only
@@ -40,7 +41,8 @@ impl TranscriptView {
             .measured
             .as_ref()
             .and_then(|m| m.rows.first())
-            .and_then(|(key, _)| self.rows[..baseline].iter().position(|r| r.key == *key))
+            .filter(|(key, _)| self.rows.get(baseline).is_none_or(|row| row.key != *key))
+            .and_then(|(key, _)| self.rows[..baseline].iter().rposition(|r| r.key == *key))
             .unwrap_or(baseline);
         let mut measured = FollowMeasure {
             viewport: self.viewport.size,
@@ -143,7 +145,7 @@ impl TranscriptView {
         if let Some(overflow) = prompt_overflow {
             self.follow.offset = self.follow.offset.min(overflow);
         }
-        // As in React's measure/tick split, the first growth frame only
+        // The first growth frame only
         // records distance. Sample its velocity after real frame time passes.
         if elapsed == 0. {
             return;
@@ -213,7 +215,7 @@ impl TranscriptView {
     /// Height lost by rows easing closed, such as work folding behind its
     /// line. Their motion already eases it; following must not ease it again.
     pub(super) fn closing_shrink(&self, measured: &FollowMeasure, previous: &FollowMeasure) -> f32 {
-        if measured.resized_from(previous) {
+        if self.motions.is_empty() || measured.resized_from(previous) {
             return 0.;
         }
         let before: HashMap<_, _> = previous.rows.iter().copied().collect();

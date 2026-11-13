@@ -11,10 +11,29 @@ use vorkspace_core::store::Store;
 fn bot_header_updates_from_chat_status_and_preserves_composer_and_layout(cx: &mut TestAppContext) {
     let directory = tempfile::tempdir().unwrap();
     let store = Arc::new(Mutex::new(
-        Store::open(&directory.path().join("header.sqlite")).unwrap(),
+        Store::test(&directory.path().join("header.sqlite")).unwrap(),
     ));
     let cwd = directory.path().to_string_lossy().to_string();
     let session = locked(&store).unwrap().create("codex", &cwd).unwrap().id;
+    locked(&store)
+        .unwrap()
+        .write_rows(
+            session,
+            0,
+            &[
+                ("user", "Keep my place in this conversation.".into()),
+                ("assistant", "A retained reply.\n\n".repeat(40)),
+                ("user", "And keep my draft.".into()),
+                ("assistant", "This reply keeps its signature.".into()),
+            ]
+            .map(|(role, text)| vorkspace_core::transcript::Row {
+                role: role.into(),
+                text,
+                first: true,
+                sent_at: None,
+            }),
+        )
+        .unwrap();
     let window = cx.update(|cx| {
         vorkspace_ui::clock::use_test_clock(cx);
         input::bind(cx);
@@ -46,18 +65,6 @@ fn bot_header_updates_from_chat_status_and_preserves_composer_and_layout(cx: &mu
         .unwrap();
     cx.run_until_parked();
     let chat = manager.read_with(cx, |bots, _| bots.chat().unwrap());
-    chat.update(cx, |chat, cx| {
-        chat.bot_post("user", "Keep my place in this conversation.".into(), cx)
-            .unwrap();
-        chat.bot_post("assistant", "A retained reply.\n\n".repeat(40), cx)
-            .unwrap();
-        // A short final turn keeps a signature in the virtualized viewport;
-        // the long preceding answer supplies actual scrollable history.
-        chat.bot_post("user", "And keep my draft.".into(), cx)
-            .unwrap();
-        chat.bot_post("assistant", "This reply keeps its signature.".into(), cx)
-            .unwrap();
-    });
     let visual = &mut VisualTestContext::from_window(window.into(), cx);
     for width in [900., 560.] {
         visual.simulate_resize(size(px(width), px(680.)));
@@ -110,7 +117,7 @@ fn bot_header_updates_from_chat_status_and_preserves_composer_and_layout(cx: &mu
             (false, false, "bot-chat-header-idle"),
         ] {
             chat.update(visual, |chat, cx| {
-                chat.busy = busy;
+                chat.set_running_for_test(busy);
                 chat.settings.usage_limit = attention.then(Default::default);
                 cx.notify();
             });
@@ -138,7 +145,7 @@ fn bot_header_updates_from_chat_status_and_preserves_composer_and_layout(cx: &mu
     visual.simulate_resize(size(px(560.), px(240.)));
     for (busy, attention) in [(false, false), (true, false), (true, true)] {
         chat.update(visual, |chat, cx| {
-            chat.busy = busy;
+            chat.set_running_for_test(busy);
             chat.settings.usage_limit = attention.then(Default::default);
             cx.notify();
         });
@@ -392,7 +399,6 @@ fn native_bot_header_three_state_capture() {
                 ..Default::default()
             },
             false,
-            true,
         );
         for status in ["idle", "working", "needs-you"] {
             for (width, height) in [(900., 600.), (360., 600.), (360., 140.)] {
@@ -445,9 +451,5 @@ fn native_bot_header_three_state_capture() {
             }
         }
     }
-    vorkspace_ui::theme::configure(
-        &vorkspace_ui::preferences::Preferences::default(),
-        false,
-        true,
-    );
+    vorkspace_ui::theme::configure(&vorkspace_ui::preferences::Preferences::default(), false);
 }

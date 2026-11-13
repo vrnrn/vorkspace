@@ -6,7 +6,7 @@ use std::{
     path::{Component, Path},
 };
 
-/// orchestrationSummary.ts: what the sidebar shows of a lead's run, kept after
+/// What the sidebar shows of a lead's run, kept after
 /// it ends so the lead still lists its agents.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]

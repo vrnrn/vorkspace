@@ -56,7 +56,7 @@ fn unrelated_schema_change_saves_without_alert_and_preserves_composer(cx: &mut T
     let delta = history.rows[from..].to_vec();
     window
         .update(visual, |shell, _, cx| {
-            shell.store_write("save session", cx, move |store| {
+            shell.write_session_group("save session", cx, move |store| {
                 store.write_rows(id, from, &delta)
             });
         })

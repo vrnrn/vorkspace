@@ -46,17 +46,21 @@ Distinguish where a defect surfaces from the boundary responsible for it. A rend
 ## 3. Concurrency, Durability & Security Boundaries
 
 ### Design asynchronous work as a complete lifecycle
-Define admission, concurrency, priority, identity, cancellation, publication, failure, and cleanup together:
-- **Admission & priority:** Acquire admission before consuming scarce execution resources. Never trap urgent user control actions behind optional background work.
-- **Epoch & identity validation:** Carry enough version, epoch, and owner identity to verify whether an in-flight result still belongs to the current owner and input. Re-validate at every `await` boundary and immediately before publication—being valid when a task started never guarantees it is valid when it finishes.
-- **Cancellation semantics:** Distinguish abandonment from continuation. Specify what cancellation guarantees: preventing publication, removing queued jobs, interrupting active subprocesses, or releasing locks. Retain reusable checkpoints only at stable boundaries where both input and interpretation remain compatible.
-- **Failure recovery:** Every failure path must release locks, clean up temporary resources, and leave the owner ready for subsequent work.
+Decide what admits, supersedes, cancels and holds the work, and what happens when it fails.
+- **Admission & priority:** Acquire admission before consuming scarce execution resources; never trap urgent user control actions behind optional background work.
+- **Drop stale results:** Never publish an unwanted result; re-check after every `await` and immediately before publishing.
+- **Use the existing idiom for each kind:**
+  - *Latest request wins:* a `u64` `generation`, bumped on each input change and compared before publishing. A read every change restarts needs only its stored `Task`.
+  - *Cancellation:* drop the `Task`; for blocking work or a child, an `Arc<AtomicBool>` named `cancel`. Never cancel a write mid-flight; detach it and compare the generation.
+  - *Exclusive ownership:* a guard whose `Drop` releases only its own entry; across processes, a held `flock`.
+  - *Effects that may already have happened:* a local call, timeout, disconnect or crash does not prove whether an external effect ran once, zero times or partially; use durable receipts and idempotency keys, never blind replay.
+- **Failure releases what it holds**, on every path including unwind, leaving the owner ready for new work.
+- **Extend, don't invent:** Add no new lease, receipt, claim, admission, epoch, fence, guard or token type without the owner's approval.
 
 ### Protect durable truth from partial views
 - **Distinct absence states:** Missing, unknown, unavailable, empty, and explicitly deleted carry different meanings; never conflate them in storage or wire schemas.
 - **Safe partial reads:** A displayed or memory-bounded view may intentionally omit large payloads. Protect omitted data at the persistence boundary so a partial read followed by a write merges against durable state rather than clobbering unloaded fields.
 - **Root-last atomic commits:** When persisting or migrating multi-file or multi-table state (transcripts, rollouts, subagent edges, checkpoints), write through flushed temporary files (`fsync` + atomic `rename`) and publish the resumable root marker last so readers never observe a half-written state.
-- **Honest external uncertainty:** A local call, timeout, or disconnect does not prove whether an external process or remote host executed an effect once, zero times, or partially. Use durable submission receipts and idempotency keys rather than blind replay.
 
 ### Enforce trust and isolation boundaries
 - **Boundary validation:** Validate untrusted identifiers, paths, and external payloads at the trust boundary before constructing filesystem paths, SQL queries, or subprocess arguments.

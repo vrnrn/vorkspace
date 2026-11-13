@@ -1,6 +1,75 @@
 use super::*;
 
 #[gpui::test]
+fn a_failed_pin_transaction_reconciles_both_windows_with_durable_values(
+    cx: &mut gpui::TestAppContext,
+) {
+    let directory = tempfile::tempdir().unwrap();
+    let project = directory.path().to_str().unwrap();
+    let file = directory.path().join("history.db");
+    let store = vorkspace_core::store::Store::test(&file).unwrap();
+    let first = store.create("codex", project).unwrap();
+    let second = store.create("codex", project).unwrap();
+    let ids = [first.id, second.id];
+    let store = Arc::new(Mutex::new(store));
+    let open = |cx: &mut gpui::TestAppContext| {
+        cx.update(|cx| {
+            cx.open_window(Default::default(), |_, cx| {
+                cx.new(|cx| {
+                    Shell::new(
+                        store.clone(),
+                        vec![first.clone(), second.clone()],
+                        project.into(),
+                        None,
+                        cx,
+                    )
+                })
+            })
+            .unwrap()
+        })
+    };
+    let source = open(cx);
+    let peer = open(cx);
+    let inject = rusqlite::Connection::open(file).unwrap();
+    inject
+        .execute_batch(&format!(
+            "CREATE TRIGGER reject_pin BEFORE UPDATE OF pinned ON sessions
+         WHEN OLD.id='{}' BEGIN SELECT RAISE(ABORT,'injected pin failure'); END;",
+            locked(&store)
+                .unwrap()
+                .persisted_session_id(second.id)
+                .unwrap()
+        ))
+        .unwrap();
+    source
+        .update(cx, |shell, _, cx| {
+            shell.edit_session_metadata(ids.to_vec(), SessionEdit::Pin(true), cx);
+            assert!(shell.session_metadata(second.id, cx).summary.pinned);
+        })
+        .unwrap();
+    cx.run_until_parked();
+    for window in [source, peer] {
+        window
+            .update(cx, |shell, _, cx| {
+                assert!(!shell.session_metadata(first.id, cx).summary.pinned);
+                assert!(!shell.session_metadata(second.id, cx).summary.pinned);
+            })
+            .unwrap();
+    }
+    source
+        .update(cx, |shell, _, _| {
+            assert!(
+                shell
+                    .error
+                    .as_deref()
+                    .unwrap()
+                    .contains("injected pin failure")
+            );
+        })
+        .unwrap();
+}
+
+#[gpui::test]
 fn a_reminder_survives_a_refused_open_until_its_project_is_reassigned(
     cx: &mut gpui::TestAppContext,
 ) {
@@ -8,15 +77,22 @@ fn a_reminder_survives_a_refused_open_until_its_project_is_reassigned(
     let (vorkspace, project) = window
         .update(cx, |shell, _, cx| {
             let vorkspace = shell.workspace.active_vorkspace.clone();
-            let project = shell.session_summaries[&reminder_session].cwd.clone();
+            let project = shell
+                .session_summary(reminder_session, cx)
+                .unwrap()
+                .cwd
+                .clone();
             shell
                 .workspace
                 .remove_project_from_vorkspace(&vorkspace, &project);
             shell.persist(cx);
-            shell.store_write("set reminder", cx, move |store| {
-                store.set_reminders(&[reminder_session], 1)
-            });
-            shell.poll_reminders(cx);
+            shell.edit_reminder(
+                app_core::ReminderEdit::Schedule {
+                    sessions: vec![reminder_session],
+                    due_at: 1,
+                },
+                cx,
+            );
             (vorkspace, project)
         })
         .unwrap();
@@ -38,7 +114,7 @@ fn a_reminder_survives_a_refused_open_until_its_project_is_reassigned(
     window
         .update(cx, |shell, _, cx| {
             assert_eq!(shell.workspace.active, Some(current));
-            assert_eq!(shell.reminders[0].session_id, reminder_session);
+            assert_eq!(shell.reminders(cx)[0].session_id, reminder_session);
             assert_eq!(locked(&shell.store).unwrap().reminders().unwrap().len(), 1);
             shell
                 .workspace
@@ -90,8 +166,8 @@ fn delete_confirmation_cancels_and_uses_selection_snapshot(cx: &mut TestAppConte
     let (window, a, b) = setup(cx);
     window
         .update(cx, |shell, w, cx| {
-            shell.selected_sessions.clear();
-            shell.selected_sessions.insert(a);
+            shell.sidebar.selected_sessions.clear();
+            shell.sidebar.selected_sessions.insert(a);
             shell.delete_sidebar_selection(w, cx);
         })
         .unwrap();
@@ -101,19 +177,19 @@ fn delete_confirmation_cancels_and_uses_selection_snapshot(cx: &mut TestAppConte
     cx.run_until_parked();
     window
         .update(cx, |shell, w, cx| {
-            assert!(shell.session_summaries.contains_key(&a));
+            assert!(shell.has_session(a, cx));
             shell.delete_sidebar_selection(w, cx);
-            shell.selected_sessions.clear();
-            shell.selected_sessions.insert(b);
+            shell.sidebar.selected_sessions.clear();
+            shell.sidebar.selected_sessions.insert(b);
         })
         .unwrap();
     cx.run_until_parked();
     cx.simulate_prompt_answer("Delete");
     cx.run_until_parked();
     window
-        .update(cx, |shell, _, _| {
-            assert!(!shell.session_summaries.contains_key(&a));
-            assert!(shell.session_summaries.contains_key(&b));
+        .update(cx, |shell, _, cx| {
+            assert!(!shell.has_session(a, cx));
+            assert!(shell.has_session(b, cx));
         })
         .unwrap();
 }
@@ -133,8 +209,8 @@ fn delete_rechecks_detached_panes_after_confirmation(cx: &mut TestAppContext) {
     cx.simulate_prompt_answer("Delete");
     cx.run_until_parked();
     window
-        .update(cx, |shell, _, _| {
-            assert!(shell.session_summaries.contains_key(&a));
+        .update(cx, |shell, _, cx| {
+            assert!(shell.has_session(a, cx));
             assert!(
                 shell
                     .error
@@ -149,6 +225,9 @@ fn delete_rechecks_detached_panes_after_confirmation(cx: &mut TestAppContext) {
 #[gpui::test]
 fn bulk_delete_keeps_guarded_session_and_deletes_the_other(cx: &mut TestAppContext) {
     let (window, a, b) = setup(cx);
+    // Deletion visits handles in numeric order. Attempt the guarded owner
+    // before deleting its detached pane, regardless of the UUID hashes.
+    let (a, b) = (a.min(b), a.max(b));
     window
         .update(cx, |shell, w, cx| {
             shell.workspace.review_owners.insert(b, a);
@@ -159,9 +238,9 @@ fn bulk_delete_keeps_guarded_session_and_deletes_the_other(cx: &mut TestAppConte
     cx.simulate_prompt_answer("Delete");
     cx.run_until_parked();
     window
-        .update(cx, |shell, _, _| {
-            assert!(shell.session_summaries.contains_key(&a));
-            assert!(!shell.session_summaries.contains_key(&b));
+        .update(cx, |shell, _, cx| {
+            assert!(shell.has_session(a, cx));
+            assert!(!shell.has_session(b, cx));
             assert!(
                 shell
                     .error
@@ -194,7 +273,7 @@ fn stale_confirmation_does_not_delete_reused_id(cx: &mut TestAppContext) {
         .update(cx, |shell, w, cx| {
             shell.request_delete_sessions(vec![a], w, cx);
             // Simulate removal and reuse while consent is pending.
-            let summary = shell.session_summaries[&a].clone();
+            let summary = shell.session_summary(a, cx).unwrap().clone();
             shell.workspace.close(a);
             shell.forget_session(a, cx);
             shell.add(summary, cx);
@@ -204,8 +283,8 @@ fn stale_confirmation_does_not_delete_reused_id(cx: &mut TestAppContext) {
     cx.simulate_prompt_answer("Delete");
     cx.run_until_parked();
     window
-        .update(cx, |shell, _, _| {
-            assert!(shell.session_summaries.contains_key(&a));
+        .update(cx, |shell, _, cx| {
+            assert!(shell.has_session(a, cx));
             assert!(
                 shell
                     .error
@@ -222,7 +301,7 @@ fn menu_delete_confirms_multiple_sessions(cx: &mut TestAppContext) {
     let (window, a, b) = setup(cx);
     window
         .update(cx, |shell, w, cx| {
-            shell.selected_sessions.extend([a, b]);
+            shell.sidebar.selected_sessions.extend([a, b]);
             shell.run_session_menu(a, "delete", w, cx);
         })
         .unwrap();
@@ -231,9 +310,9 @@ fn menu_delete_confirms_multiple_sessions(cx: &mut TestAppContext) {
     cx.simulate_prompt_answer("Delete");
     cx.run_until_parked();
     window
-        .update(cx, |shell, _, _| {
-            assert!(!shell.session_summaries.contains_key(&a));
-            assert!(!shell.session_summaries.contains_key(&b));
+        .update(cx, |shell, _, cx| {
+            assert!(!shell.has_session(a, cx));
+            assert!(!shell.has_session(b, cx));
         })
         .unwrap();
 }
@@ -267,7 +346,7 @@ fn session_actions_are_enabled_and_bulk_selection_shapes_the_menu(cx: &mut TestA
                 w,
                 cx,
             );
-            assert_eq!(shell.selected_sessions.len(), 2);
+            assert_eq!(shell.sidebar.selected_sessions.len(), 2);
             let actions: Vec<_> = shell
                 .session_menu_items(a, cx)
                 .into_iter()
@@ -302,6 +381,7 @@ fn session_rename_accepts_enter_and_escape_cancels(cx: &mut TestAppContext) {
         .update(cx, |shell, w, cx| {
             shell.run_menu(MenuTarget::Session(a), "rename", None, w, cx);
             shell
+                .sidebar
                 .renaming
                 .as_ref()
                 .unwrap()
@@ -322,6 +402,7 @@ fn session_rename_accepts_enter_and_escape_cancels(cx: &mut TestAppContext) {
             );
             shell.run_menu(MenuTarget::Session(a), "rename", None, w, cx);
             shell
+                .sidebar
                 .renaming
                 .as_ref()
                 .unwrap()
@@ -334,7 +415,7 @@ fn session_rename_accepts_enter_and_escape_cancels(cx: &mut TestAppContext) {
     cx.run_until_parked();
     window
         .update(cx, |shell, _, cx| {
-            assert!(shell.renaming.is_none());
+            assert!(shell.sidebar.renaming.is_none());
             assert_eq!(shell.sessions[&a].read(cx).summary.title, "First name");
         })
         .unwrap();
@@ -347,14 +428,16 @@ fn links_and_reminders_validate_persist_and_clear_when_due_session_opens(cx: &mu
         .update(cx, |shell, w, cx| {
             shell.run_menu(MenuTarget::Session(a), "link-work-item", None, w, cx);
             shell
+                .sidebar
                 .link_dialog
                 .as_ref()
                 .unwrap()
                 .input
                 .update(cx, |i, cx| i.set_text("invalid".into(), cx));
             shell.save_link(true, w, cx);
-            assert!(shell.link_dialog.as_ref().unwrap().error.is_some());
+            assert!(shell.sidebar.link_dialog.as_ref().unwrap().error.is_some());
             shell
+                .sidebar
                 .link_dialog
                 .as_ref()
                 .unwrap()
@@ -386,18 +469,16 @@ fn links_and_reminders_validate_persist_and_clear_when_due_session_opens(cx: &mu
                 42
             );
             drop(store);
-            assert!(shell.link_dialog.is_none());
+            assert!(shell.sidebar.link_dialog.is_none());
             shell.run_menu(MenuTarget::Session(a), "reminder:cancel", None, w, cx);
             let due_at = vorkspace_core::time::now_ms().saturating_sub(1);
-            shell.reminders.push(Reminder {
-                session_id: a,
-                due_at,
-                fired_at: None,
-            });
-            shell.store_write("set test reminder", cx, move |store| {
-                store.set_reminders(&[a], due_at)
-            });
-            shell.poll_reminders(cx);
+            shell.edit_reminder(
+                app_core::ReminderEdit::Schedule {
+                    sessions: vec![a],
+                    due_at,
+                },
+                cx,
+            );
         })
         .unwrap();
     cx.run_until_parked();
@@ -409,7 +490,7 @@ fn links_and_reminders_validate_persist_and_clear_when_due_session_opens(cx: &mu
                     .is_some()
             );
             shell.open(a, w, cx);
-            assert!(shell.reminders.is_empty());
+            assert!(shell.reminders(cx).is_empty());
         })
         .unwrap();
     cx.run_until_parked();

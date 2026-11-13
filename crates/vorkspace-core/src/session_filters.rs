@@ -1,4 +1,4 @@
-//! SessionFiltersMenu/sessionFilters.ts, shared by native sidebar consumers.
+//! Sidebar session filters, shared by native sidebar consumers.
 use crate::{kind::Kind, store::Session};
 use chrono::{Local, TimeZone};
 use serde::{Deserialize, Serialize};
@@ -53,10 +53,10 @@ pub struct Status {
     pub done: bool,
 }
 impl Status {
-    pub fn active(self) -> bool {
+    pub(crate) fn active(self) -> bool {
         self.working || self.needs_approval || self.done
     }
-    pub fn matches(self, state: Self) -> bool {
+    pub(crate) fn matches(self, state: Self) -> bool {
         !self.active()
             || (self.working && state.working)
             || (self.needs_approval && state.needs_approval)
@@ -89,7 +89,7 @@ pub enum BotFilter {
     Bot(String),
 }
 impl BotFilter {
-    pub fn is_any(&self) -> bool {
+    pub(crate) fn is_any(&self) -> bool {
         *self == Self::Any
     }
     /// Whether a session started by `launcher` (a Bot id, if any) passes.

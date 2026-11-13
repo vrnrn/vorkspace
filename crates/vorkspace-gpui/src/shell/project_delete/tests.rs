@@ -22,7 +22,7 @@ fn git_worktree_check_accepts_plain_folder_and_refuses_nested_project() {
 #[test]
 fn dropping_delete_lease_releases_admission() {
     let store = std::sync::Arc::new(std::sync::Mutex::new(
-        Store::open(std::path::Path::new(":memory:")).unwrap(),
+        Store::test(std::path::Path::new(":memory:")).unwrap(),
     ));
     locked(&store)
         .unwrap()
@@ -46,7 +46,7 @@ fn delete_exact_sessions_preserves_folder_and_other_projects() {
     let file = project.join("important.txt");
     std::fs::write(&file, "keep").unwrap();
     let path = project.to_str().unwrap();
-    let mut store = Store::open(std::path::Path::new(":memory:")).unwrap();
+    let mut store = Store::test(std::path::Path::new(":memory:")).unwrap();
     let a = store.create("codex", path).unwrap();
     let other = store.create("codex", "/other").unwrap();
     let result = delete_saved(&mut store, path, &[a.id], |_| Ok(()));
@@ -65,7 +65,7 @@ fn delete_exact_sessions_preserves_folder_and_other_projects() {
 }
 #[test]
 fn changed_conversation_set_refuses_deletion() {
-    let mut store = Store::open(std::path::Path::new(":memory:")).unwrap();
+    let mut store = Store::test(std::path::Path::new(":memory:")).unwrap();
     let a = store.create("codex", "/project").unwrap();
     let b = store.create("codex", "/project").unwrap();
     let result = delete_saved(&mut store, "/project", &[a.id], |_| Ok(()));
@@ -76,7 +76,7 @@ fn changed_conversation_set_refuses_deletion() {
 }
 #[test]
 fn failure_after_one_delete_reports_exact_partial_result() {
-    let mut store = Store::open(std::path::Path::new(":memory:")).unwrap();
+    let mut store = Store::test(std::path::Path::new(":memory:")).unwrap();
     let a = store.create("codex", "/project").unwrap();
     let b = store.create("codex", "/project").unwrap();
     let mut ids = vec![a.id, b.id];
@@ -110,7 +110,7 @@ fn symlink_alias_to_project_is_refused() {
     std::fs::create_dir(&project).unwrap();
     let alias = dir.path().join("alias");
     std::os::unix::fs::symlink(&project, &alias).unwrap();
-    let store = Store::open(std::path::Path::new(":memory:")).unwrap();
+    let store = Store::test(std::path::Path::new(":memory:")).unwrap();
     let session = store.create("codex", alias.to_str().unwrap()).unwrap();
     assert!(scoped_sessions(project.to_str().unwrap(), &[session], &HashMap::new()).is_err());
 }
@@ -120,10 +120,11 @@ fn delete_requires_confirmation_and_cancel_keeps_project(cx: &mut gpui::TestAppC
     window
         .update(cx, |shell, w, cx| {
             shell.workspace.add_project("/tmp/delete-empty-fixture");
-            shell.automation_state.service = Some(std::sync::Arc::new(std::sync::Mutex::new(
-                vorkspace_core::automations::Service::open(std::path::Path::new(":memory:"))
-                    .unwrap(),
-            )));
+            shell.pages.automation_state.service =
+                Some(std::sync::Arc::new(std::sync::Mutex::new(
+                    vorkspace_core::automations::Service::open(std::path::Path::new(":memory:"))
+                        .unwrap(),
+                )));
             shell.confirm_delete_project("/tmp/delete-empty-fixture".into(), w, cx);
         })
         .unwrap();
@@ -150,10 +151,11 @@ fn confirmed_empty_project_removal_survives_workspace_restore(cx: &mut gpui::Tes
     window
         .update(cx, |shell, w, cx| {
             shell.workspace.add_project(&project);
-            shell.automation_state.service = Some(std::sync::Arc::new(std::sync::Mutex::new(
-                vorkspace_core::automations::Service::open(std::path::Path::new(":memory:"))
-                    .unwrap(),
-            )));
+            shell.pages.automation_state.service =
+                Some(std::sync::Arc::new(std::sync::Mutex::new(
+                    vorkspace_core::automations::Service::open(std::path::Path::new(":memory:"))
+                        .unwrap(),
+                )));
             shell.confirm_delete_project(project.clone(), w, cx);
         })
         .unwrap();
@@ -228,11 +230,10 @@ fn selected_project_and_open_session_need_release_before_delete(cx: &mut gpui::T
 
 #[test]
 fn nested_and_worktree_sessions_are_refused() {
-    let store = Store::open(std::path::Path::new(":memory:")).unwrap();
+    let store = Store::test(std::path::Path::new(":memory:")).unwrap();
     let nested = store.create("codex", "/project/sub").unwrap();
     assert!(scoped_sessions("/project", &[nested], &HashMap::new()).is_err());
     let main = store.create("codex", "/project").unwrap();
     let trees = HashMap::from([(main.id, Some("/separate-worktree".into()))]);
     assert!(scoped_sessions("/project", &[main], &trees).is_err());
-    assert!(scoped_sessions("remote://host/project", &[], &HashMap::new()).is_err());
 }

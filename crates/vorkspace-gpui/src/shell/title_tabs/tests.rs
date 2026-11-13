@@ -8,7 +8,7 @@ fn connector_native_navigation_capture() {
     let output = std::path::PathBuf::from(std::env::var_os("VOKKY_CONNECTOR_CAPTURE_DIR").unwrap());
     assert!(output.is_absolute() && output.is_dir());
     let store = Arc::new(Mutex::new(
-        vorkspace_core::store::Store::open(std::path::Path::new(":memory:")).unwrap(),
+        vorkspace_core::store::Store::test(std::path::Path::new(":memory:")).unwrap(),
     ));
     let session = locked(&store)
         .unwrap()
@@ -88,7 +88,7 @@ fn command_w_closes_workspace_pages_and_restores_conversation(cx: &mut TestAppCo
             shell.open(session, w, cx);
             let chat = shell.sessions[&session].clone();
             chat.update(cx, |chat, cx| {
-                chat.busy = true;
+                chat.set_running_for_test(true);
                 chat.input.update(cx, |input, cx| {
                     input.set_text("unsent conversation draft".into(), cx)
                 });
@@ -109,7 +109,7 @@ fn command_w_closes_workspace_pages_and_restores_conversation(cx: &mut TestAppCo
             .update(cx, |shell, w, cx| {
                 let strip = shell.workspace.title_order.clone();
                 shell.open_title_tab(&page, w, cx);
-                if let Some(search) = &shell.app_search {
+                if let Some(search) = &shell.pages.search {
                     search
                         .view
                         .read(cx)
@@ -140,11 +140,11 @@ fn command_w_closes_workspace_pages_and_restores_conversation(cx: &mut TestAppCo
                 assert_eq!(shell.workspace.title_order, strip);
                 assert_eq!(shell.sessions[&session], chat);
                 let chat = chat.read(cx);
-                assert!(chat.busy, "page close must not cancel parked work");
+                assert!(chat.responding(), "page close must not cancel parked work");
                 assert_eq!(chat.input.read(cx).content, "unsent conversation draft");
                 assert!(chat.input.focus_handle(cx).is_focused(w), "{page:?}");
                 if page == TitleTab::Search {
-                    assert_eq!(shell.saved_search.as_ref().unwrap().0, "saved search");
+                    assert_eq!(shell.pages.saved_search.as_ref().unwrap().0, "saved search");
                 }
             })
             .unwrap();
@@ -176,7 +176,7 @@ fn search_opened_from_a_connector_returns_to_that_connector(cx: &mut TestAppCont
             assert_eq!(shell.active_title_tab(cx), Some(connector.clone()));
             assert_eq!(shell.workspace.active, connector.session());
             assert!(
-                shell.connector_pages[&Connector::Github]
+                shell.pages.connector_pages[&Connector::Github]
                     .focus_handle(cx)
                     .is_focused(w)
             );
@@ -211,7 +211,7 @@ fn command_w_parks_bot_work_and_draft_and_restores_conversation(cx: &mut TestApp
                 [TitleTab::Workspace(session), bot_tab.clone()]
             );
             chat.update(cx, |chat, cx| {
-                chat.busy = true;
+                chat.set_running_for_test(true);
                 chat.input.update(cx, |input, cx| {
                     input.set_text("unsent bot draft".into(), cx)
                 });
@@ -236,7 +236,7 @@ fn command_w_parks_bot_work_and_draft_and_restores_conversation(cx: &mut TestApp
                     .focus_handle(cx)
                     .is_focused(w)
             );
-            assert!(chat.read(cx).busy);
+            assert!(chat.read(cx).responding());
             assert_eq!(chat.read(cx).input.read(cx).content, "unsent bot draft");
             shell.open_title_tab(&bot_tab, w, cx);
         })
@@ -251,7 +251,7 @@ fn command_w_parks_bot_work_and_draft_and_restores_conversation(cx: &mut TestApp
                 2,
                 "reopening creates one Bot tab"
             );
-            assert!(chat.read(cx).busy);
+            assert!(chat.read(cx).responding());
             assert_eq!(chat.read(cx).input.read(cx).content, "unsent bot draft");
         })
         .unwrap();

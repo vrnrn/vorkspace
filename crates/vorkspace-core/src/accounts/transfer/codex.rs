@@ -50,25 +50,6 @@ pub(crate) fn rollout_dest(home: &Path, path: &Path) -> Result<PathBuf, String> 
     Ok(dir.join(path.file_name().unwrap()))
 }
 
-pub(crate) fn copy_durable(path: &Path, dest: &Path) -> std::io::Result<()> {
-    let mut temp = dest.as_os_str().to_os_string();
-    temp.push(format!(".{}.tmp", rand::random::<u128>()));
-    let temp = PathBuf::from(temp);
-    let result = std::fs::copy(path, &temp)
-        .and_then(|_| {
-            // Windows requires write access when flushing a file to disk.
-            std::fs::File::options()
-                .write(true)
-                .open(&temp)
-                .and_then(|f| f.sync_all())
-        })
-        .and_then(|()| std::fs::rename(&temp, dest));
-    if result.is_err() {
-        let _ = std::fs::remove_file(&temp);
-    }
-    result
-}
-
 pub(crate) fn state_db(home: &Path) -> Result<Option<PathBuf>, String> {
     let entries = match std::fs::read_dir(home) {
         Ok(entries) => entries,

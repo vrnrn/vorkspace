@@ -1,4 +1,4 @@
-//! SidebarWorktreeSwitcher.tsx's Working copies flyout. The composer keeps its
+//! The sidebar's Working copies flyout. The composer keeps its
 //! own branch picker; this panel selects the project's workspace scope.
 use crate::{input, popover};
 use gpui::{
@@ -57,7 +57,7 @@ fn rows(cwd: &str, state: Option<&Snapshot>, query: &str) -> Vec<Row> {
     rows.extend(
         state
             .into_iter()
-            .flat_map(|s| &s.worktrees)
+            .flat_map(|s| s.worktrees.iter())
             .filter(|t| !t.main && !t.missing)
             .map(|t| Row {
                 path: t.path.clone(),
@@ -170,7 +170,7 @@ impl WorktreeSwitcher {
         })
         .detach();
         // Session membership is metadata, not a reason to load every agent's
-        // settings (which restores full desktop transcripts and turn receipts).
+        // settings (which restores full saved transcripts and turn receipts).
         // It must also never hold up the independent Git list.
         if !ids.is_empty() {
             let work = cx.background_executor().spawn(async move {

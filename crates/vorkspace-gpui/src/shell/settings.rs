@@ -14,65 +14,22 @@ pub(crate) enum Removal {
 pub(crate) type RemovalDone = Box<dyn FnOnce(&mut Shell, Result<(), String>, &mut Context<Shell>)>;
 
 impl Shell {
-    fn settings_context(&self, cx: &App) -> SettingsContext {
-        let mut archived: Vec<_> = self
-            .order
-            .iter()
-            .map(|&id| self.session_metadata(id, cx).summary)
-            .filter(|s| s.archived && s.cwd == self.workspace.project)
-            .map(|s| ArchivedSession {
-                id: s.id,
-                title: s.title.clone(),
-                provider: s.provider.clone(),
-                updated_at: s.updated_at,
-            })
-            .collect();
-        archived.sort_by_key(|s| std::cmp::Reverse(s.updated_at));
-        let mut catalogs = HashMap::new();
-        let active = self
-            .bots
-            .as_ref()
-            .filter(|_| self.bot_active(cx))
-            .and_then(|m| m.read(cx).chat())
-            .or_else(|| {
-                self.workspace
-                    .active
-                    .and_then(|id| self.workspace.session_for_pane(id))
-                    .and_then(|id| self.sessions.get(&id))
-                    .cloned()
-            });
-        let mut profiles: HashMap<_, _> = Kind::ALL
-            .into_iter()
-            .map(|kind| {
-                (
-                    kind,
-                    crate::accounts::get(cx)
-                        .map(|center| center.read(cx).selected(kind, &self.workspace.project).id)
-                        .unwrap_or_else(|| vorkspace_core::accounts::DEFAULT.into()),
-                )
-            })
-            .collect();
-        if let Some(active) = &active {
-            let v = active.read(cx);
-            profiles.insert(
-                Kind::from_id(&v.summary.provider),
-                v.settings.account.id.clone(),
-            );
-        }
-        for session in active.iter().chain(self.sessions.values()) {
-            let session = session.read(cx);
-            if profiles.get(&Kind::from_id(&session.summary.provider))
-                != Some(&session.settings.account.id)
-            {
-                continue;
-            }
-            if catalogs.contains_key(&session.summary.provider) {
-                continue;
-            }
-            let models = session.settings_models();
-            if !models.is_empty() {
-                catalogs.insert(session.summary.provider.clone(), models);
-            }
+    fn settings_context(&self, section: Section, cx: &App) -> SettingsContext {
+        let mut archived = Vec::new();
+        if section == Section::Archive {
+            archived = self
+                .order
+                .iter()
+                .filter_map(|&id| self.session_summary(id, cx))
+                .filter(|s| s.archived && s.cwd == self.workspace.project)
+                .map(|s| ArchivedSession {
+                    id: s.id,
+                    title: s.title.clone(),
+                    provider: s.provider.clone(),
+                    updated_at: s.updated_at,
+                })
+                .collect();
+            archived.sort_by_key(|s| std::cmp::Reverse(s.updated_at));
         }
         SettingsContext {
             vox_error: crate::vox::shortcut_error(cx),
@@ -81,7 +38,6 @@ impl Shell {
                 .as_ref()
                 .map(|v| v.read(cx).devices.clone())
                 .unwrap_or_default(),
-            remote: Some(self.remote.clone()),
             quick_error: self.quick.error.clone().or_else(|| {
                 self.app_core
                     .as_ref()?
@@ -91,6 +47,7 @@ impl Shell {
                     .clone()
             }),
             inbox_connectors: self
+                .pages
                 .inbox
                 .as_ref()
                 .map(|inbox| inbox.read(cx).connector_preferences())
@@ -100,6 +57,7 @@ impl Shell {
                         .unwrap_or_default()
                 }),
             inbox_connections: self
+                .pages
                 .inbox
                 .as_ref()
                 .map(|inbox| inbox.read(cx).connection_statuses())
@@ -108,11 +66,13 @@ impl Shell {
                 .ok()
                 .and_then(|store| store.data_dir().map(std::path::PathBuf::from)),
             inbox_connection_revision: self
+                .pages
                 .inbox
                 .as_ref()
                 .map(|inbox| inbox.read(cx).connection_revision())
                 .unwrap_or_default(),
             jira_filter: self
+                .pages
                 .inbox
                 .as_ref()
                 .map(|inbox| inbox.read(cx).jira_filter())
@@ -122,6 +82,7 @@ impl Shell {
                         .unwrap_or_default()
                 }),
             inbox_bots: self
+                .pages
                 .inbox
                 .as_ref()
                 .map(|inbox| inbox.read(cx).default_bots())
@@ -131,26 +92,26 @@ impl Shell {
                         .unwrap_or_default()
                 }),
             jira_projects: self
+                .pages
                 .inbox
                 .as_ref()
                 .map(|inbox| inbox.read(cx).jira_projects())
                 .unwrap_or_default(),
             hidden_jira_projects: self
+                .pages
                 .inbox
                 .as_ref()
                 .map(|inbox| inbox.read(cx).hidden_jira_projects())
                 .unwrap_or_default(),
-            sessions: self
-                .order
-                .iter()
-                .map(|&id| {
-                    (
-                        id,
-                        self.session_working_copy(id, cx).to_owned(),
-                        self.session_metadata(id, cx).busy,
-                    )
-                })
-                .collect(),
+            session_checkouts: if section == Section::Worktrees {
+                self.order
+                    .iter()
+                    .filter_map(|&id| self.saved_session_scope(id, cx))
+                    .map(|(_, checkout)| checkout.to_owned())
+                    .collect()
+            } else {
+                Vec::new()
+            },
             bots: self
                 .bots
                 .as_ref()
@@ -172,11 +133,10 @@ impl Shell {
                         .collect()
                 })
                 .unwrap_or_default(),
-            catalogs,
             cwd: self.workspace.project.clone(),
             project_label: self.project_label(&self.workspace.project),
             archived,
-            archived_projects: {
+            archived_projects: if section == Section::Archive {
                 let mut paths: Vec<_> = self
                     .workspace
                     .project_archive
@@ -186,6 +146,8 @@ impl Shell {
                     .collect();
                 paths.sort();
                 paths
+            } else {
+                Vec::new()
             },
             projects: self
                 .workspace
@@ -204,21 +166,21 @@ impl Shell {
         self.leave_app_search(cx);
         self.close_preview(cx);
         self.menu = None;
-        if self.settings.is_some() {
+        if self.pages.settings.is_some() {
             self.select_settings(section, cx);
             return;
         }
         self.navigation_revision += 1;
-        if let Some(notes) = &self.notes {
+        if let Some(notes) = &self.page_tabs.notes {
             notes.update(cx, |notes, cx| notes.set_active(false, cx));
         }
-        for notes in self.note_tabs.values() {
+        for notes in self.page_tabs.note_tabs.values() {
             notes.update(cx, |notes, cx| notes.set_active(false, cx));
         }
-        let context = self.settings_context(cx);
+        let context = self.settings_context(section, cx);
         let prefs = self.workspace.preferences.clone();
         let view = cx.new(|cx| SettingsView::new(section, prefs, context, cx));
-        self.settings_events = Some(cx.subscribe_in(
+        self.pages.settings_events = Some(cx.subscribe_in(
             &view,
             window,
             |this, _, event: &SettingsEvent, window, cx| match event {
@@ -267,7 +229,7 @@ impl Shell {
                 SettingsEvent::Section(section) => this.select_settings(*section, cx),
                 SettingsEvent::InboxConnectorEnabled(provider, enabled) => {
                     this.ensure_background_inbox(window, cx);
-                    let result = this.inbox.as_ref().unwrap().update(cx, |inbox, cx| {
+                    let result = this.pages.inbox.as_ref().unwrap().update(cx, |inbox, cx| {
                         inbox.set_connector_enabled(provider, *enabled, cx)
                     });
                     match result {
@@ -277,7 +239,7 @@ impl Shell {
                                 let tab = TitleTab::App(app_views::AppView::Connector(provider));
                                 this.workspace.title_order.retain(|entry| *entry != tab);
                                 this.workspace.scope_focus.retain(|_, entry| *entry != tab);
-                                if this.active_app_view
+                                if this.pages.active_app_view
                                     == Some(app_views::AppView::Connector(provider))
                                 {
                                     this.leave_app_views(cx);
@@ -294,7 +256,7 @@ impl Shell {
                 SettingsEvent::ManageInboxProvider(provider) => {
                     if let Some(provider) = Connector::from_id(provider) {
                         this.open_connector(provider, window, cx);
-                        if let Some(page) = this.connector_pages.get(&provider) {
+                        if let Some(page) = this.pages.connector_pages.get(&provider) {
                             page.update(cx, |page, cx| {
                                 page.open_connection(provider.id().into(), cx)
                             });
@@ -303,7 +265,7 @@ impl Shell {
                 }
                 SettingsEvent::JiraFilter(filter) => {
                     this.ensure_background_inbox(window, cx);
-                    if let Some(inbox) = &this.inbox
+                    if let Some(inbox) = &this.pages.inbox
                         && let Err(error) =
                             inbox.update(cx, |inbox, cx| inbox.set_jira_filter(filter.clone(), cx))
                     {
@@ -313,20 +275,20 @@ impl Shell {
                 }
                 SettingsEvent::RefreshInbox => {
                     this.ensure_background_inbox(window, cx);
-                    if let Some(inbox) = &this.inbox {
+                    if let Some(inbox) = &this.pages.inbox {
                         inbox.update(cx, |inbox, cx| inbox.refresh(cx));
                     }
                 }
                 SettingsEvent::JiraProject(id, visible) => {
                     this.ensure_background_inbox(window, cx);
-                    if let Some(inbox) = &this.inbox {
+                    if let Some(inbox) = &this.pages.inbox {
                         inbox.update(cx, |inbox, cx| inbox.set_jira_project(id, *visible, cx));
                     }
                     this.sync_settings(cx);
                 }
                 SettingsEvent::InboxBot(source, bot) => {
                     this.ensure_background_inbox(window, cx);
-                    if let Some(inbox) = &this.inbox
+                    if let Some(inbox) = &this.pages.inbox
                         && let Err(error) =
                             inbox.update(cx, |inbox, cx| inbox.set_default_bot(source, bot, cx))
                     {
@@ -343,7 +305,14 @@ impl Shell {
                         .harness
                         .update(cx, |notice, cx| notice.check_now(hidden, cx));
                 }
-                SettingsEvent::Changed(prefs) => {
+                SettingsEvent::NotificationPermission(permission) => {
+                    if let Some(core) = &this.app_core {
+                        core.update(cx, |core, _| core.set_notification_permission(*permission));
+                    }
+                }
+                SettingsEvent::Changed { before, after } => {
+                    this.workspace.preferences.apply_edits(before, after);
+                    let prefs = &this.workspace.preferences;
                     window.set_ui_scale(prefs.interface_scale(), cx);
                     for (enabled, view) in
                         [(prefs.notes, AppView::Notes), (prefs.todos, AppView::Todos)]
@@ -352,14 +321,14 @@ impl Shell {
                             let tab = TitleTab::App(view);
                             this.workspace.title_order.retain(|entry| *entry != tab);
                             this.workspace.scope_focus.retain(|_, entry| *entry != tab);
-                            if this.active_app_view == Some(view) {
+                            if this.pages.active_app_view == Some(view) {
                                 this.leave_app_views(cx);
                             }
                         }
                     }
-                    this.workspace.preferences = *prefs.clone();
                     this.apply_preferences(cx);
                     this.persist(cx);
+                    this.sync_settings(cx);
                     this.invalidate_chrome(cx);
                     cx.notify();
                 }
@@ -368,7 +337,7 @@ impl Shell {
                     this.open(*id, window, cx);
                 }
                 SettingsEvent::Archive(id, archived) => {
-                    if this.session_summaries.contains_key(id)
+                    if this.has_session(*id, cx)
                         && this.session_metadata(*id, cx).summary.archived != *archived
                     {
                         this.toggle_archive(*id, cx);
@@ -401,7 +370,7 @@ impl Shell {
                         cx.spawn(async move |this, cx| {
                             let result = reset.await;
                             let _ = this.update(cx, |this, cx| {
-                                if let Some(settings) = &this.settings {
+                                if let Some(settings) = &this.pages.settings {
                                     settings.update(cx, |s, cx| s.management_finished(result, cx));
                                 }
                                 this.sync_settings(cx);
@@ -418,22 +387,23 @@ impl Shell {
                 }
             },
         ));
-        self.settings = Some(view.clone());
+        self.pages.settings = Some(view.clone());
         // Settings has its own complete rail, even when the project rail was hidden.
-        self.sidebar_slide = None;
-        self.sidebar_fraction = 1.;
+        self.sidebar.slide = None;
+        self.sidebar.fraction = 1.;
         window.focus(&view.focus_handle(cx), cx);
         this_update(self, cx);
     }
     pub(super) fn select_settings(&mut self, section: Section, cx: &mut Context<Self>) {
-        if let Some(view) = &self.settings {
+        if let Some(view) = &self.pages.settings {
             view.update(cx, |v, cx| v.select_section(section, cx));
+            self.sync_settings(cx);
         }
         this_update(self, cx);
     }
     pub(super) fn sync_settings(&mut self, cx: &mut Context<Self>) {
-        if let Some(view) = self.settings.clone() {
-            let context = self.settings_context(cx);
+        if let Some(view) = self.pages.settings.clone() {
+            let context = self.settings_context(view.read(cx).section(), cx);
             let prefs = self.workspace.preferences.clone();
             view.update(cx, |v, cx| {
                 v.set_context(context, cx);
@@ -442,9 +412,9 @@ impl Shell {
         }
     }
     pub(super) fn close_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.settings = None;
-        self.settings_events = None;
-        self.sidebar_fraction = if self.workspace.sidebar_visible {
+        self.pages.settings = None;
+        self.pages.settings_events = None;
+        self.sidebar.fraction = if self.workspace.sidebar_visible {
             1.
         } else {
             0.
@@ -464,7 +434,7 @@ impl Shell {
             vorkspace_ui::preferences::Preferences::MIN_UI_SCALE_PERCENT,
             vorkspace_ui::preferences::Preferences::MAX_UI_SCALE_PERCENT,
         );
-        if let Some(owner) = self.native_window {
+        if let Some(owner) = self.window.native_window {
             cx.defer(move |cx| {
                 let _ = owner.update(cx, |shell, window, cx| shell.initialize_scale(window, cx));
             });
@@ -479,55 +449,28 @@ impl Shell {
         }
         let notes_enabled = self.workspace.preferences.notes;
         let hidden_providers = self.workspace.preferences.hidden_providers.clone();
-        if let Some(notes) = &self.notes {
+        if let Some(notes) = &self.page_tabs.notes {
             notes.update(cx, |notes, cx| {
                 notes.set_enabled(notes_enabled, cx);
                 notes.configure_recording(&hidden_providers, cx);
             });
         }
-        for notes in self.note_tabs.values() {
+        for notes in self.page_tabs.note_tabs.values() {
             notes.update(cx, |notes, cx| {
                 notes.set_enabled(notes_enabled, cx);
                 notes.configure_recording(&hidden_providers, cx);
             });
         }
-        crate::meetings::capture::init(cx);
-        crate::background_helper::configure(
-            self.workspace.preferences.clipboard_history,
-            // Retain the saved preference key so existing users keep their choice.
-            self.workspace.preferences.bot_menu_bar_icon,
-            crate::background_helper::dictation_configuration(&self.workspace.preferences),
-            cx,
-        );
         if let Some(vox) = &self.vox {
             let prefs = self.workspace.preferences.clone();
             vox.update(cx, |v, cx| v.preferences(&prefs, cx));
         }
-        self.refresh_notification_permission();
-        self.configure_quick_composer(cx);
-        crate::menu_bar::refresh(&self.workspace.preferences, cx);
-        vorkspace_core::cli::initialize(&self.workspace.preferences.binary_paths);
-        vorkspace_core::worktree_setup::set_commands(&self.workspace.preferences.worktree_setup);
         self.keep_visible_idle_agents(cx);
-        vorkspace_core::provider::configure_idle_agents(
-            self.workspace.preferences.idle_agents as usize,
-        );
         if let Some(bots) = &self.bots {
             let prefs = self.workspace.preferences.clone();
-            bots.update(cx, |m, cx| m.set_preferences(prefs, cx));
-        }
-        crate::settings::apply_keybindings(&self.workspace.preferences, cx);
-        cx.set_global(self.workspace.preferences.clone());
-        if let Some(center) = crate::accounts::get(cx) {
-            center.update(cx, |center, cx| {
-                let changed = center.mask_emails != self.workspace.preferences.mask_emails
-                    || center.show_remaining != self.workspace.preferences.show_remaining_usage;
-                center.mask_emails = self.workspace.preferences.mask_emails;
-                center.show_remaining = self.workspace.preferences.show_remaining_usage;
-                if changed {
-                    cx.notify();
-                }
-            });
+            if bots.update(cx, |m, cx| m.set_preferences(prefs, cx)) {
+                self.update_chat_visibility(cx);
+            }
         }
         for session in self.sessions.values() {
             session.read(cx).transcript.clone().update(cx, |view, cx| {
@@ -542,6 +485,7 @@ impl Shell {
         window.set_ui_scale(self.workspace.preferences.interface_scale(), cx);
     }
     fn choose_chat_background(&mut self, cx: &mut Context<Self>) {
+        let store = self.store.clone();
         let prompt = cx.prompt_for_paths(PathPromptOptions {
             files: true,
             directories: false,
@@ -553,11 +497,12 @@ impl Shell {
                 && let Some(path) = paths.first()
             {
                 let source = path.clone();
-                let directory = crate::data_dir().join("backgrounds");
                 let work = cx.background_executor().spawn(async move {
-                    vorkspace_core::project_appearance::import_image(
-                        &source, &directory, "global", false,
-                    )
+                    let directory = locked(&store)?
+                        .data_dir()
+                        .map(|path| path.join("backgrounds"))
+                        .ok_or("Background images need a database on disk.")?;
+                    vorkspace_core::project_appearance::import_image(&source, &directory, "global")
                 });
                 let result = work.await;
                 let _ = this.update_in(cx, |this, window, cx| match result {
@@ -586,7 +531,7 @@ impl Shell {
         .detach();
     }
     fn finish_worktree_action(&mut self, result: Result<(), String>, cx: &mut Context<Self>) {
-        if let Some(view) = &self.settings {
+        if let Some(view) = &self.pages.settings {
             view.update(cx, |v, cx| v.management_finished(result, cx));
         }
         self.sync_git(cx);
@@ -596,10 +541,11 @@ impl Shell {
     }
     /// Dock and title-tab shells have separate owners, and either can sit inside it.
     pub(crate) fn terminals_using(&self, path: &str, cx: &App) -> bool {
-        self.terminals
+        self.dock
+            .terminals
             .values()
             .flatten()
-            .chain(self.terminal_tabs.values())
+            .chain(self.pages.terminal_tabs.values())
             .any(|t| vorkspace_core::files::is_resolved_inside(&t.read(cx).cwd, path))
     }
     /// The one way a worktree is removed. Everything after the first step uses the
@@ -663,10 +609,15 @@ impl Shell {
                     return Err("Close the Bot conversations using this worktree first.".into());
                 }
                 let ids = this
-                    .session_summaries
+                    .directory
+                    .read(cx)
+                    .rows
                     .keys()
-                    .filter(|id| is_resolved_inside(this.session_working_copy(**id, cx), &path))
                     .copied()
+                    .filter(|id| {
+                        this.saved_session_scope(*id, cx)
+                            .is_some_and(|(_, checkout)| is_resolved_inside(checkout, &path))
+                    })
                     .collect::<Vec<_>>();
                 if ids.iter().any(|id| {
                     this.sessions
@@ -695,7 +646,12 @@ impl Shell {
                     .filter(|(_, focus)| is_resolved_inside(&focus.path, &path))
                     .map(|(project, focus)| (project.clone(), focus.path.clone()))
                     .collect::<Vec<_>>();
-                Ok((guard, this.group_writes.take(), this.store.clone(), focuses))
+                Ok((
+                    guard,
+                    this.sidebar.group_writes.take(),
+                    this.store.clone(),
+                    focuses,
+                ))
             });
             let (mut guard, writes, store, focuses) = match admitted {
                 Ok(Ok(admitted)) => admitted,
@@ -733,11 +689,8 @@ impl Shell {
                             );
                         }
                     }
-                    let snapshot = vorkspace_core::git::snapshot(Path::new(&worker_cwd))?;
-                    let main = snapshot
-                        .worktrees
-                        .first()
-                        .ok_or("No main working copy found")?;
+                    let trees = vorkspace_core::git::worktrees(Path::new(&worker_cwd))?;
+                    let main = trees.first().ok_or("No main working copy found")?;
                     let paths = locked(&store)?.worktree_paths_for_removal(&worker_path)?;
                     guard.include_aliases(&paths);
                     if safe {
@@ -762,9 +715,15 @@ impl Shell {
                         {
                             continue;
                         }
-                        this.session_summaries.insert(summary.id, summary.clone());
-                        this.session_worktrees
-                            .insert(summary.id, settings.worktree_cwd.clone());
+                        let draft = this.session_record(id, cx).is_some_and(|row| row.draft);
+                        this.put_session_record(
+                            SessionRecord {
+                                summary: summary.clone(),
+                                checkout: Some(settings.worktree_cwd.clone()),
+                                draft,
+                            },
+                            cx,
+                        );
                         if let Some(view) = this.sessions.get(&summary.id) {
                             view.update(cx, |v, cx| v.worktree_deleted(summary, settings, cx));
                         }

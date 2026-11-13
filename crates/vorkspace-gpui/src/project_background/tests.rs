@@ -151,7 +151,7 @@ fn live_resize_and_opacity_reuse_the_texture_without_a_background_job(cx: &mut T
             div().relative().size_full().child(self.0.clone())
         }
     }
-    let image = render_image(background_texture(
+    let image = to_render_image(background_texture(
         &read_image(Path::new(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/assets/vorkspace.png"

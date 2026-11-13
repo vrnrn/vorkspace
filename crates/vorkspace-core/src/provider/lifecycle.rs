@@ -1,4 +1,4 @@
-//! Lifecycle rules from the desktop adapters. An idle stream is not a failed turn.
+//! Provider lifecycle rules. An idle stream is not a failed turn.
 use super::*;
 static CONTROL_SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
@@ -72,7 +72,7 @@ impl Protocol {
         } else if self.request.kind.is_pi() {
             events.extend(self.pi_tick(stdin)?);
         } else if self.request.kind == Kind::Claude {
-            // The desktop adapter proceeds after eight seconds even when older
+            // Proceed after eight seconds even when older
             // CLIs never acknowledge the initialize control request.
             if !self.claude_prompt_sent && started.elapsed() >= Duration::from_secs(8) {
                 self.claude_prompt(stdin)?;

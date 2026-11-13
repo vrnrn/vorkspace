@@ -13,8 +13,8 @@ async function files(path) {
   }
   return result;
 }
-test("native sources and host have complete local imports and no frontend dependencies", async () => {
-  for (const dir of ["crates", "host", "embedded", "scripts"]) {
+test("native sources have complete local imports and no frontend dependencies", async () => {
+  for (const dir of ["crates", "embedded", "scripts"]) {
     for (const path of await files(join(root, dir))) {
       assert.ok(!/\.(?:tsx?|mts|cts)$/.test(path), `Source must be JavaScript or Rust: ${path}`);
       if (!/\.(rs|js|mjs)$/.test(path) || path.endsWith(".test.js")) continue;

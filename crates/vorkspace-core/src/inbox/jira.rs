@@ -16,7 +16,7 @@ const ISSUE_FIELDS: [&str; 6] = [
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct JiraStatus {
+pub(crate) struct JiraStatus {
     pub connected: bool,
     pub site: String,
     pub email: String,
@@ -31,7 +31,7 @@ struct JiraConfig {
 
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct JiraProject {
+pub(crate) struct JiraProject {
     pub id: String,
     pub key: String,
     pub name: String,
@@ -75,7 +75,7 @@ pub struct JiraIssue {
 
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct JiraIssueDetails {
+pub(crate) struct JiraIssueDetails {
     pub body: String,
     pub author: String,
     pub author_avatar_url: String,
@@ -83,7 +83,7 @@ pub struct JiraIssueDetails {
 
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct JiraIssueComment {
+pub(crate) struct JiraIssueComment {
     pub id: String,
     pub kind: String,
     pub author: String,
@@ -101,7 +101,7 @@ pub struct JiraIssueComment {
 
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct JiraIssueThread {
+pub(crate) struct JiraIssueThread {
     pub comments: Vec<JiraIssueComment>,
     pub truncated: bool,
     pub review_decision: String,
@@ -109,12 +109,12 @@ pub struct JiraIssueThread {
     pub head_ref_name: String,
 }
 
-pub fn jira_status(app: PathBuf) -> Result<JiraStatus, String> {
+pub(crate) fn jira_status(app: PathBuf) -> Result<JiraStatus, String> {
     let config = read_config(&app)?;
     Ok(status_for(config.as_ref()))
 }
 
-pub fn jira_set_config(
+pub(crate) fn jira_set_config(
     app: PathBuf,
     site: String,
     email: String,
@@ -145,7 +145,7 @@ pub fn jira_set_config(
     Ok(status_for(Some(&config)))
 }
 
-pub fn jira_list_projects(app: PathBuf) -> Result<Vec<JiraProject>, String> {
+pub(crate) fn jira_list_projects(app: PathBuf) -> Result<Vec<JiraProject>, String> {
     let config = require_config(&app)?;
     fetch_jira_projects(|start| {
         jira_get(
@@ -180,51 +180,68 @@ pub fn jira_list_issues(
     parse_jira_issues(&data, &config.site)
 }
 
-pub fn jira_issue_details(app: PathBuf, key: String) -> Result<JiraIssueDetails, String> {
-    let config = require_config(&app)?;
-    let key = require_issue_key(&key)?;
-    let data = jira_get(
-        &config,
-        &format!("/rest/api/3/issue/{key}?fields=description,reporter,creator,assignee"),
-    )?;
-    parse_jira_issue_details(&data)
+pub(super) struct Issue<'a> {
+    config: JiraConfig,
+    key: &'a str,
 }
 
-pub fn jira_issue_thread(app: PathBuf, key: String) -> Result<JiraIssueThread, String> {
-    let config = require_config(&app)?;
-    let key = require_issue_key(&key)?;
-    // Newest first so a long thread keeps its latest comments; re-sorted below.
-    let data = jira_get(
-        &config,
-        &format!("/rest/api/3/issue/{key}/comment?maxResults={COMMENT_LIMIT}&orderBy=-created"),
-    )?;
-    parse_jira_issue_thread(&data, &config.site, key)
-}
+impl<'a> Issue<'a> {
+    pub(super) fn bind(app: &Path, item: &'a super::Item) -> Result<Self, String> {
+        let config = require_config(app)?;
+        let key = require_issue_key(&item.identifier)?;
+        let matches = super::target::on_instance(&config.site, &item.url)
+            .and_then(|(_, url)| {
+                url.path()
+                    .trim_end_matches('/')
+                    .strip_prefix("/browse/")
+                    .map(|target| target.eq_ignore_ascii_case(key))
+            })
+            .unwrap_or(false);
+        if !matches {
+            return Err("Connect this issue's Jira site in Settings → Integrations.".into());
+        }
+        Ok(Self { config, key })
+    }
 
-pub fn jira_issue_comment(
-    app: PathBuf,
-    key: String,
-    body: String,
-) -> Result<super::CommentReceipt, String> {
-    let config = require_config(&app)?;
-    let key = require_issue_key(&key)?;
-    let body = body.trim();
-    if body.is_empty() {
-        return Err("Comment cannot be empty".into());
+    pub(super) fn details(&self) -> Result<JiraIssueDetails, String> {
+        let key = self.key;
+        let data = jira_get(
+            &self.config,
+            &format!("/rest/api/3/issue/{key}?fields=description,reporter,creator,assignee"),
+        )?;
+        parse_jira_issue_details(&data)
     }
-    let data = jira_post(
-        &config,
-        &format!("/rest/api/3/issue/{key}/comment"),
-        &json!({ "body": text_to_adf(body) }),
-    )?;
-    let id = string_field(&data, "id").unwrap_or_default();
-    if id.is_empty() {
-        return Err("Could not post Jira comment".into());
+
+    pub(super) fn thread(&self) -> Result<JiraIssueThread, String> {
+        let key = self.key;
+        // Keep the latest comments of a long thread; sort them for display.
+        let data = jira_get(
+            &self.config,
+            &format!("/rest/api/3/issue/{key}/comment?maxResults={COMMENT_LIMIT}&orderBy=-created"),
+        )?;
+        parse_jira_issue_thread(&data, &self.config.site, key)
     }
-    Ok(super::CommentReceipt {
-        url: comment_url(&config.site, key, &id),
-        revision: string_field(&data, "created").map(|time| normalize_jira_time(&time)),
-    })
+
+    pub(super) fn comment(&self, body: &str) -> Result<super::CommentReceipt, String> {
+        let body = body.trim();
+        if body.is_empty() {
+            return Err("Comment cannot be empty".into());
+        }
+        let key = self.key;
+        let data = jira_post(
+            &self.config,
+            &format!("/rest/api/3/issue/{key}/comment"),
+            &json!({ "body": text_to_adf(body) }),
+        )?;
+        let id = string_field(&data, "id").unwrap_or_default();
+        if id.is_empty() {
+            return Err("Could not post Jira comment".into());
+        }
+        Ok(super::CommentReceipt {
+            url: comment_url(&self.config.site, key, &id),
+            revision: string_field(&data, "created").map(|time| normalize_jira_time(&time)),
+        })
+    }
 }
 
 fn status_for(config: Option<&JiraConfig>) -> JiraStatus {
@@ -549,7 +566,7 @@ fn issue_number(key: &str) -> i64 {
         .unwrap_or(0)
 }
 
-/// Jira sends `+0000` offsets, which WebKit's `Date.parse` rejects.
+/// Jira sends `+0000` offsets; rewrite them in the RFC 3339 `+00:00` form.
 fn normalize_jira_time(value: &str) -> String {
     let bytes = value.as_bytes();
     let len = bytes.len();
@@ -876,12 +893,12 @@ fn normalize_jira_site(raw: &str) -> Result<String, String> {
     })
 }
 
-fn config_path(app: &Path) -> Result<PathBuf, String> {
-    Ok(app.join("jira-config.json"))
+fn config_path(app: &Path) -> PathBuf {
+    app.join("jira-config.json")
 }
 
 fn read_config(app: &Path) -> Result<Option<JiraConfig>, String> {
-    let path = config_path(app)?;
+    let path = config_path(app);
     match fs::read_to_string(path) {
         Ok(raw) => {
             let mut config: JiraConfig =
@@ -905,36 +922,18 @@ fn require_config(app: &Path) -> Result<JiraConfig, String> {
 }
 
 fn write_config(app: &Path, config: &JiraConfig) -> Result<(), String> {
-    let path = config_path(app)?;
+    let path = config_path(app);
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     }
     let value = serde_json::to_string(config).map_err(|error| error.to_string())?;
-    write_secret_file(&path, &value)
+    use std::io::Write;
+    crate::private_file::replace(&path, |file| file.write_all(value.as_bytes()))
+        .map_err(|error| error.to_string())
 }
 
 fn delete_config(app: &Path) -> Result<(), String> {
-    let path = config_path(app)?;
-    match fs::remove_file(path) {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(error.to_string()),
-    }
-}
-
-fn write_secret_file(path: &Path, value: &str) -> Result<(), String> {
-    use std::io::Write;
-    use std::os::unix::fs::OpenOptionsExt;
-    let mut file = fs::OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(true)
-        .mode(0o600)
-        .open(path)
-        .map_err(|error| error.to_string())?;
-    file.write_all(value.as_bytes())
-        .map_err(|error| error.to_string())?;
-    Ok(())
+    crate::private_file::remove(&config_path(app)).map_err(|error| error.to_string())
 }
 
 #[cfg(test)]

@@ -1,9 +1,8 @@
 use std::{
     cell::RefCell,
-    collections::VecDeque,
     ptr::NonNull,
     sync::{
-        Mutex,
+        LazyLock,
         mpsc::{self, Receiver},
     },
 };
@@ -22,7 +21,10 @@ use super::{Notification, Permission, Target, resolved};
 
 const CATEGORY: &str = "vorkspace.session";
 const SHOW: &str = "vorkspace.session.show";
-static CLICKS: Mutex<VecDeque<Target>> = Mutex::new(VecDeque::new());
+static CLICKS: LazyLock<(
+    async_channel::Sender<Target>,
+    async_channel::Receiver<Target>,
+)> = LazyLock::new(async_channel::unbounded);
 
 define_class!(
     #[unsafe(super(NSObject))]
@@ -53,9 +55,8 @@ define_class!(
                 || action.isEqualToString(unsafe { UNNotificationDefaultActionIdentifier }))
                 && let Some(target) =
                     Target::from_tag(&response.notification().request().identifier().to_string())
-                && let Ok(mut queue) = CLICKS.lock()
             {
-                queue.push_back(target);
+                queue_click(target);
             }
             completion.call(());
         }
@@ -117,41 +118,43 @@ fn map_settings(settings: &UNNotificationSettings) -> Permission {
     }
 }
 
-pub fn permission() -> Receiver<Permission> {
-    let Some(center) = center() else {
-        return resolved(Permission::Unsupported);
-    };
-    let (sender, receiver) = mpsc::channel();
-    let block = RcBlock::new(move |settings: NonNull<UNNotificationSettings>| {
-        let _ = sender.send(map_settings(unsafe { settings.as_ref() }));
-    });
-    center.getNotificationSettingsWithCompletionHandler(&block);
+pub fn permission() -> async_channel::Receiver<Permission> {
+    let (sender, receiver) = async_channel::bounded(1);
+    if let Some(center) = center() {
+        let block = RcBlock::new(move |settings: NonNull<UNNotificationSettings>| {
+            let _ = sender.try_send(map_settings(unsafe { settings.as_ref() }));
+        });
+        center.getNotificationSettingsWithCompletionHandler(&block);
+    } else {
+        let _ = sender.try_send(Permission::Unsupported);
+    }
     receiver
 }
 
 /// Only call from an explicit opt-in in Settings. Sending never requests permission.
-pub fn request_permission() -> Receiver<Permission> {
-    let Some(center) = center() else {
-        return resolved(Permission::Unsupported);
-    };
-    let (sender, receiver) = mpsc::channel();
-    let block = RcBlock::new(move |_granted: Bool, _error: *mut NSError| {
-        let Some(center) = self::center() else {
-            let _ = sender.send(Permission::Unsupported);
-            return;
-        };
-        let sender = sender.clone();
-        let query = RcBlock::new(move |settings: NonNull<UNNotificationSettings>| {
-            let _ = sender.send(map_settings(unsafe { settings.as_ref() }));
+pub fn request_permission() -> async_channel::Receiver<Permission> {
+    let (sender, receiver) = async_channel::bounded(1);
+    if let Some(center) = center() {
+        let block = RcBlock::new(move |_granted: Bool, _error: *mut NSError| {
+            let Some(center) = self::center() else {
+                let _ = sender.try_send(Permission::Unsupported);
+                return;
+            };
+            let sender = sender.clone();
+            let query = RcBlock::new(move |settings: NonNull<UNNotificationSettings>| {
+                let _ = sender.try_send(map_settings(unsafe { settings.as_ref() }));
+            });
+            center.getNotificationSettingsWithCompletionHandler(&query);
         });
-        center.getNotificationSettingsWithCompletionHandler(&query);
-    });
-    center.requestAuthorizationWithOptions_completionHandler(
-        UNAuthorizationOptions::Alert
-            | UNAuthorizationOptions::Sound
-            | UNAuthorizationOptions::Badge,
-        &block,
-    );
+        center.requestAuthorizationWithOptions_completionHandler(
+            UNAuthorizationOptions::Alert
+                | UNAuthorizationOptions::Sound
+                | UNAuthorizationOptions::Badge,
+            &block,
+        );
+    } else {
+        let _ = sender.try_send(Permission::Unsupported);
+    }
     receiver
 }
 
@@ -195,11 +198,12 @@ pub fn show(notification: Notification) -> Receiver<Result<(), String>> {
     receiver
 }
 
-pub fn drain_clicks() -> Vec<Target> {
-    CLICKS
-        .lock()
-        .map(|mut queue| queue.drain(..).collect())
-        .unwrap_or_default()
+pub fn clicks() -> async_channel::Receiver<Target> {
+    CLICKS.1.clone()
+}
+
+pub fn queue_click(target: Target) {
+    let _ = CLICKS.0.try_send(target);
 }
 
 pub fn set_dock_badge(count: usize) {

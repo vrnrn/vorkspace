@@ -24,7 +24,7 @@ pub(super) struct Budget {
     frame_limit: usize,
 }
 impl Budget {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self::with_limits(FRAME_BYTES, WIRE_BYTES)
     }
     pub(super) fn with_limits(frame_limit: usize, limit: usize) -> Self {
@@ -56,7 +56,7 @@ impl Budget {
         state.used -= bytes;
         ready.notify_all();
     }
-    pub fn close(&self) {
+    pub(crate) fn close(&self) {
         let (lock, ready) = &*self.inner;
         lock.lock().unwrap_or_else(|e| e.into_inner()).closed = true;
         ready.notify_all();
@@ -97,14 +97,14 @@ impl std::fmt::Debug for Frame {
     }
 }
 impl Frame {
-    pub fn new(budget: Budget) -> Self {
+    pub(crate) fn new(budget: Budget) -> Self {
         Self {
             bytes: Vec::new(),
             budget,
             reserved: 0,
         }
     }
-    pub fn extend(&mut self, bytes: &[u8]) -> Result<(), String> {
+    pub(crate) fn extend(&mut self, bytes: &[u8]) -> Result<(), String> {
         let required = self
             .bytes
             .len()
@@ -187,19 +187,19 @@ pub(super) struct Receiver<T> {
     budget: Budget,
 }
 impl<T> Receiver<T> {
-    pub fn recv_timeout(&self, timeout: Duration) -> Result<T, mpsc::RecvTimeoutError> {
+    pub(crate) fn recv_timeout(&self, timeout: Duration) -> Result<T, mpsc::RecvTimeoutError> {
         self.receiver
             .as_ref()
             .ok_or(mpsc::RecvTimeoutError::Disconnected)?
             .recv_timeout(timeout)
     }
-    pub fn try_recv(&self) -> Result<T, mpsc::TryRecvError> {
+    pub(crate) fn try_recv(&self) -> Result<T, mpsc::TryRecvError> {
         self.receiver
             .as_ref()
             .ok_or(mpsc::TryRecvError::Disconnected)?
             .try_recv()
     }
-    pub fn close(&mut self) {
+    pub(crate) fn close(&mut self) {
         self.budget.close();
         self.receiver.take();
     }

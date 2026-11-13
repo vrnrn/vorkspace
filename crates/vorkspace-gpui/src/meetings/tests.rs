@@ -42,9 +42,16 @@ fn summarized(meetings: &Meetings, id: &str) -> Snapshot {
             ..Default::default()
         })
         .unwrap();
-    decode(meetings.summarize(id, &AtomicBool::new(false), |_, _| Ok(
+    meetings.summarize(id, &AtomicBool::new(false), |_, _| Ok(
         "## Summary\n\nThe team reviewed the **release checklist**.\n\n## Action items\n\n- Taylor will publish the draft tomorrow.\n- Verify the build with `cargo test`.\n\n```sh\ncargo test --workspace\n```".into()
-    )).unwrap()).unwrap()
+    )).unwrap()
+}
+
+fn save_edit(meetings: &Meetings, id: &str, draft: Draft) {
+    let version = uuid::Uuid::new_v4().simple().to_string();
+    let write = DraftWrite::new(id.into(), None, version.clone(), draft).unwrap();
+    meetings.checkpoint_draft(&write).unwrap();
+    meetings.save_draft(id, &version).unwrap();
 }
 
 fn page(meetings: &Meetings, id: &str, cx: &mut TestAppContext) -> Entity<Page> {
@@ -126,6 +133,14 @@ fn a_durable_native_draft_reopens_with_its_section_and_utf16_selection(cx: &mut 
             original.meeting.revision
         );
     });
+    reopened.update(cx, |page, cx| page.save(cx));
+    cx.run_until_parked();
+    let saved = meetings.open_document(&id).unwrap();
+    assert_eq!(saved.meeting.summary.unwrap().text, "a🦊b edited summary");
+    assert!(saved.draft.is_none());
+    reopened.read_with(cx, |page, _| {
+        assert!(!page.document.as_ref().unwrap().dirty());
+    });
 }
 
 #[gpui::test]
@@ -140,7 +155,7 @@ fn a_save_receipt_keeps_newer_native_input_and_its_selection(cx: &mut TestAppCon
         let doc = page.document.as_ref().unwrap();
         let version = doc.version.clone().unwrap();
         page.drafts.flush(&meetings).unwrap();
-        let saved = decode(meetings.save_draft(&id, &version).unwrap()).unwrap();
+        let saved = meetings.save_draft(&id, &version).unwrap();
         page.saving = true;
         (version, doc.draft.clone().unwrap(), saved)
     });
@@ -158,11 +173,68 @@ fn a_save_receipt_keeps_newer_native_input_and_its_selection(cx: &mut TestAppCon
             page.input(Field::Transcript).read(cx).selection_utf16(),
             1..3
         );
-        let persisted: Snapshot = decode(meetings.open_document(&id).unwrap()).unwrap();
+        let persisted: Snapshot = meetings.open_document(&id).unwrap();
         let draft = persisted.draft.unwrap();
         assert_eq!(draft.revision, persisted.meeting.revision);
         assert_eq!(draft.transcript.as_deref(), Some("A🦊 new revision"));
     });
+}
+
+#[test]
+fn reopening_after_a_failed_checkpoint_preserves_the_durable_base_for_the_next_edit() {
+    let (_root, meetings) = storage();
+    let id = recorded(&meetings, "Planning");
+    let previous = "aaaaaaaaaaaaaaaaaaaaaaaa00000001";
+    let pending = "bbbbbbbbbbbbbbbbbbbbbbbb00000001";
+    let next = "bbbbbbbbbbbbbbbbbbbbbbbb00000002";
+    let initial = DraftWrite::new(
+        id.clone(),
+        None,
+        previous.into(),
+        Draft {
+            transcript: Some("Prior correction".into()),
+            ..Draft::default()
+        },
+    )
+    .unwrap();
+    meetings.checkpoint_draft(&initial).unwrap();
+    let saved = meetings.save_draft(&id, previous).unwrap();
+    let lease = Arc::new(EditorLease(Mutex::new(meetings.try_edit(&id).unwrap())));
+    let mut capture = meetings
+        .start_recording(&id, "new-take", None, CaptureSource::Microphone)
+        .unwrap();
+
+    let drafts = DraftBuffer::default();
+    let write = DraftWrite::new(
+        id.clone(),
+        Some(previous.into()),
+        pending.into(),
+        Draft {
+            revision: saved.revision,
+            transcript: Some("Pending correction".into()),
+            ..Draft::default()
+        },
+    )
+    .unwrap();
+    drafts.stage(write, lease.clone(), false).unwrap();
+    let mut doc = drafts.open(&meetings, &id, Some(lease.clone())).unwrap();
+    assert_eq!(doc.text(Field::Transcript), "Pending correction");
+    assert_eq!(doc.version.as_deref(), Some(pending));
+    assert!(doc.checkpoint_error.is_some());
+    capture.phase(Phase::Stopped, None).unwrap();
+    drop(capture);
+
+    doc.draft.as_mut().unwrap().transcript = Some("Next correction".into());
+    doc.version = Some(next.into());
+    drafts.stage(doc.write().unwrap(), lease, false).unwrap();
+    drafts.flush(&meetings).unwrap();
+    let reopened = meetings.open_document(&id).unwrap();
+    assert_eq!(reopened.draft_version.as_deref(), Some(next));
+    assert_eq!(reopened.transcript, "Prior correction");
+    assert_eq!(
+        reopened.draft.unwrap().transcript.as_deref(),
+        Some("Next correction")
+    );
 }
 
 #[gpui::test]
@@ -253,11 +325,18 @@ fn a_newer_tab_choice_survives_direct_and_queued_opens_with_a_saved_draft(cx: &m
                 let id = recorded(&meetings, "Planning");
                 let snapshot = summarized(&meetings, &id);
                 if saved_draft {
-                    let write = DraftWrite::from_params(json!({
-                        "id": id, "version": "0123456789abcdef0123456789abcdef", "expected": null,
-                        "draft": { "revision": snapshot.meeting.revision, "summary": "Saved summary draft",
-                            "view": "summary", "title_focused": false, "start": 0, "end": 0 }
-                    })).unwrap();
+                    let write = DraftWrite::new(
+                        id.clone(),
+                        None,
+                        "0123456789abcdef0123456789abcdef".into(),
+                        Draft {
+                            revision: snapshot.meeting.revision,
+                            summary: Some("Saved summary draft".into()),
+                            view: DraftView::Summary,
+                            ..Draft::default()
+                        },
+                    )
+                    .unwrap();
                     meetings.checkpoint_draft(&write).unwrap();
                 }
                 let page = page(&meetings, &previous, cx);
@@ -355,7 +434,7 @@ fn failed_discard_or_delete_retains_the_selected_note_through_saving(cx: &mut Te
         let second = recorded(&meetings, "Second");
         summarized(&meetings, &second);
         let store = Arc::new(Mutex::new(
-            vorkspace_core::store::Store::open(&root.path().join("notes.db")).unwrap(),
+            vorkspace_core::store::Store::test(&root.path().join("notes.db")).unwrap(),
         ));
         let first_note = store
             .lock()
@@ -399,7 +478,7 @@ fn failed_discard_or_delete_retains_the_selected_note_through_saving(cx: &mut Te
             assert!(page.pending_note.is_none());
             assert!(!page.saving && !page.deleting && !page.discarding && page.opening.is_none());
         });
-        let saved: Snapshot = decode(meetings.read(&first).unwrap()).unwrap();
+        let saved: Snapshot = meetings.read(&first).unwrap();
         assert_eq!(saved.transcript, "Keep these transcript edits");
         assert!(
             store
@@ -418,11 +497,15 @@ fn a_delayed_summary_does_not_replace_a_later_saved_revision(cx: &mut TestAppCon
     let (_root, meetings) = storage();
     let id = recorded(&meetings, "Planning");
     let old_result = summarized(&meetings, &id);
-    meetings
-        .update(&json!({
-            "id": id, "revision": old_result.meeting.revision, "summary": "Manually edited summary"
-        }))
-        .unwrap();
+    save_edit(
+        &meetings,
+        &id,
+        Draft {
+            revision: old_result.meeting.revision,
+            summary: Some("Manually edited summary".into()),
+            ..Draft::default()
+        },
+    );
     let page = page(&meetings, &id, cx);
     page.update(cx, |page, cx| {
         let preview = page.preview.clone().unwrap();
@@ -458,7 +541,7 @@ fn returning_to_note_text_keeps_a_finished_summary_without_stealing_navigation(
         assert_eq!(page.pending_focus, None);
     });
     assert_eq!(events.borrow().as_slice(), ["changed"]);
-    let durable: Snapshot = decode(meetings.read(&id).unwrap()).unwrap();
+    let durable: Snapshot = meetings.read(&id).unwrap();
     assert_eq!(durable.meeting.revision, revision);
     assert!(durable.meeting.summary.is_some());
 }
@@ -470,7 +553,7 @@ fn finishing_an_unselected_recording_refreshes_notes_without_changing_the_open_d
     let (_root, meetings) = storage();
     let selected = recorded(&meetings, "Selected note");
     let finished = recorded(&meetings, "Other recording");
-    let snapshot: Snapshot = decode(meetings.read(&finished).unwrap()).unwrap();
+    let snapshot: Snapshot = meetings.read(&finished).unwrap();
     let page = page(&meetings, &selected, cx);
     let events = events(&page, cx);
     page.update(cx, |page, cx| {
@@ -515,7 +598,7 @@ fn deleting_a_recording_leaves_the_next_note_to_the_notes_owner(cx: &mut TestApp
     });
     assert_eq!(events.borrow().as_slice(), ["deleted"]);
     assert!(meetings.read(&selected).is_err());
-    let retained: Snapshot = decode(meetings.read(&other).unwrap()).unwrap();
+    let retained: Snapshot = meetings.read(&other).unwrap();
     assert_eq!(retained.meeting.id, other);
     assert_eq!(retained.meeting.title, "Unrelated note");
 }
@@ -559,20 +642,20 @@ fn an_unrecorded_note_can_be_deleted_before_its_first_saved_snapshot(cx: &mut Te
 fn legacy_title_drafts_survive_without_focusing_a_removed_title_editor(cx: &mut TestAppContext) {
     let (_root, meetings) = storage();
     let id = recorded(&meetings, "Planning");
-    let snapshot: Snapshot = decode(meetings.read(&id).unwrap()).unwrap();
-    let write = DraftWrite::from_params(json!({
-        "id": id,
-        "version": "0123456789abcdef0123456789abcdef",
-        "expected": null,
-        "draft": {
-            "revision": snapshot.meeting.revision,
-            "title": "Legacy title edit",
-            "view": "transcript",
-            "title_focused": true,
-            "start": 2,
-            "end": 5
-        }
-    }))
+    let snapshot: Snapshot = meetings.read(&id).unwrap();
+    let write = DraftWrite::new(
+        id.clone(),
+        None,
+        "0123456789abcdef0123456789abcdef".into(),
+        Draft {
+            revision: snapshot.meeting.revision,
+            title: Some("Legacy title edit".into()),
+            title_focused: true,
+            start: 2,
+            end: 5,
+            ..Draft::default()
+        },
+    )
     .unwrap();
     meetings.checkpoint_draft(&write).unwrap();
     let page = page(&meetings, &id, cx);
@@ -589,7 +672,7 @@ fn legacy_title_drafts_survive_without_focusing_a_removed_title_editor(cx: &mut 
     });
     type_into(&page, Field::Transcript, "New transcript edit", 2..4, cx);
     page.update(cx, |page, _| page.drafts.flush(&meetings).unwrap());
-    let reopened: Snapshot = decode(meetings.open_document(&id).unwrap()).unwrap();
+    let reopened: Snapshot = meetings.open_document(&id).unwrap();
     let draft = reopened.draft.unwrap();
     assert_eq!(draft.title.as_deref(), Some("Legacy title edit"));
     assert_eq!(draft.transcript.as_deref(), Some("New transcript edit"));
@@ -671,7 +754,7 @@ fn hiding_notes_and_reselecting_the_same_note_preserve_its_recording_draft(
         assert_eq!(page.section, Section::Source);
         assert_eq!(page.input(Field::Summary).read(cx).selection_utf16(), 1..3);
         assert_eq!(page.preview, preview);
-        let current: Snapshot = decode(meetings.read(&id).unwrap()).unwrap();
+        let current: Snapshot = meetings.read(&id).unwrap();
         assert_eq!(current.meeting.revision, saved.meeting.revision);
     });
 }
@@ -703,7 +786,7 @@ fn clearing_a_note_waits_for_its_recording_draft_before_releasing_the_lease(
         assert!(page.pending_note.is_none());
         assert_ne!(page.document.as_ref().unwrap().id(), id);
     });
-    let saved: Snapshot = decode(meetings.open_document(&id).unwrap()).unwrap();
+    let saved: Snapshot = meetings.open_document(&id).unwrap();
     assert_eq!(saved.transcript, "Unfinished transcript edit");
     assert!(meetings.try_edit(&id).unwrap().is_some());
 }
@@ -735,7 +818,7 @@ fn note_close_waits_for_a_recording_edit_save(cx: &mut TestAppContext) {
         assert!(!page.has_pending_note_edit("planning"));
         assert!(page.prepare_note_close(cx));
     });
-    let saved: Snapshot = decode(meetings.open_document(&id).unwrap()).unwrap();
+    let saved: Snapshot = meetings.open_document(&id).unwrap();
     assert_eq!(saved.transcript, "Transcript changed before close");
 }
 
@@ -755,11 +838,16 @@ fn a_blank_note_recording_never_materializes_until_there_is_content(cx: &mut Tes
     type_into(&page, Field::Transcript, "  ", 2..2, cx);
     page.update(cx, |page, _| page.drafts.flush(&meetings).unwrap());
     assert!(meetings.read(&id).is_err());
-    assert_eq!(meetings.list().unwrap(), json!([]));
+    assert!(
+        meetings
+            .note_candidates(&Default::default())
+            .unwrap()
+            .is_empty()
+    );
 
     type_into(&page, Field::Transcript, "Planning", 8..8, cx);
     page.update(cx, |page, _| page.drafts.flush(&meetings).unwrap());
-    let saved: Snapshot = decode(meetings.open_document(&id).unwrap()).unwrap();
+    let saved: Snapshot = meetings.open_document(&id).unwrap();
     assert!(saved.meeting.title.is_empty());
     assert_eq!(saved.draft.unwrap().transcript.as_deref(), Some("Planning"));
     assert!(meetings.try_edit(&id).unwrap().is_none());
@@ -769,14 +857,16 @@ fn a_blank_note_recording_never_materializes_until_there_is_content(cx: &mut Tes
 fn a_resumed_run_keeps_the_corrected_document_and_read_only_baseline(cx: &mut TestAppContext) {
     let (_root, meetings) = storage();
     let id = recorded(&meetings, "Planning");
-    let prior: Snapshot = decode(meetings.read(&id).unwrap()).unwrap();
-    meetings
-        .update(&json!({
-            "id": id,
-            "revision": prior.meeting.revision,
-            "transcript": "Corrected discussion"
-        }))
-        .unwrap();
+    let prior: Snapshot = meetings.read(&id).unwrap();
+    save_edit(
+        &meetings,
+        &id,
+        Draft {
+            revision: prior.meeting.revision,
+            transcript: Some("Corrected discussion".into()),
+            ..Draft::default()
+        },
+    );
     let page = page(&meetings, &id, cx);
     page.update(cx, |page, cx| {
         let lease = page.document.as_ref().unwrap().lease.clone().unwrap();

@@ -157,7 +157,7 @@ mod tests {
     #[gpui::test]
     fn stale_connector_edits_keep_the_peers_filters_and_read_marks(cx: &mut TestAppContext) {
         let store = Arc::new(Mutex::new(
-            vorkspace_core::store::Store::open(std::path::Path::new(":memory:")).unwrap(),
+            vorkspace_core::store::Store::test(std::path::Path::new(":memory:")).unwrap(),
         ));
         let owner = cx.update(|cx| SavedPreferences::get(&store, cx));
         let baseline = owner.read_with(cx, |saved, _| saved.state.clone());

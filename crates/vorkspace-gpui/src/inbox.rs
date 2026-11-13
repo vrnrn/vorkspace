@@ -1,8 +1,9 @@
-//! Connector fetch owner and retained provider pages, backed by native adapters
-//! and the desktop app's existing credential files.
+//! Window-local connector panes and their retained detail state.
 mod avatar;
+mod catalog;
 mod diff;
 mod document;
+mod feed;
 mod saved_preferences;
 mod ui;
 
@@ -15,28 +16,25 @@ use gpui::{
     App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, ListAlignment,
     ListState, Pixels, ScrollHandle, Subscription, WeakEntity, px,
 };
-use std::time::Instant;
-use std::{path::PathBuf, time::Duration};
-use vorkspace_core::{
-    inbox::{self as model, Checks, Details, Diff, Item, Service, Snapshot, Thread, ViewState},
-    store::Session,
+use std::{path::PathBuf, rc::Rc};
+use vorkspace_core::inbox::{
+    self as model, Checks, Details, Diff, Item, Service, Snapshot, Thread, ViewState,
 };
 use vorkspace_runtime::runtime::{Database, locked};
 use vorkspace_ui::theme::*;
 
+pub(crate) use catalog::SessionLinks;
+pub(crate) use feed::{FeedEvent, InboxFeed};
+
 pub(crate) enum Event {
     Close,
+    ConnectorAvailabilityChanged,
     OpenTab(Box<Item>),
     OpenSession(i64),
     StartSession {
         item: Box<Item>,
         prompt: String,
         bot: Option<String>,
-    },
-    ItemsChanged(Vec<Item>),
-    Activity {
-        projects: Vec<model::NotificationProject>,
-        changed: Vec<Item>,
     },
 }
 
@@ -47,33 +45,195 @@ enum Tab {
     Checks,
 }
 
+struct PostedComment {
+    key: String,
+    revision: u64,
+    reply: Option<(String, String)>,
+}
+
+/// The connect-a-provider dialog: which provider it is open for, its inputs and progress.
+struct ConnectForm {
+    provider: Option<String>,
+    url: Entity<Input>,
+    email: Entity<Input>,
+    token: Entity<Input>,
+    connecting: bool,
+    error: Option<String>,
+}
+
+impl ConnectForm {
+    fn new(placeholder: gpui::Hsla, cx: &mut App) -> Self {
+        let url = cx.new(|cx| Input::field("Instance URL", "https://", placeholder, cx));
+        let email = cx.new(|cx| Input::field("Email", "you@example.com", placeholder, cx));
+        let token = cx.new(|cx| {
+            let mut input = Input::field("API token", "Personal access token", placeholder, cx);
+            input.set_secret();
+            input
+        });
+        Self {
+            provider: None,
+            url,
+            email,
+            token,
+            connecting: false,
+            error: None,
+        }
+    }
+}
+
+/// The open item's actions: the merge menu, the pending confirmation and its outcome.
+struct ItemActions {
+    menu: bool,
+    anchor: AnchorSlot,
+    pr_action_anchors: [AnchorSlot; 4],
+    error: Option<String>,
+    notice: Option<String>,
+    confirm_action: Option<String>,
+    merge_action: String,
+    acting: bool,
+}
+
+impl ItemActions {
+    fn new() -> Self {
+        Self {
+            menu: false,
+            anchor: AnchorSlot::default(),
+            pr_action_anchors: std::array::from_fn(|_| AnchorSlot::default()),
+            error: None,
+            notice: None,
+            confirm_action: None,
+            merge_action: "merge".into(),
+            acting: false,
+        }
+    }
+}
+
+/// Where a session started from the open item goes: a project checkout or a bot.
+struct SessionStart {
+    project: PathBuf,
+    bots: Vec<(String, String)>,
+    bot: Option<String>,
+    destination_explicit: bool,
+    project_picker: bool,
+    project_anchor: AnchorSlot,
+}
+
+impl SessionStart {
+    fn new(project: PathBuf) -> Self {
+        Self {
+            project,
+            bots: vec![],
+            bot: None,
+            destination_explicit: false,
+            project_picker: false,
+            project_anchor: AnchorSlot::default(),
+        }
+    }
+}
+
+/// The comment composer: its draft input, reply target and posting progress.
+struct CommentComposer {
+    comment: Entity<Input>,
+    revision: u64,
+    focus_comment: bool,
+    reply: Option<(String, String)>,
+    posting: bool,
+    post_error: Option<String>,
+}
+
+impl CommentComposer {
+    fn new(comment: Entity<Input>) -> Self {
+        Self {
+            comment,
+            revision: 0,
+            focus_comment: false,
+            reply: None,
+            posting: false,
+            post_error: None,
+        }
+    }
+}
+
+/// The Summary tab's virtualized timeline of the open item's activity.
+struct SummaryTimeline {
+    scroll: ListState,
+    width: std::rc::Rc<std::cell::Cell<Pixels>>,
+    activity: Vec<ui::Activity>,
+    activity_revision: u64,
+    rows: std::cell::RefCell<ui::SummaryRows>,
+}
+
+impl SummaryTimeline {
+    fn new() -> Self {
+        Self {
+            scroll: ListState::new(0, ListAlignment::Top, px(200.)),
+            width: Default::default(),
+            activity: vec![],
+            activity_revision: 0,
+            rows: Default::default(),
+        }
+    }
+}
+
+/// The open item's tabs, and the Code and Checks data each loads on demand.
+struct DetailTabs {
+    tab: Tab,
+    diff: Option<Diff>,
+    diff_view: Entity<DiffView>,
+    checks: Option<Checks>,
+    loading: bool,
+    error: Option<String>,
+    request: u64,
+}
+
+impl DetailTabs {
+    fn new(diff_view: Entity<DiffView>) -> Self {
+        Self {
+            tab: Tab::Summary,
+            diff: None,
+            diff_view,
+            checks: None,
+            loading: false,
+            error: None,
+            request: 0,
+        }
+    }
+}
+
+/// The open item's details and discussion, the load that fetches them and its errors.
+#[derive(Default)]
+struct ItemDetail {
+    details: Option<Details>,
+    thread: Option<Thread>,
+    document: Option<Entity<document::InboxDocument>>,
+    comments: Vec<(model::Comment, Entity<document::InboxDocument>)>,
+    loading: bool,
+    target_error: Option<String>,
+    error: Option<String>,
+    thread_error: Option<String>,
+    expanded_comments: std::collections::HashSet<String>,
+    generation: u64,
+}
+
 pub(crate) struct Inbox {
-    /// Only the root owns list polling, observation and durable shared state.
-    /// Pages retain their own async detail work and inputs for their lifetime.
+    /// The root retains the pane entities. Each pane owns its details and inputs.
     owner: Option<WeakEntity<Inbox>>,
+    feed: Entity<InboxFeed>,
     pages: std::collections::HashMap<String, Entity<Inbox>>,
     store: Database,
     service: Service,
     projects: Vec<PathBuf>,
-    /// Polling is app-wide. A window's list and destinations use `projects`.
-    poll_projects: Vec<PathBuf>,
-    appearances:
-        std::collections::HashMap<String, vorkspace_core::project_appearance::ProjectAppearance>,
     state: ViewState,
     preferences: Entity<saved_preferences::SavedPreferences>,
     saved_state: ViewState,
-    snapshot: Snapshot,
-    sessions: Vec<Session>,
+    snapshot: Rc<Snapshot>,
+    sessions: Rc<catalog::RelatedSessions>,
+    publication_queued: bool,
     focus: FocusHandle,
     search: Entity<Input>,
-    comment: Entity<Input>,
-    summary_scroll: ListState,
+    composer: CommentComposer,
+    summary: SummaryTimeline,
     list_scroll: ScrollHandle,
-    summary_width: std::rc::Rc<std::cell::Cell<Pixels>>,
-    activity: Vec<ui::Activity>,
-    activity_revision: u64,
-    summary_rows: std::cell::RefCell<ui::SummaryRows>,
-    focus_comment: bool,
     selected: Option<String>,
     /// A detail-only page keeps its item identity when a list refresh omits it.
     /// The last available summary is retained until a matching item arrives.
@@ -82,59 +242,18 @@ pub(crate) struct Inbox {
     pane_width: Option<f32>,
     release_pending: bool,
     narrow_detail: bool,
-    details: Option<Details>,
-    thread: Option<Thread>,
-    document: Option<Entity<document::InboxDocument>>,
-    comments: Vec<(model::Comment, Entity<document::InboxDocument>)>,
-    diff: Option<Diff>,
-    diff_view: Entity<DiffView>,
-    checks: Option<Checks>,
-    tab: Tab,
+    detail: ItemDetail,
+    tabs: DetailTabs,
     loading: bool,
-    detail_loading: bool,
-    extra_loading: bool,
-    posting: bool,
-    acting: bool,
     error: Option<String>,
-    detail_error: Option<String>,
-    extra_error: Option<String>,
-    post_error: Option<String>,
-    thread_error: Option<String>,
-    expanded_comments: std::collections::HashSet<String>,
-    merge_action: String,
-    reply: Option<(String, String)>,
-    generation: u64,
-    detail_generation: u64,
-    extra_request: u64,
     filters_open: bool,
-    connections_open: bool,
     filter_anchor: AnchorSlot,
-    connection_anchor: AnchorSlot,
-    connect_provider: Option<String>,
-    connect_url: Entity<Input>,
-    connect_email: Entity<Input>,
-    connect_token: Entity<Input>,
-    connecting: bool,
+    connect: ConnectForm,
     connection_revision: u64,
-    connect_error: Option<String>,
-    start_project: PathBuf,
-    bots: Vec<(String, String)>,
-    start_bot: Option<String>,
-    destination_explicit: bool,
-    project_picker: bool,
-    project_anchor: AnchorSlot,
-    action_menu: bool,
-    action_anchor: AnchorSlot,
-    pr_action_anchors: [AnchorSlot; 4],
-    action_error: Option<String>,
-    action_notice: Option<String>,
-    confirm_action: Option<String>,
+    start: SessionStart,
+    actions: ItemActions,
     resize_start: Option<(f32, f32)>,
     active: bool,
-    refresh_queued: bool,
-    notifications: model::NotificationTracker,
-    self_activity: std::collections::HashMap<String, (i64, Instant)>,
-    last_refresh: Instant,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -151,17 +270,34 @@ impl Inbox {
         projects: Vec<PathBuf>,
         cwd: PathBuf,
         poll_projects: Vec<PathBuf>,
+        shared: (&Entity<SessionLinks>, &Entity<InboxFeed>),
         cx: &mut Context<Self>,
     ) -> Self {
-        let mut inbox = Self::new_inner(store, projects, cwd, !cfg!(test), cx);
-        inbox.poll_projects = poll_projects;
+        let (links, feed) = shared;
+        let mut inbox = Self::new_inner(store, projects, cwd, feed.clone(), cx);
+        let root = cx.entity_id();
+        feed.update(cx, |feed, cx| feed.set_scope(root, poll_projects, cx));
+        cx.observe(feed, Self::adopt_feed).detach();
+        cx.subscribe(feed, |this, _, event: &FeedEvent, cx| {
+            if matches!(event, FeedEvent::DetailTick) {
+                this.refresh_active_details(cx);
+            }
+        })
+        .detach();
+        inbox.sessions = links.read(cx).index();
+        cx.observe(links, |this, links, cx| {
+            this.sessions = links.read(cx).index();
+            this.publish_pages(cx);
+            cx.notify();
+        })
+        .detach();
         inbox
     }
     fn new_inner(
         store: Database,
         mut projects: Vec<PathBuf>,
         cwd: PathBuf,
-        poll: bool,
+        feed: Entity<InboxFeed>,
         cx: &mut Context<Self>,
     ) -> Self {
         if !cwd.as_os_str().is_empty() && !projects.contains(&cwd) {
@@ -175,29 +311,35 @@ impl Inbox {
             .unwrap_or_else(|| cwd.clone());
         cx.observe(&preferences, |this, owner, cx| {
             let saved = owner.read(cx).state.clone();
-            let scope = this.state.fetch_scope(&this.poll_projects);
             this.adopt_preferences(&saved, true, cx);
-            if this.owner.is_none()
-                && !cfg!(test)
-                && scope != this.state.fetch_scope(&this.poll_projects)
-            {
-                this.refresh(cx);
-            }
         })
         .detach();
+        let entity = cx.entity_id();
+        let feed_on_release = feed.downgrade();
+        cx.on_release(move |_, cx| {
+            let _ = feed_on_release.update(cx, |feed, cx| feed.release(entity, cx));
+        })
+        .detach();
+        let (snapshot, loading, connection_revision) = {
+            let shared = feed.read(cx);
+            (
+                shared.snapshot.clone(),
+                shared.loading(),
+                shared.connection_revision,
+            )
+        };
         let placeholder = crate::controls::page::secondary_ink();
         let search = cx.new(|cx| Input::field("Filter items", "Filter items", placeholder, cx));
         let comment = cx.new(Input::inbox_comment);
-        let connect_url = cx.new(|cx| Input::field("Instance URL", "https://", placeholder, cx));
-        let connect_email = cx.new(|cx| Input::field("Email", "you@example.com", placeholder, cx));
-        let connect_token =
-            cx.new(|cx| Input::field("API token", "Personal access token", placeholder, cx));
+        let connect = ConnectForm::new(placeholder, cx);
         let diff_view = cx.new(DiffView::new);
         let subscriptions = vec![
             cx.subscribe(&search, |_, _, _: &input::Changed, cx| cx.notify()),
             cx.subscribe(&comment, |this, _, _: &input::Changed, cx| {
-                let count = this.summary_scroll.item_count();
-                this.summary_scroll
+                this.composer.revision = this.composer.revision.wrapping_add(1);
+                let count = this.summary.scroll.item_count();
+                this.summary
+                    .scroll
                     .remeasure_items(count.saturating_sub(1)..count);
                 cx.notify();
             }),
@@ -208,64 +350,20 @@ impl Inbox {
                 if let DiffEvent::Comment(request) = event
                     && view.read(cx).owns_comment(request)
                 {
-                    this.comment
+                    this.composer
+                        .comment
                         .update(cx, |input, cx| input.set_text(request.text.clone(), cx));
                     view.update(cx, |view, cx| view.complete_comment(request, Ok(()), cx));
-                    this.tab = Tab::Summary;
-                    this.summary_scroll.scroll_to_end();
-                    this.focus_comment = true;
+                    this.tabs.tab = Tab::Summary;
+                    this.summary.scroll.scroll_to_end();
+                    this.composer.focus_comment = true;
                     cx.notify();
                 }
             }),
         ];
-        if poll {
-            cx.spawn(async move |this, cx| {
-                if this.update(cx, |this, cx| this.refresh(cx)).is_err() {
-                    return;
-                }
-                loop {
-                    cx.background_executor()
-                        .timer(Duration::from_secs(30))
-                        .await;
-                    if this
-                        .update(cx, |this, cx| {
-                            let interval = Duration::from_secs(
-                                if this.pages.values().any(|page| page.read(cx).active) {
-                                    120
-                                } else {
-                                    300
-                                },
-                            );
-                            if this.last_refresh.elapsed() >= interval {
-                                this.refresh(cx);
-                            }
-                            for page in this.pages.values() {
-                                page.update(cx, |page, cx| {
-                                    if page.active
-                                        && page.selected.is_some()
-                                        && !page.detail_loading
-                                        && !page.posting
-                                        && !page.acting
-                                    {
-                                        page.load_detail(false, cx);
-                                        if page.tab == Tab::Checks && !page.extra_loading {
-                                            page.checks = None;
-                                            page.set_tab(Tab::Checks, cx);
-                                        }
-                                    }
-                                });
-                            }
-                        })
-                        .is_err()
-                    {
-                        break;
-                    }
-                }
-            })
-            .detach();
-        }
         Self {
             owner: None,
+            feed,
             pages: Default::default(),
             service: Service {
                 cwd: if cwd.is_dir() {
@@ -276,82 +374,35 @@ impl Inbox {
                 data_dir,
             },
             store,
-            poll_projects: projects.clone(),
             projects,
-            appearances: Default::default(),
             saved_state: state.clone(),
             state,
             preferences,
-            snapshot: Snapshot::default(),
-            sessions: vec![],
+            snapshot,
+            sessions: Default::default(),
+            publication_queued: false,
             focus: cx.focus_handle(),
             search,
-            comment,
-            summary_scroll: ListState::new(0, ListAlignment::Top, px(200.)),
+            composer: CommentComposer::new(comment),
+            summary: SummaryTimeline::new(),
             list_scroll: ScrollHandle::new(),
-            summary_width: Default::default(),
-            activity: vec![],
-            activity_revision: 0,
-            summary_rows: Default::default(),
-            focus_comment: false,
             selected: None,
             pinned_item: None,
             pane_width: None,
             release_pending: false,
             narrow_detail: false,
-            details: None,
-            thread: None,
-            document: None,
-            comments: vec![],
-            diff: None,
-            diff_view,
-            checks: None,
-            tab: Tab::Summary,
-            loading: false,
-            detail_loading: false,
-            extra_loading: false,
-            posting: false,
-            acting: false,
+            detail: ItemDetail::default(),
+            tabs: DetailTabs::new(diff_view),
+            loading,
             error: None,
-            detail_error: None,
-            extra_error: None,
-            post_error: None,
-            thread_error: None,
-            expanded_comments: Default::default(),
-            merge_action: "merge".into(),
-            reply: None,
-            generation: 0,
-            detail_generation: 0,
-            extra_request: 0,
             filters_open: false,
-            connections_open: false,
             filter_anchor: AnchorSlot::default(),
-            connection_anchor: AnchorSlot::default(),
-            connect_provider: None,
-            connect_url,
-            connect_email,
-            connect_token,
-            connecting: false,
-            connection_revision: 0,
-            connect_error: None,
-            start_project: cwd,
-            bots: vec![],
-            start_bot: None,
-            destination_explicit: false,
-            project_picker: false,
-            project_anchor: AnchorSlot::default(),
-            action_menu: false,
-            action_anchor: AnchorSlot::default(),
-            pr_action_anchors: std::array::from_fn(|_| AnchorSlot::default()),
-            action_error: None,
-            action_notice: None,
-            confirm_action: None,
+            connect,
+            connection_revision,
+            start: SessionStart::new(cwd),
+            actions: ItemActions::new(),
             resize_start: None,
             active: false,
-            refresh_queued: false,
-            notifications: model::NotificationTracker::default(),
-            self_activity: Default::default(),
-            last_refresh: Instant::now(),
             _subscriptions: subscriptions,
         }
     }
@@ -373,55 +424,44 @@ impl Inbox {
         poll_projects: Vec<PathBuf>,
         cx: &mut Context<Self>,
     ) {
-        if self.projects != projects || self.start_project != cwd {
+        if self.projects != projects || self.start.project != cwd {
             self.projects = projects;
             self.service.cwd = if cwd.is_dir() {
                 cwd.clone()
             } else {
                 self.service.data_dir.clone()
             };
-            self.start_project = cwd;
+            self.start.project = cwd;
             self.publish_pages(cx);
             cx.notify();
         }
-        if self.poll_projects != poll_projects {
-            self.poll_projects = poll_projects;
-            self.refresh(cx);
-        }
-    }
-    pub(crate) fn set_appearances(
-        &mut self,
-        appearances: std::collections::HashMap<
-            String,
-            vorkspace_core::project_appearance::ProjectAppearance,
-        >,
-        cx: &mut Context<Self>,
-    ) {
-        if self.appearances != appearances {
-            self.appearances = appearances;
-            if self.owner.is_none() {
-                self.publish_pages(cx);
-            }
-            cx.notify();
-        }
+        let root = cx.entity_id();
+        self.feed
+            .update(cx, |feed, cx| feed.set_scope(root, poll_projects, cx));
     }
     pub(crate) fn set_active(&mut self, active: bool, cx: &mut Context<Self>) {
         if self.active == active {
             return;
         }
         self.active = active;
+        let entity = cx.entity_id();
+        self.feed
+            .update(cx, |feed, _| feed.set_active(entity, active));
         if active {
             if let Some(item) = self.item() {
                 self.state.seen.mark(&item);
                 self.save(cx);
-                if self.pinned_item.is_some() && self.details.is_none() && !self.detail_loading {
-                    self.load_detail(true, cx);
+                if self.pinned_item.is_some()
+                    && (self.detail.details.is_none() || self.detail.target_error.is_some())
+                    && !self.detail.loading
+                {
+                    self.load_detail(self.detail.details.is_none(), cx);
                 }
             } else if self.pinned_item.is_none()
                 && self.selected.is_none()
-                && let Some(item) = self.visible_items(cx).first()
+                && let Some(key) = self.first_visible_key(cx)
             {
-                self.select(item.key(), cx);
+                self.select(key, cx);
             }
         }
         cx.notify();
@@ -469,7 +509,6 @@ impl Inbox {
         })?;
         self.adopt_preferences(&saved, true, cx);
         self.publish_pages(cx);
-        self.refresh(cx);
         cx.notify();
         Ok(())
     }
@@ -478,7 +517,7 @@ impl Inbox {
         if !visible {
             self.state.hidden_jira_projects.push(id.into());
         }
-        self.filters_changed(true, cx);
+        self.filters_changed(cx);
     }
     pub(crate) fn set_default_bot(
         &mut self,
@@ -498,27 +537,28 @@ impl Inbox {
         })?;
         self.adopt_preferences(&saved, true, cx);
         self.publish_pages(cx);
-        if !self.destination_explicit {
+        if !self.start.destination_explicit {
             self.reset_destination();
         }
         cx.notify();
         Ok(())
     }
     pub(crate) fn set_bots(&mut self, bots: Vec<(String, String)>, cx: &mut Context<Self>) {
-        if self.bots != bots {
-            self.bots = bots;
+        if self.start.bots != bots {
+            self.start.bots = bots;
             if self.owner.is_none() {
                 self.publish_pages(cx);
             }
-            if !self.destination_explicit {
+            if !self.start.destination_explicit {
                 self.reset_destination();
             }
             if self
-                .start_bot
+                .start
+                .bot
                 .as_ref()
-                .is_some_and(|id| !self.bots.iter().any(|(key, _)| key == id))
+                .is_some_and(|id| !self.start.bots.iter().any(|(key, _)| key == id))
             {
-                self.start_bot = None;
+                self.start.bot = None;
             }
             cx.notify();
         }
@@ -544,39 +584,36 @@ impl Inbox {
             )
         })?;
         self.adopt_preferences(&saved, true, cx);
-        self.snapshot
-            .items
-            .retain(|item| self.state.connectors.enabled(&item.provider));
-        self.snapshot
-            .connections
-            .retain(|key, _| self.state.connectors.enabled(key));
-        self.snapshot
-            .errors
-            .retain(|key, _| self.state.connectors.enabled(key));
+        self.feed
+            .update(cx, |feed, cx| feed.preferences_changed(cx));
+        self.adopt_feed(self.feed.clone(), cx);
         if self.item().is_none() {
             self.selected = None;
             self.narrow_detail = false;
-            self.details = None;
-            self.thread = None;
-            self.document = None;
-            self.comments.clear();
-            self.diff = None;
-            self.checks = None;
-            self.detail_generation += 1;
-            self.extra_request += 1;
-            self.detail_loading = false;
-            self.extra_loading = false;
+            self.detail.details = None;
+            self.detail.thread = None;
+            self.detail.document = None;
+            self.detail.comments.clear();
+            self.tabs.diff = None;
+            self.tabs.checks = None;
+            self.detail.generation += 1;
+            self.tabs.request += 1;
+            self.detail.loading = false;
+            self.tabs.loading = false;
         }
         if self
-            .connect_provider
+            .connect
+            .provider
             .as_deref()
             .is_some_and(|key| !self.state.connectors.enabled(key))
         {
-            self.connect_provider = None;
+            self.connect.provider = None;
+            self.connect
+                .token
+                .update(cx, |input, cx| input.set_text(String::new(), cx));
         }
         self.save(cx);
         self.publish_pages(cx);
-        self.refresh(cx);
         cx.notify();
         Ok(())
     }
@@ -605,142 +642,113 @@ impl Inbox {
     }
 
     pub(crate) fn refresh(&mut self, cx: &mut Context<Self>) {
-        if let Some(owner) = self.owner.clone() {
-            let _ = owner.update(cx, |owner, cx| owner.refresh(cx));
+        self.feed.update(cx, |feed, cx| feed.refresh(true, cx));
+    }
+
+    fn adopt_feed(&mut self, feed: Entity<InboxFeed>, cx: &mut Context<Self>) {
+        let shared = feed.read(cx);
+        let loading = shared.loading();
+        let connection_revision = shared.connection_revision;
+        let snapshot_changed = !Rc::ptr_eq(&self.snapshot, &shared.snapshot);
+        let loading_changed = self.loading != loading;
+        if !snapshot_changed && !loading_changed && self.connection_revision == connection_revision
+        {
             return;
         }
-        if self.loading {
-            self.refresh_queued = true;
-            return;
+        self.snapshot = shared.snapshot.clone();
+        self.loading = loading;
+        self.connection_revision = connection_revision;
+        if snapshot_changed {
+            if self
+                .item()
+                .is_none_or(|item| item.provider != self.state.source)
+            {
+                self.selected = None;
+                self.narrow_detail = false;
+                self.detail.details = None;
+                self.detail.document = None;
+                self.detail.comments.clear();
+            }
+            if self.active
+                && let Some(item) = self.item()
+            {
+                self.state.seen.mark(&item);
+                self.save(cx);
+            } else if self.active
+                && let Some(key) = self.first_visible_key(cx)
+            {
+                self.select(key, cx);
+            }
         }
-        self.loading = true;
-        self.publish_pages(cx);
-        self.last_refresh = Instant::now();
-        self.generation += 1;
-        let generation = self.generation;
-        let service = self.service.clone();
-        let state = self.state.clone();
-        let projects = self.poll_projects.clone();
-        let scope = state.fetch_scope(&projects);
-        let store = self.store.clone();
-        let task = cx.background_executor().spawn(async move {
-            let snapshot = service.list(&projects, &state);
-            let sessions = locked(&store)
-                .and_then(|db| db.sessions())
-                .unwrap_or_default();
-            (snapshot, sessions)
-        });
-        cx.spawn(async move |this, cx| {
-            let (snapshot, sessions) = task.await;
-            let _ = this.update(cx, |this, cx| {
-                this.finish_refresh(generation, scope, snapshot, sessions, cx)
+        if snapshot_changed || loading_changed {
+            self.publish_pages(cx);
+        }
+        cx.notify();
+    }
+
+    fn refresh_active_details(&self, cx: &mut Context<Self>) {
+        for page in self.pages.values() {
+            if !page.read(cx).active {
+                continue;
+            }
+            page.update(cx, |page, cx| {
+                if page.selected.is_none()
+                    || page.detail.loading
+                    || page.composer.posting
+                    || page.actions.acting
+                {
+                    return;
+                }
+                page.load_detail(false, cx);
+                if page.tabs.tab == Tab::Checks && !page.tabs.loading {
+                    page.tabs.checks = None;
+                    page.set_tab(Tab::Checks, cx);
+                }
             });
-        })
-        .detach();
-        cx.notify();
+        }
     }
-    fn finish_refresh(
-        &mut self,
-        generation: u64,
-        scope: String,
-        mut snapshot: Snapshot,
-        sessions: Vec<Session>,
+
+    #[cfg(test)]
+    fn new_for_test(
+        store: Database,
+        projects: Vec<PathBuf>,
+        cwd: PathBuf,
         cx: &mut Context<Self>,
-    ) {
-        if self.generation != generation {
-            return;
-        }
-        self.loading = false;
-        if scope != self.state.fetch_scope(&self.poll_projects) {
-            self.refresh_queued = false;
-            self.refresh(cx);
-            return;
-        }
-        let observation = self.notifications.observe_snapshot(&snapshot, scope);
-        self.self_activity
-            .retain(|_, (_, time)| time.elapsed() < Duration::from_secs(600));
-        let changed = observation
-            .changed
-            .into_iter()
-            .filter(|item| {
-                let own_revision = self
-                    .self_activity
-                    .get(&item.key())
-                    .map(|(revision, _)| *revision);
-                // A stale poll must not consume a pending receipt; a later
-                // external revision must never be classified as our mutation.
-                if own_revision.is_some_and(|revision| item.updated_ms() >= revision) {
-                    self.self_activity.remove(&item.key());
-                }
-                if own_revision == Some(item.updated_ms()) {
-                    self.state.seen.mark(item);
-                    false
-                } else {
-                    self.state.connectors.enabled(&item.provider)
-                        && self
-                            .state
-                            .filters_for(&item.provider)
-                            .matches(item, &item.provider, "")
-                }
-            })
-            .collect();
-        // A temporary outage must not erase the last usable provider list.
-        for provider in snapshot.errors.keys() {
-            snapshot.items.extend(
-                self.snapshot
-                    .items
-                    .iter()
-                    .filter(|i| &i.provider == provider)
-                    .cloned(),
-            );
-        }
-        snapshot
-            .items
-            .sort_by_key(|item| std::cmp::Reverse(item.updated_ms()));
-        self.state.seen.seed(&snapshot.items);
-        self.snapshot = snapshot;
-        self.sessions = sessions;
-        if self.active
-            && let Some(item) = self.item()
-        {
-            self.state.seen.mark(&item);
-        }
-        self.save(cx);
-        let projects = self
-            .snapshot
-            .items
-            .iter()
-            .map(|item| {
-                let project = item.notification_project();
-                (project.id.clone(), project)
-            })
-            .collect::<std::collections::BTreeMap<_, _>>()
-            .into_values()
-            .collect();
-        cx.emit(Event::Activity { projects, changed });
-        cx.emit(Event::ItemsChanged(observation.appeared));
-        self.publish_pages(cx);
-        if self
-            .item()
-            .is_none_or(|item| item.provider != self.state.source)
-        {
-            self.selected = None;
-            self.narrow_detail = false;
-            self.details = None;
-            self.document = None;
-            self.comments.clear();
-        }
-        if self.active
-            && self.selected.is_none()
-            && let Some(item) = self.visible_items(cx).first()
-        {
-            self.select(item.key(), cx);
-        }
-        if std::mem::take(&mut self.refresh_queued) {
-            self.refresh(cx);
-        }
-        cx.notify();
+    ) -> Self {
+        let poll_projects = if projects.is_empty() {
+            vec![cwd.clone()]
+        } else {
+            projects.clone()
+        };
+        let data_dir = locked(&store)
+            .ok()
+            .and_then(|db| db.data_dir().map(PathBuf::from))
+            .unwrap_or_else(|| cwd.clone());
+        let feed = cx.new(|cx| InboxFeed::new(&store, data_dir, cx));
+        let links = cx.new(|_| SessionLinks::default());
+        Self::new(store, projects, cwd, poll_projects, (&links, &feed), cx)
     }
+
+    #[cfg(test)]
+    fn stage_fixture_poll(&mut self, cx: &mut Context<Self>) -> u64 {
+        let generation = self.feed.update(cx, |feed, cx| {
+            feed.snapshot = self.snapshot.clone();
+            feed.stage_fixture_poll(cx)
+        });
+        self.adopt_feed(self.feed.clone(), cx);
+        generation
+    }
+
+    #[cfg(test)]
+    fn finish_fixture_poll(&mut self, generation: u64, snapshot: Snapshot, cx: &mut Context<Self>) {
+        self.feed.update(cx, |feed, cx| {
+            feed.finish_fixture_poll(generation, snapshot, cx)
+        });
+        let saved = self.preferences.read(cx).state.clone();
+        self.adopt_preferences(&saved, true, cx);
+        self.adopt_feed(self.feed.clone(), cx);
+    }
+
     fn project_preferences(saved: &ViewState, source: Option<&str>) -> ViewState {
         let mut state = saved.clone();
         if let Some(source) = source {
@@ -791,9 +799,13 @@ impl Inbox {
         self.saved_state = baseline;
         if next != self.state {
             let defaults_changed = self.state.default_bots != next.default_bots;
+            let connectors_changed = self.state.connectors != next.connectors;
             self.state = next;
-            if defaults_changed && !self.destination_explicit {
+            if defaults_changed && !self.start.destination_explicit {
                 self.reset_destination();
+            }
+            if connectors_changed && self.owner.is_none() {
+                cx.emit(Event::ConnectorAvailabilityChanged);
             }
             cx.notify();
         }
@@ -828,9 +840,7 @@ impl Inbox {
         self.state.source = source.into();
         self.state.filters = self.state.filters_for(source).clone();
         self.save(cx);
-        if self.last_refresh.elapsed() >= Duration::from_secs(120) {
-            self.refresh(cx);
-        }
+        self.feed.update(cx, |feed, cx| feed.refresh_if_stale(cx));
     }
     pub(crate) fn provider_unread_count(&self, provider: &str) -> usize {
         self.snapshot
@@ -853,8 +863,8 @@ impl Inbox {
             let mut page = Self::new_inner(
                 self.store.clone(),
                 self.projects.clone(),
-                self.start_project.clone(),
-                false,
+                self.start.project.clone(),
+                self.feed.clone(),
                 cx,
             );
             page.owner = Some(owner);
@@ -864,8 +874,7 @@ impl Inbox {
             page.saved_state = page.state.clone();
             page.snapshot = self.snapshot.clone();
             page.sessions = self.sessions.clone();
-            page.bots = self.bots.clone();
-            page.appearances = self.appearances.clone();
+            page.start.bots = self.start.bots.clone();
             page.loading = self.loading;
             page
         });
@@ -879,7 +888,8 @@ impl Inbox {
         cx: &mut Context<Self>,
     ) -> Entity<Self> {
         assert_eq!(source, item.provider, "item page provider must match item");
-        let page_key = format!("item:{}", item.key());
+        let item_key = item.detail_key();
+        let page_key = format!("item:{item_key}");
         if let Some(page) = self.pages.get(&page_key) {
             page.update(cx, |page, _| page.release_pending = false);
             return page.clone();
@@ -888,7 +898,7 @@ impl Inbox {
             .snapshot
             .items
             .iter()
-            .find(|current| current.key() == item.key())
+            .find(|current| current.detail_key() == item_key)
         {
             Self::refresh_pinned_summary(&mut item, current);
         }
@@ -898,11 +908,11 @@ impl Inbox {
                 self.store.clone(),
                 self.projects.clone(),
                 if item.project_path.is_empty() {
-                    self.start_project.clone()
+                    self.start.project.clone()
                 } else {
                     PathBuf::from(&item.project_path)
                 },
-                false,
+                self.feed.clone(),
                 cx,
             );
             page.owner = Some(owner);
@@ -912,10 +922,9 @@ impl Inbox {
             page.saved_state = page.state.clone();
             page.snapshot = self.snapshot.clone();
             page.sessions = self.sessions.clone();
-            page.bots = self.bots.clone();
-            page.appearances = self.appearances.clone();
+            page.start.bots = self.start.bots.clone();
             page.loading = self.loading;
-            page.selected = Some(item.key());
+            page.selected = Some(item_key);
             page.pinned_item = Some(item);
             page
         });
@@ -923,27 +932,27 @@ impl Inbox {
         page
     }
     pub(crate) fn release_item_page(&mut self, item: &Item, cx: &mut Context<Self>) {
-        let page_key = format!("item:{}", item.key());
+        let page_key = format!("item:{}", item.detail_key());
         let Some(page) = self.pages.get(&page_key) else {
             return;
         };
         let busy = page.update(cx, |page, cx| {
             page.set_active(false, cx);
             page.release_pending = true;
-            page.posting || page.acting
+            page.composer.posting || page.actions.acting
         });
         if !busy {
             self.pages.remove(&page_key);
         }
     }
     fn finish_pending_release(&mut self, cx: &mut Context<Self>) {
-        if !self.release_pending || self.posting || self.acting {
+        if !self.release_pending || self.composer.posting || self.actions.acting {
             return;
         }
         let (Some(owner), Some(item)) = (self.owner.clone(), self.pinned_item.as_ref()) else {
             return;
         };
-        let page_key = format!("item:{}", item.key());
+        let page_key = format!("item:{}", item.detail_key());
         let page_entity = cx.entity();
         let _ = owner.update(cx, |owner, _| {
             if owner.pages.get(&page_key) == Some(&page_entity) {
@@ -956,7 +965,8 @@ impl Inbox {
     }
 
     fn refresh_pinned_summary(pinned: &mut Item, current: &Item) -> bool {
-        if current.key() != pinned.key() || current.updated_ms() < pinned.updated_ms() {
+        if current.detail_key() != pinned.detail_key() || current.updated_ms() < pinned.updated_ms()
+        {
             return false;
         }
         // Provider snapshots can prefer another clone of this repository.
@@ -1027,36 +1037,31 @@ impl Inbox {
     }
     /// Publish the complete root snapshot before delivering it to pages. Reading
     /// the latest owner at delivery avoids replaying an older queued snapshot.
-    fn publish_pages(&self, cx: &mut Context<Self>) {
+    fn publish_pages(&mut self, cx: &mut Context<Self>) {
+        if self.pages.is_empty() || self.publication_queued {
+            return;
+        }
+        self.publication_queued = true;
         let owner = cx.weak_entity();
         cx.defer(move |cx| {
-            let Some(owner) = owner.upgrade() else {
+            let Ok((state, snapshot, sessions, projects, service, cwd, bots, loading, pages)) =
+                owner.update(cx, |root, _| {
+                    root.publication_queued = false;
+                    (
+                        root.state.clone(),
+                        root.snapshot.clone(),
+                        root.sessions.clone(),
+                        root.projects.clone(),
+                        root.service.clone(),
+                        root.start.project.clone(),
+                        root.start.bots.clone(),
+                        root.loading,
+                        root.pages.values().cloned().collect::<Vec<_>>(),
+                    )
+                })
+            else {
                 return;
             };
-            let root = owner.read(cx);
-            let (
-                state,
-                snapshot,
-                sessions,
-                projects,
-                service,
-                cwd,
-                bots,
-                appearances,
-                loading,
-                pages,
-            ) = (
-                root.state.clone(),
-                root.snapshot.clone(),
-                root.sessions.clone(),
-                root.projects.clone(),
-                root.service.clone(),
-                root.start_project.clone(),
-                root.bots.clone(),
-                root.appearances.clone(),
-                root.loading,
-                root.pages.values().cloned().collect::<Vec<_>>(),
-            );
             for page in pages {
                 page.update(cx, |page, cx| {
                     let scope_changed = page.projects != projects;
@@ -1064,32 +1069,31 @@ impl Inbox {
                     page.service = service.clone();
                     if scope_changed
                         && page.pinned_item.is_none()
-                        && !page.projects.contains(&page.start_project)
+                        && !page.projects.contains(&page.start.project)
                     {
-                        page.start_project = cwd.clone();
+                        page.start.project = cwd.clone();
                     }
                     page.set_bots(bots.clone(), cx);
-                    page.set_appearances(appearances.clone(), cx);
                     page.loading = loading;
                     // Disabled/temporarily unavailable providers retain selection,
                     // details and drafts. Their page identity never changes.
                     if state.connectors.enabled(&page.state.source) {
                         page.snapshot = snapshot.clone();
                         page.sessions = sessions.clone();
-                        if let Some(pinned) = page.pinned_item.as_mut()
-                            && let Some(current) = snapshot
-                                .items
-                                .iter()
-                                .find(|item| item.key() == pinned.key())
-                        {
-                            Self::refresh_pinned_summary(pinned, current);
+                        if let Some(pinned) = page.pinned_item.as_mut() {
+                            let key = pinned.detail_key();
+                            if let Some(current) =
+                                snapshot.items.iter().find(|item| item.detail_key() == key)
+                            {
+                                Self::refresh_pinned_summary(pinned, current);
+                            }
                         }
                         if page.pinned_item.is_none()
                             && page.active
                             && page.selected.is_none()
-                            && let Some(item) = page.visible_items(cx).first()
+                            && let Some(key) = page.first_visible_key(cx)
                         {
-                            page.select(item.key(), cx);
+                            page.select(key, cx);
                         } else if page.active
                             && let Some(item) = page.item()
                         {
@@ -1102,29 +1106,31 @@ impl Inbox {
             }
         });
     }
-    fn visible_items(&self, cx: &App) -> Vec<Item> {
-        let search = self.search.read(cx).content.as_ref();
-        self.snapshot
-            .items
-            .iter()
-            .filter(|item| {
-                self.state.connectors.enabled(&item.provider)
-                    && self.item_in_scope(item)
-                    && self.state.filters.matches(item, &self.state.source, search)
-            })
-            .map(|item| self.scoped_item(item))
-            .collect()
+    fn visible_items<'a>(&'a self, cx: &App) -> impl Iterator<Item = &'a Item> + use<'a> {
+        let filter = self.state.filters.prepare(&self.search.read(cx).content);
+        self.snapshot.items.iter().filter(move |item| {
+            item.provider == self.state.source
+                && self.state.connectors.enabled(&item.provider)
+                && self.item_in_scope(item)
+                && filter.matches(item, &self.state.source)
+        })
+    }
+    fn first_visible_key(&self, cx: &App) -> Option<String> {
+        self.visible_items(cx).next().map(Item::detail_key)
     }
     fn item(&self) -> Option<Item> {
         if let Some(pinned) = &self.pinned_item {
             return Some(pinned.clone());
         }
+        self.item_in_list(self.selected.as_deref()?)
+    }
+    fn item_in_list(&self, key: &str) -> Option<Item> {
         self.snapshot
             .items
             .iter()
             .find(|item| {
                 item.provider == self.state.source
-                    && Some(item.key()) == self.selected
+                    && item.detail_key() == key
                     && self.item_in_scope(item)
             })
             .map(|item| self.scoped_item(item))
@@ -1133,7 +1139,7 @@ impl Inbox {
         if self
             .pinned_item
             .as_ref()
-            .is_some_and(|item| item.key() != key)
+            .is_some_and(|item| item.detail_key() != key)
         {
             return;
         }
@@ -1141,35 +1147,38 @@ impl Inbox {
             return;
         }
         self.selected = Some(key);
-        self.destination_explicit = false;
+        self.start.destination_explicit = false;
         self.reset_destination();
-        self.summary_scroll = ListState::new(0, ListAlignment::Top, px(200.));
-        self.activity.clear();
-        self.activity_revision += 1;
-        self.summary_rows = Default::default();
-        self.focus_comment = false;
-        self.tab = Tab::Summary;
-        self.diff = None;
-        self.extra_request += 1;
-        self.diff_view
+        self.summary.scroll = ListState::new(0, ListAlignment::Top, px(200.));
+        self.summary.activity.clear();
+        self.summary.activity_revision += 1;
+        self.summary.rows = Default::default();
+        self.composer.focus_comment = false;
+        self.tabs.tab = Tab::Summary;
+        self.tabs.diff = None;
+        self.tabs.request += 1;
+        self.tabs
+            .diff_view
             .update(cx, |view, cx| view.set_files(vec![], cx));
-        self.checks = None;
-        self.extra_loading = false;
-        self.extra_error = None;
-        self.details = None;
-        self.thread = None;
-        self.document = None;
-        self.comments.clear();
-        self.reply = None;
-        self.post_error = None;
-        self.thread_error = None;
-        self.expanded_comments.clear();
-        self.merge_action = "merge".into();
-        self.confirm_action = None;
-        self.action_error = None;
-        self.action_notice = None;
-        self.action_menu = false;
-        self.comment
+        self.tabs.checks = None;
+        self.tabs.loading = false;
+        self.tabs.error = None;
+        self.detail.details = None;
+        self.detail.thread = None;
+        self.detail.target_error = None;
+        self.detail.document = None;
+        self.detail.comments.clear();
+        self.composer.reply = None;
+        self.composer.post_error = None;
+        self.detail.thread_error = None;
+        self.detail.expanded_comments.clear();
+        self.actions.merge_action = "merge".into();
+        self.actions.confirm_action = None;
+        self.actions.error = None;
+        self.actions.notice = None;
+        self.actions.menu = false;
+        self.composer
+            .comment
             .update(cx, |input, cx| input.set_text(String::new(), cx));
         if let Some(item) = self.item() {
             if self.active {
@@ -1177,17 +1186,17 @@ impl Inbox {
                 self.save(cx);
             }
             if !item.project_path.is_empty() {
-                self.start_project = PathBuf::from(&item.project_path);
+                self.start.project = PathBuf::from(&item.project_path);
             }
         }
         self.load_detail(true, cx);
         cx.notify();
     }
     fn reset_destination(&mut self) {
-        self.start_bot = self
+        self.start.bot = self
             .item()
             .and_then(|item| self.state.default_bots.get(&item.provider))
-            .filter(|id| self.bots.iter().any(|(key, _)| key == id))
+            .filter(|id| self.start.bots.iter().any(|(key, _)| key == id))
             .map(str::to_owned);
     }
     fn change_source(&mut self, source: String, cx: &mut Context<Self>) {
@@ -1198,13 +1207,13 @@ impl Inbox {
         self.state.source = source;
         self.selected = None;
         self.narrow_detail = false;
-        self.details = None;
-        self.document = None;
-        self.comments.clear();
+        self.detail.details = None;
+        self.detail.document = None;
+        self.detail.comments.clear();
         self.search
             .update(cx, |input, cx| input.set_text(String::new(), cx));
-        if let Some(item) = self.visible_items(cx).first() {
-            self.select(item.key(), cx);
+        if let Some(key) = self.first_visible_key(cx) {
+            self.select(key, cx);
         }
         self.save(cx);
         cx.notify();
@@ -1213,24 +1222,49 @@ impl Inbox {
         let Some(item) = self.item() else {
             return;
         };
-        self.detail_generation += 1;
-        let generation = self.detail_generation;
-        self.detail_loading = true;
-        self.detail_error = None;
-        self.thread_error = None;
+        self.detail.generation += 1;
+        let generation = self.detail.generation;
+        self.detail.loading = true;
+        self.detail.error = None;
+        self.detail.thread_error = None;
         if clear {
-            self.document = None;
-            self.comments.clear();
+            self.detail.document = None;
+            self.detail.comments.clear();
         }
-        let key = item.key();
+        let key = item.detail_key();
         let service = self.service.clone();
         let task = cx
             .background_executor()
-            .spawn(async move { (service.details(&item), service.thread(&item)) });
+            .spawn(async move { service.discussion(&item) });
         cx.spawn(async move |this, cx| {
-            let (details, thread) = task.await;
+            let result = task.await;
             let _ = this.update(cx, |this, cx| {
-                this.finish_detail(generation, key, details, thread, cx);
+                if this.detail.generation != generation || this.selected.as_ref() != Some(&key) {
+                    return;
+                }
+                match result {
+                    Ok(discussion) => {
+                        let restored = this.detail.target_error.take().is_some();
+                        this.finish_detail(
+                            generation,
+                            key,
+                            discussion.details,
+                            discussion.thread,
+                            cx,
+                        );
+                        if restored && this.tabs.tab != Tab::Summary {
+                            this.set_tab(this.tabs.tab, cx);
+                        }
+                    }
+                    Err(error) => {
+                        this.detail.loading = false;
+                        if this.composer.post_error.as_ref() == Some(&error) {
+                            this.composer.post_error = None;
+                        }
+                        this.detail.target_error = Some(error);
+                        cx.notify();
+                    }
+                }
             });
         })
         .detach();
@@ -1243,30 +1277,32 @@ impl Inbox {
         thread: Result<Thread, String>,
         cx: &mut Context<Self>,
     ) {
-        if self.detail_generation != generation || self.selected.as_ref() != Some(&key) {
+        if self.detail.generation != generation || self.selected.as_ref() != Some(&key) {
             return;
         }
-        self.detail_loading = false;
+        self.detail.loading = false;
         match details {
             Ok(details) => {
                 if self
+                    .detail
                     .details
                     .as_ref()
                     .is_none_or(|old| old.body != details.body)
                 {
-                    self.document = Some(cx.new(|cx| {
+                    self.detail.document = Some(cx.new(|cx| {
                         document::InboxDocument::new(details.body.clone(), self.document_cwd(), cx)
                     }));
                 }
-                self.details = Some(details);
+                self.detail.details = Some(details);
             }
-            Err(error) => self.detail_error = Some(error),
+            Err(error) => self.detail.error = Some(error),
         }
         match thread {
             Ok(thread) => {
                 let mut rows = vec![];
                 for comment in &thread.comments {
                     let document = self
+                        .detail
                         .comments
                         .iter()
                         .find(|(old, _)| old.id == comment.id && old.body == comment.body)
@@ -1283,6 +1319,7 @@ impl Inbox {
                     rows.push((comment.clone(), document));
                     for reply in &comment.replies {
                         let document = self
+                            .detail
                             .comments
                             .iter()
                             .find(|(old, _)| old.id == reply.id && old.body == reply.body)
@@ -1299,33 +1336,34 @@ impl Inbox {
                         rows.push((reply.clone(), document));
                     }
                 }
-                self.comments = rows;
-                self.thread = Some(thread);
+                self.detail.comments = rows;
+                self.detail.thread = Some(thread);
                 self.rebuild_activity();
             }
-            Err(error) => self.thread_error = Some(error),
+            Err(error) => self.detail.thread_error = Some(error),
         }
-        self.summary_scroll.remeasure();
+        self.summary.scroll.remeasure();
         cx.notify();
     }
     fn set_tab(&mut self, tab: Tab, cx: &mut Context<Self>) {
-        self.tab = tab;
-        self.extra_error = None;
+        self.tabs.tab = tab;
+        self.tabs.error = None;
         let Some(item) = self.item() else {
             return;
         };
-        if tab == Tab::Summary
-            || (tab == Tab::Code && self.diff.is_some())
-            || (tab == Tab::Checks && self.checks.is_some())
+        if self.detail.target_error.is_some()
+            || tab == Tab::Summary
+            || (tab == Tab::Code && self.tabs.diff.is_some())
+            || (tab == Tab::Checks && self.tabs.checks.is_some())
         {
-            self.extra_loading = false;
+            self.tabs.loading = false;
             cx.notify();
             return;
         }
-        self.extra_loading = true;
-        self.extra_request += 1;
-        let request = self.extra_request;
-        let key = item.key();
+        self.tabs.loading = true;
+        self.tabs.request += 1;
+        let request = self.tabs.request;
+        let key = item.detail_key();
         let service = self.service.clone();
         let task = cx.background_executor().spawn(async move {
             if tab == Tab::Code {
@@ -1341,16 +1379,16 @@ impl Inbox {
             let result = task.await;
             let _ = this.update(cx, |this, cx| {
                 if this.selected.as_ref() != Some(&key)
-                    || this.tab != tab
-                    || request != this.extra_request
+                    || this.tabs.tab != tab
+                    || request != this.tabs.request
                 {
                     return;
                 }
-                this.extra_loading = false;
+                this.tabs.loading = false;
                 match result {
                     Ok((diff, checks)) => {
                         if let Some((diff, files)) = diff {
-                            this.diff_view.update(cx, |view, cx| {
+                            this.tabs.diff_view.update(cx, |view, cx| {
                                 view.file_count = Some(diff.files.len());
                                 view.totals = Some((
                                     diff.additions.max(0).min(u32::MAX as i64) as u32,
@@ -1358,13 +1396,13 @@ impl Inbox {
                                 ));
                                 view.set_files(files, cx);
                             });
-                            this.diff = Some(diff);
+                            this.tabs.diff = Some(diff);
                         }
                         if let Some(checks) = checks {
-                            this.checks = Some(checks);
+                            this.tabs.checks = Some(checks);
                         }
                     }
-                    Err(error) => this.extra_error = Some(error),
+                    Err(error) => this.tabs.error = Some(error),
                 }
                 cx.notify();
             });
@@ -1372,133 +1410,119 @@ impl Inbox {
         .detach();
         cx.notify();
     }
-    fn record_self_activity(&mut self, key: String, revision: i64, cx: &mut Context<Self>) {
-        if let Some(owner) = self.owner.clone() {
-            let _ = owner.update(cx, |owner, cx| {
-                owner.record_self_activity(key, revision, cx)
-            });
-            return;
-        }
-        // Some providers omit receipt metadata. Keep uncertain revisions audible
-        // rather than swallowing whichever external change happens to arrive next.
-        if revision > 0
-            && self
-                .self_activity
-                .get(&key)
-                .is_none_or(|(old, _)| revision >= *old)
-        {
-            self.self_activity.insert(key, (revision, Instant::now()));
-        }
+    fn record_self_activity(&self, key: String, revision: i64, cx: &mut Context<Self>) {
+        self.feed
+            .update(cx, |feed, _| feed.note_mutation(key, revision));
     }
-    fn update_item_summary(&mut self, item: Item, cx: &mut Context<Self>) {
-        let key = item.key();
-        let mut changed = false;
-        if let Some(old) = self.snapshot.items.iter_mut().find(|old| old.key() == key)
-            && old.updated_ms() <= item.updated_ms()
-        {
-            *old = item.clone();
-            changed = true;
-        }
-        if let Some(pinned) = self.pinned_item.as_mut() {
-            changed |= Self::refresh_pinned_summary(pinned, &item);
-        }
-        if changed && self.owner.is_none() {
-            self.publish_pages(cx);
-        }
-        if changed {
-            cx.notify();
-        }
-    }
+
     fn post_comment(&mut self, cx: &mut Context<Self>) {
-        if self.posting {
+        if self.composer.posting || self.detail.target_error.is_some() {
             return;
         }
         let Some(item) = self.item() else {
             return;
         };
-        let body = self.comment.read(cx).content.trim().to_string();
+        let body = self.composer.comment.read(cx).content.trim().to_string();
         if body.is_empty() {
             return;
         }
-        self.posting = true;
-        self.post_error = None;
-        let key = item.key();
+        self.composer.posting = true;
+        self.composer.post_error = None;
+        let posted = PostedComment {
+            key: item.detail_key(),
+            revision: self.composer.revision,
+            reply: self.composer.reply.clone(),
+        };
         let service = self.service.clone();
-        let reply = self.reply.as_ref().map(|r| r.0.clone()).unwrap_or_default();
+        let reply_id = posted
+            .reply
+            .as_ref()
+            .map(|r| r.0.clone())
+            .unwrap_or_default();
         let task = cx
             .background_executor()
-            .spawn(async move { service.comment(&item, body, reply) });
+            .spawn(async move { service.comment(&item, body, reply_id) });
         cx.spawn(async move |this, cx| {
             let result = task.await;
             let _ = this.update(cx, |this, cx| {
-                this.posting = false;
-                if let Ok(receipt) = &result {
-                    let revision = receipt
-                        .revision
-                        .as_deref()
-                        .map(model::timestamp_ms)
-                        .unwrap_or(0);
-                    this.record_self_activity(key.clone(), revision, cx);
-                }
-                if this.selected.as_ref() != Some(&key) {
-                    if result.is_ok() {
-                        this.refresh(cx);
-                    }
-                    cx.notify();
-                    this.finish_pending_release(cx);
-                    return;
-                }
-                match result {
-                    Ok(_) => {
-                        this.comment
-                            .update(cx, |input, cx| input.set_text(String::new(), cx));
-                        this.reply = None;
-                        if !this.release_pending {
-                            this.load_detail(false, cx);
-                        }
-                        this.refresh(cx);
-                    }
-                    Err(error) => this.post_error = Some(error),
-                }
-                cx.notify();
-                this.finish_pending_release(cx);
+                this.finish_comment(posted, result, cx);
             });
         })
         .detach();
         cx.notify();
     }
+    fn finish_comment(
+        &mut self,
+        posted: PostedComment,
+        result: Result<model::CommentReceipt, String>,
+        cx: &mut Context<Self>,
+    ) {
+        self.composer.posting = false;
+        let selected = self.selected.as_ref() == Some(&posted.key);
+        match result {
+            Ok(receipt) => {
+                let revision = receipt.revision.as_deref().map_or(0, model::timestamp_ms);
+                self.record_self_activity(posted.key, revision, cx);
+                if selected {
+                    if self.composer.revision == posted.revision
+                        && self.composer.reply == posted.reply
+                    {
+                        self.composer
+                            .comment
+                            .update(cx, |input, cx| input.set_text(String::new(), cx));
+                        self.composer.reply = None;
+                    }
+                    if !self.release_pending {
+                        self.load_detail(false, cx);
+                    }
+                }
+                self.refresh(cx);
+            }
+            Err(error) if selected && self.detail.target_error.as_ref() != Some(&error) => {
+                self.composer.post_error = Some(error)
+            }
+            Err(_) => {}
+        }
+        cx.notify();
+        self.finish_pending_release(cx);
+    }
     fn document_cwd(&self) -> PathBuf {
         self.item()
             .filter(|item| !item.project_path.is_empty())
             .map(|item| PathBuf::from(item.project_path))
-            .unwrap_or_else(|| self.start_project.clone())
+            .unwrap_or_else(|| self.start.project.clone())
     }
     fn start(&mut self, cx: &mut Context<Self>) {
         if let Some(mut item) = self.item() {
-            if self.start_bot.is_none() {
-                item.project_path = self.start_project.to_string_lossy().into_owned();
+            if self.start.bot.is_none() {
+                item.project_path = self.start.project.to_string_lossy().into_owned();
             }
-            let body = self.details.as_ref().map(|d| d.body.as_str()).unwrap_or("");
+            let body = self
+                .detail
+                .details
+                .as_ref()
+                .map(|d| d.body.as_str())
+                .unwrap_or("");
             let discussion = self
+                .detail
                 .comments
                 .iter()
                 .map(|(c, _)| format!("{}: {}", c.author, c.body))
                 .collect::<Vec<_>>()
                 .join("\n\n");
-            let prompt = item.prompt(&format!("{body}\n\n{discussion}"), false);
+            let prompt = item.prompt(&format!("{body}\n\n{discussion}"));
             cx.emit(Event::StartSession {
                 item: Box::new(item),
                 prompt,
-                bot: self.start_bot.clone(),
+                bot: self.start.bot.clone(),
             });
         }
     }
     pub(crate) fn open_connection(&mut self, provider: String, cx: &mut Context<Self>) {
-        if !self.state.connectors.enabled(&provider) {
+        if self.connect.connecting || !self.state.connectors.enabled(&provider) {
             return;
         }
-        self.connections_open = false;
-        self.connect_error = None;
+        self.connect.error = None;
         let status = self
             .snapshot
             .connections
@@ -1514,69 +1538,86 @@ impl Inbox {
         } else {
             String::new()
         };
-        self.connect_url
+        self.connect
+            .url
             .update(cx, |input, cx| input.set_text(url, cx));
-        self.connect_email
+        self.connect
+            .email
             .update(cx, |input, cx| input.set_text(status.email, cx));
-        self.connect_token
+        self.connect
+            .token
             .update(cx, |input, cx| input.set_text(String::new(), cx));
-        self.connect_provider = Some(provider);
+        self.connect.provider = Some(provider);
         cx.notify();
     }
+    fn dismiss_connection(&mut self, cx: &mut Context<Self>) {
+        if !self.connect.connecting && self.connect.provider.take().is_some() {
+            self.connect
+                .token
+                .update(cx, |input, cx| input.set_text(String::new(), cx));
+            cx.notify();
+        }
+    }
     fn connect(&mut self, disconnect: bool, cx: &mut Context<Self>) {
-        if self.connecting {
+        if self.connect.connecting {
             return;
         }
-        let Some(provider) = self.connect_provider.clone() else {
+        let Some(provider) = self.connect.provider.clone() else {
             return;
         };
-        let url = self.connect_url.read(cx).content.to_string();
-        let email = self.connect_email.read(cx).content.to_string();
+        let url = self.connect.url.read(cx).content.to_string();
+        let email = self.connect.email.read(cx).content.to_string();
         let token = if disconnect {
             String::new()
         } else {
-            self.connect_token.read(cx).content.to_string()
+            self.connect.token.read(cx).content.to_string()
         };
         if provider != "github" && !disconnect && token.trim().is_empty() {
-            self.connect_error = Some("Enter an API token".into());
+            self.connect.error = Some("Enter an API token".into());
             cx.notify();
             return;
         }
-        self.connecting = true;
-        self.connection_revision += 1;
-        if let Some(owner) = self.owner.clone() {
-            let _ = owner.update(cx, |owner, cx| {
-                owner.connection_revision += 1;
-                cx.notify();
-            });
+        if let Err(error) = self
+            .feed
+            .update(cx, |feed, cx| feed.begin_connection(&provider, cx))
+        {
+            self.connect.error = Some(error);
+            cx.notify();
+            return;
         }
-        self.connect_error = None;
+        self.connect.connecting = true;
+        self.connect.error = None;
         let service = self.service.clone();
         let source = provider.clone();
+        let feed = self.feed.clone();
         let task = cx
             .background_executor()
             .spawn(async move { service.connect(&source, url, email, token) });
         cx.spawn(async move |this, cx| {
             let result = task.await;
+            feed.update(cx, |feed, cx| {
+                feed.finish_connection(&provider, result.as_ref().ok().cloned(), cx);
+            });
             let _ = this.update(cx, |this, cx| {
-                this.connecting = false;
+                this.connect.connecting = false;
                 if !this.state.connectors.enabled(&provider) {
-                    this.connect_token.update(cx, |input, cx| input.set_text(String::new(), cx));
+                    this.connect.token.update(cx, |input, cx| input.set_text(String::new(), cx));
                     cx.notify();
                     return;
                 }
                 match result {
                     Ok(status) => {
-                        let connected = status.connected;
-                        this.snapshot.connections.insert(provider.clone(), status);
-                        this.connect_token.update(cx, |input, cx| input.set_text(String::new(), cx));
-                        if connected || disconnect {
-                            this.connect_provider = None;
-                            if connected { this.change_source(provider, cx); }
-                            this.refresh(cx);
-                        } else { this.connect_error = Some("GitHub is not connected. Run “gh auth login” in a terminal, then check again.".into()); }
+                        this.connect.token.update(cx, |input, cx| input.set_text(String::new(), cx));
+                        if status.connected || disconnect {
+                            this.connect.provider = None;
+                            if status.connected {
+                                this.change_source(provider, cx);
+                            }
+                        } else {
+                            this.connect.error = Some("GitHub is not connected. Run “gh auth login” in a terminal, then check again.".into());
+                        }
                     }
-                    Err(error) => this.connect_error = Some(error),
+                    Err(error) => this.connect.error = Some(error),
                 }
                 cx.notify();
             });
@@ -1584,16 +1625,16 @@ impl Inbox {
         cx.notify();
     }
     fn run_action(&mut self, cx: &mut Context<Self>) {
-        if self.acting {
+        if self.actions.acting {
             return;
         }
-        let (Some(item), Some(action)) = (self.item(), self.confirm_action.clone()) else {
+        let (Some(item), Some(action)) = (self.item(), self.actions.confirm_action.clone()) else {
             return;
         };
-        self.acting = true;
-        self.action_error = None;
+        self.actions.acting = true;
+        self.actions.error = None;
         let service = self.service.clone();
-        let key = item.key();
+        let key = item.detail_key();
         let merging = matches!(action.as_str(), "merge" | "squash" | "rebase");
         let task = cx
             .background_executor()
@@ -1601,29 +1642,26 @@ impl Inbox {
         cx.spawn(async move |this, cx| {
             let result = task.await;
             let _ = this.update(cx, |this, cx| {
-                this.acting = false;
+                this.actions.acting = false;
                 match result {
                     Ok(item) => {
                         this.record_self_activity(key.clone(), item.updated_ms(), cx);
-                        if let Some(owner) = this.owner.clone() {
-                            let shared = item.clone();
-                            let _ = owner.update(cx, |owner, cx| {
-                                owner.update_item_summary(shared, cx);
-                            });
+                        if let Some(pinned) = this.pinned_item.as_mut() {
+                            Self::refresh_pinned_summary(pinned, &item);
                         }
-                        this.update_item_summary(item.clone(), cx);
+                        let merged = item.state.eq_ignore_ascii_case("merged");
+                        this.feed.update(cx, |feed, cx| feed.update_item(item, cx));
                         if this.selected.as_ref() == Some(&key) {
-                            this.action_notice = (merging
-                                && !item.state.eq_ignore_ascii_case("merged"))
-                            .then(|| "Merge queued or auto-merge enabled.".into());
-                            this.confirm_action = None;
+                            this.actions.notice = (merging && !merged)
+                                .then(|| "Merge queued or auto-merge enabled.".into());
+                            this.actions.confirm_action = None;
                             if !this.release_pending {
                                 this.load_detail(false, cx);
                             }
                         }
                         this.refresh(cx);
                     }
-                    Err(error) => this.action_error = Some(error),
+                    Err(error) => this.actions.error = Some(error),
                 }
                 cx.notify();
                 this.finish_pending_release(cx);

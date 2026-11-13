@@ -6,12 +6,12 @@ type Loaded = (Vec<Note>, HashMap<String, String>);
 pub(super) fn load(store: &Database) -> Result<Loaded, String> {
     let (root, known, deleted) = {
         let store = locked(store)?;
-        let ids: HashSet<_> = store
-            .list_notes()?
-            .into_iter()
-            .map(|note| note.id)
-            .collect();
         let links = store.note_recordings()?;
+        let ids = if links.iter().any(|link| !link.deleted) {
+            store.note_ids()?
+        } else {
+            HashSet::new()
+        };
         let deleted: Vec<_> = links
             .iter()
             .filter(|link| link.deleted)
@@ -31,45 +31,14 @@ pub(super) fn load(store: &Database) -> Result<Loaded, String> {
             // after its commit leaves cleanup to the next load, never import.
             let _ = meetings.delete_with_commit(&id, None, || Ok(()));
         }
-        let rows = meetings.list()?;
-        for row in rows.as_array().into_iter().flatten() {
-            let Some(id) = row["meeting"]["id"].as_str() else {
-                continue;
-            };
-            if known.contains(id) {
-                continue;
-            }
-            // Pending legacy edits are part of the user's document. Import
-            // their title too, before Notes becomes its editing authority.
-            // A damaged recording still gets a row so it can be inspected.
-            let snapshot = meetings.open_document(id).ok();
-            let title = snapshot
-                .as_ref()
-                .and_then(|snapshot| snapshot["draft"]["title"].as_str())
-                .or_else(|| row["meeting"]["title"].as_str())
-                .unwrap_or("Untitled meeting");
-            // The capture list includes active empty recordings. Reserve the
-            // link before capture, but publish a note only once it has content.
-            if (title == "Untitled meeting" || title.trim().is_empty())
-                && let Some(snapshot) = &snapshot
-                && snapshot["draft"]["transcript"]
-                    .as_str()
-                    .or_else(|| snapshot["transcript"].as_str())
-                    .is_none_or(|text| text.trim().is_empty())
-                && snapshot["draft"]["summary"]
-                    .as_str()
-                    .or_else(|| snapshot["meeting"]["summary"]["text"].as_str())
-                    .is_none_or(|text| text.trim().is_empty())
-            {
-                continue;
-            }
-            let created = row["state"]["started_at"]
-                .as_u64()
-                .unwrap_or_default()
-                .min(i64::MAX as u64) as i64;
+        for candidate in meetings.note_candidates(&known)? {
             // Idempotent publication preserves any existing note edits. The
             // recording remains the authority for its transcript and summary.
-            locked(store)?.import_recording_note(id, title, created)?;
+            locked(store)?.import_recording_note(
+                &candidate.recording_id,
+                &candidate.title,
+                candidate.created_at.min(i64::MAX as u64) as i64,
+            )?;
         }
     }
     let store = locked(store)?;
@@ -89,9 +58,9 @@ pub(super) fn load_pinned(store: &Database, note_id: &str) -> Result<Loaded, Str
     let store = locked(store)?;
     let notes = store.get_note(note_id)?.into_iter().collect();
     let links = store
-        .note_recordings()?
+        .note_recording(note_id)?
         .into_iter()
-        .filter(|link| !link.deleted && link.note_id == note_id)
+        .filter(|link| !link.deleted)
         .map(|link| (link.note_id, link.recording_id))
         .collect();
     Ok((notes, links))
@@ -212,7 +181,7 @@ mod tests {
     fn fixture() -> (tempfile::TempDir, Database, Meetings) {
         let root = tempfile::tempdir().unwrap();
         let store = Arc::new(Mutex::new(
-            Store::open(&root.path().join("notes.db")).unwrap(),
+            Store::test(&root.path().join("notes.db")).unwrap(),
         ));
         let meetings = Meetings::open(root.path()).unwrap();
         (root, store, meetings)
@@ -273,7 +242,7 @@ mod tests {
         );
         drop(store);
         let reopened = Arc::new(Mutex::new(
-            Store::open(&root.path().join("notes.db")).unwrap(),
+            Store::test(&root.path().join("notes.db")).unwrap(),
         ));
         for _ in 0..2 {
             let (notes, links) = load(&reopened).unwrap();
@@ -342,9 +311,10 @@ mod tests {
         let next = load(&store).unwrap();
         assert_eq!(next.0, notes);
         assert!(
-            meetings.read(id).unwrap()["transcript"]
-                .as_str()
+            meetings
+                .read(id)
                 .unwrap()
+                .transcript
                 .contains("Taylor owns")
         );
     }
@@ -370,14 +340,13 @@ mod tests {
             draft["title_focused"] = false.into();
             draft["start"] = 0.into();
             draft["end"] = 0.into();
-            let write = vorkspace_meetings::DraftWrite::from_params(serde_json::json!({
-                "id": id,
+            let drafts = meetings.directory.join("drafts");
+            std::fs::create_dir_all(&drafts).unwrap();
+            let slot = serde_json::json!({
                 "version": "0123456789abcdef0123456789abcdef",
-                "expected": null,
                 "draft": draft,
-            }))
-            .unwrap();
-            meetings.checkpoint_draft(&write).unwrap();
+            });
+            std::fs::write(drafts.join(format!("{id}.json")), slot.to_string()).unwrap();
             let (notes, links) = load(&store).unwrap();
             let note_id = links
                 .iter()
@@ -389,7 +358,8 @@ mod tests {
                 assert_eq!(note.title, "My pending title");
             }
             assert!(note.body.is_empty());
-            assert_eq!(meetings.open_document(&id).unwrap()["draft"], draft);
+            let reopened = meetings.open_document(&id).unwrap().draft.unwrap();
+            assert_eq!(serde_json::to_value(reopened).unwrap(), draft);
         }
     }
 }

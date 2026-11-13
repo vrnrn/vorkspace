@@ -9,3 +9,5 @@ The usual terminal keys work, including full-screen command-line programs. Comma
 A command can send text to the clipboard. It cannot read your clipboard automatically; pasting is a deliberate action you perform in the terminal.
 
 Building the app also builds the included Ghostty library, so developers need Zig 0.17.x as well as the other build tools. Its source and dependencies are already included and the build works offline. People running the packaged app do not need to install Ghostty or Zig.
+
+The regular Rust checks cover the terminal. [The technical guide shows how to run just those checks.](../terminal.md#building-and-checking)

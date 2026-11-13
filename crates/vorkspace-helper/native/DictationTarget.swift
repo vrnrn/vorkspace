@@ -2,10 +2,13 @@ import AppKit
 import ApplicationServices
 import Carbon
 
-private func focusedElement(_ parent: AXUIElement, _ attribute: String) -> AXUIElement? {
+private func focusedElement(_ parent: AXUIElement, _ attribute: String) throws -> AXUIElement? {
     var value: CFTypeRef?
-    guard AXUIElementCopyAttributeValue(parent, attribute as CFString, &value) == .success,
-          let value, CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
+    let status = AXUIElementCopyAttributeValue(parent, attribute as CFString, &value)
+    if status == .noValue || status == .attributeUnsupported || status == .notImplemented { return nil }
+    guard status == .success, let value, CFGetTypeID(value) == AXUIElementGetTypeID() else {
+        throw DictationError("macOS could not confirm the focused field. Try again.")
+    }
     return (value as! AXUIElement)
 }
 
@@ -77,6 +80,7 @@ final class DictationTarget: DictationDestination {
     let pid: pid_t
     let tag = Int64.random(in: 1...Int64.max)
     var onInvalidated: (() -> Void)?
+    private let application: AXUIElement
     private let element: AXUIElement?
     private let window: AXUIElement?
     private var monitor: Any?
@@ -101,11 +105,12 @@ final class DictationTarget: DictationDestination {
             throw DictationError("Focus a text field and allow Accessibility for vorkspace helper.")
         }
         pid = app.processIdentifier
-        let application = AXUIElementCreateApplication(pid)
+        application = AXUIElementCreateApplication(pid)
         AXUIElementSetMessagingTimeout(application, 0.1)
-        element = focusedElement(application, kAXFocusedUIElementAttribute)
-        window = focusedElement(application, kAXFocusedWindowAttribute)
+        element = try focusedElement(application, kAXFocusedUIElementAttribute)
+        window = try focusedElement(application, kAXFocusedWindowAttribute)
         if let element {
+            AXUIElementSetMessagingTimeout(element, 0.1)
             let role = elementString(element, kAXRoleAttribute) ?? ""
             let subrole = elementString(element, kAXSubroleAttribute) ?? ""
             guard role != "AXSecureTextField", subrole != kAXSecureTextFieldSubrole,
@@ -161,18 +166,27 @@ final class DictationTarget: DictationDestination {
     }
 
     func check() throws {
-        let application = AXUIElementCreateApplication(pid)
-        let sameElement = element.map { original in
-            focusedElement(application, kAXFocusedUIElementAttribute).map { CFEqual(original, $0) } ?? false
-        } ?? (focusedElement(application, kAXFocusedUIElementAttribute) == nil)
-        let sameWindow = window.map { original in
-            focusedElement(application, kAXFocusedWindowAttribute).map { CFEqual(original, $0) } ?? false
-        } ?? true
-        guard valid, AXIsProcessTrusted(), !IsSecureEventInputEnabled(),
-              NSWorkspace.shared.frontmostApplication?.processIdentifier == pid, sameElement, sameWindow else {
+        do {
+            guard canDeliver else { throw CancellationError() }
+            let current = try focusedElement(application, kAXFocusedUIElementAttribute)
+            let sameElement = element.map { original in
+                current.map { CFEqual(original, $0) } ?? false
+            } ?? (current == nil)
+            guard sameElement else { throw CancellationError() }
+            if let window {
+                guard let current = try focusedElement(application, kAXFocusedWindowAttribute),
+                      CFEqual(window, current) else { throw CancellationError() }
+            }
+            guard canDeliver else { throw CancellationError() }
+        } catch {
             invalidate()
-            throw CancellationError()
+            throw error
         }
+    }
+
+    private var canDeliver: Bool {
+        valid && AXIsProcessTrusted() && !IsSecureEventInputEnabled()
+            && NSWorkspace.shared.frontmostApplication?.processIdentifier == pid
     }
 
     func offer(_ text: String) throws {

@@ -85,11 +85,11 @@ impl Conversation {
                             })
                             .child(if self.needs_approval() {
                                 "Needs approval".to_owned()
-                            } else if self.busy {
+                            } else if self.responding() {
                                 "Working…".to_owned()
                             } else if done {
                                 "Done".to_owned()
-                            } else if self.loading {
+                            } else if self.history_loading() {
                                 "Loading…".to_owned()
                             } else {
                                 vorkspace_core::time::relative(
@@ -131,26 +131,36 @@ impl Conversation {
     }
 
     pub(crate) fn load(&mut self, cx: &mut Context<Self>) {
-        if self.is_remote() {
-            self.load_remote(cx);
-            return;
-        }
+        self.load_history(false, cx);
+    }
+
+    /// Mutations and execution use absolute source offsets and need all rows.
+    pub(crate) fn load_complete(&mut self, cx: &mut Context<Self>) {
+        self.load_history(true, cx);
+    }
+
+    fn load_history(&mut self, complete: bool, cx: &mut Context<Self>) {
         if self.history_unloaded {
             self.reload_history(cx);
             return;
         }
         if self.history_partial {
-            if let Some(search) = self
-                .transcript
-                .update(cx, |view, _| view.take_storage_search())
-            {
-                self.pending_search = Some(search);
+            if complete {
+                if let Some(search) = self
+                    .transcript
+                    .update(cx, |view, _| view.take_storage_search())
+                {
+                    self.pending_search = Some(search);
+                }
+                self.history_unloaded = true;
+                self.reload_history(cx);
+            } else {
+                self.sync_native_history(cx);
             }
-            self.history_unloaded = true;
-            self.reload_history(cx);
             return;
         }
-        if self.loading {
+        if self.history_loading() {
+            self.complete_history_requested |= complete && !self.loaded;
             return;
         }
         if self.loaded {
@@ -158,14 +168,12 @@ impl Conversation {
             self.refresh_if_stale(cx);
             return;
         }
-        self.loading = true;
+        self.history_read = history::ReadState::Reading;
         self.refresh_turn_recoveries(cx);
-        self.refresh_catalog(cx);
         let store = self.store.clone();
         let id = self.summary.id;
-        let cwd = self.summary.cwd.clone();
         let bot = self.settings.bot.is_some();
-        let page_bot = bot && self.allow_storage_paging;
+        let page_bot = bot && self.allow_storage_paging && !complete;
         let bot_root = self.settings.bot.as_ref().map(|bot| bot.root.clone());
         let recovery_epoch = self.submission_recovery_epoch;
         let work = cx.background_executor().spawn(async move {
@@ -178,41 +186,24 @@ impl Conversation {
                     eprintln!("Could not sync Bot native history: {error}");
                 }
             }
-            let settings = locked(&store).and_then(|s| s.agent_settings(id));
-            let execution_cwd = settings
-                .as_ref()
-                .ok()
-                .and_then(|s| s.as_ref())
-                .and_then(|s| s.worktree_cwd.as_deref())
-                .unwrap_or(&cwd);
-            let git = vorkspace_model::git_cache::load(Path::new(execution_cwd)).ok();
-            let rev = locked(&store)
-                .and_then(|s| s.session_history_revision(id))
-                .unwrap_or(0);
+            let history::InitialRead {
+                rows,
+                settings,
+                revision,
+            } = history::InitialRead::read(&store, id, page_bot);
             (
-                locked(&store)
-                    .and_then(|s| {
-                        if page_bot
-                            && let Ok(Some(page)) = s.indexed_history_page(id, None, 10)
-                            && page.before.is_some()
-                        {
-                            return Ok(history::InitialRows::Window(Box::new(page)));
-                        }
-                        Ok(history::InitialRows::Complete(s.load(id)?.rows))
-                    })
-                    .map(|rows| match rows {
-                        history::InitialRows::Complete(rows) => history::InitialHistory::Complete(
-                            crate::transcript::PreparedHistory::new(rows, bot),
-                        ),
-                        history::InitialRows::Window(mut page) => {
-                            let prepared = crate::transcript::PreparedHistory::new(
-                                std::mem::take(&mut page.rows),
-                                false,
-                            );
-                            history::InitialHistory::Window(page, prepared)
-                        }
-                    }),
-                git,
+                rows.map(|rows| match rows {
+                    history::InitialRows::Complete(rows) => history::InitialHistory::Complete(
+                        crate::transcript::PreparedHistory::new(rows, bot),
+                    ),
+                    history::InitialRows::Window(mut page) => {
+                        let prepared = crate::transcript::PreparedHistory::new(
+                            std::mem::take(&mut page.rows),
+                            false,
+                        );
+                        history::InitialHistory::Window(page, prepared)
+                    }
+                }),
                 settings,
                 locked(&store).and_then(|s| {
                     if bot && !s.bot_session(id)?.is_some_and(|s| s.provider_id.is_some()) {
@@ -222,26 +213,28 @@ impl Conversation {
                     }
                 }),
                 locked(&store).and_then(|s| s.follow_ups(id)),
-                locked(&store).and_then(|s| {
-                    s.recover_local_submissions()?;
-                    s.latest_unconfirmed_submission(id)
-                }),
-                rev,
+                locked(&store)
+                    .and_then(|s| Ok((s.session_submission_recovery(id)?, s.edit_barrier(id)?))),
+                revision,
             )
         });
         cx.spawn(async move |this, cx| {
-            let (result, git, settings, context, follow_ups, unconfirmed, rev) = work.await;
+            let (result, settings, context, follow_ups, unconfirmed, rev) = work.await;
             let _ = this.update(cx, |this, cx| {
-                this.loading = false;
-                this.loaded_history_revision = Some(rev);
-                this.branch = git.as_ref().and_then(|s| s.current.clone());
-                this.git = git;
+                let complete_requested = std::mem::take(&mut this.complete_history_requested);
+                this.history_read = history::ReadState::Idle;
                 this.context = context.ok().flatten();
                 if this.submission_recovery_epoch == recovery_epoch {
                     match unconfirmed {
-                        Ok(receipt) => this.unconfirmed_submission = receipt,
+                        Ok((receipt, barrier)) => {
+                            this.unconfirmed_submission = receipt;
+                            if barrier == Some(vorkspace_core::store::EditBarrier::RecoveryRequired)
+                            {
+                                this.editing_last_turn.require_recovery();
+                            }
+                        }
                         Err(error) => {
-                            this.status = error;
+                            this.history_load_failed(error, cx);
                             return;
                         }
                     }
@@ -261,43 +254,48 @@ impl Conversation {
                         }
                     }
                     Err(error) => {
-                        this.status = error;
+                        this.history_load_failed(error, cx);
                         return;
                     }
                 }
                 // The composer may have a newer revision while history loads;
                 // historical turn provenance still belongs to the loaded rows.
-                if let Ok(Some(settings)) = &settings {
+                if let Ok(Some(mut settings)) = settings {
                     this.transcript
                         .update(cx, |view, _| view.turns = settings.turns.clone());
-                    this.settings.turns = settings.turns.clone();
-                }
-                if let Ok(Some(mut settings)) = settings
-                    && settings.revision >= this.settings.revision
-                {
-                    if !this.summary.has_messages
-                        && settings.revision == 0
-                        && settings.account.id == vorkspace_core::accounts::DEFAULT
-                    {
-                        settings.account = crate::accounts::get(cx)
-                            .map(|center| {
-                                center.read(cx).selected(
-                                    Kind::from_id(&this.summary.provider),
-                                    &this.summary.cwd,
-                                )
-                            })
-                            .unwrap_or_default();
+                    if settings.revision < this.settings.revision {
+                        this.settings.turns = settings.turns;
+                    } else {
+                        if !this.summary.has_messages
+                            && settings.revision == 0
+                            && settings.account.id == vorkspace_core::accounts::DEFAULT
+                        {
+                            settings.account = crate::accounts::get(cx)
+                                .map(|center| {
+                                    center.read(cx).selected(
+                                        Kind::from_id(&this.summary.provider),
+                                        &this.summary.cwd,
+                                    )
+                                })
+                                .unwrap_or_default();
+                        }
+                        this.model = settings.model.clone();
+                        if this.settings.bot.is_some()
+                            && let Some(mode) = this.selected_turn_mode()
+                        {
+                            turn_flow::apply_turn_mode(&mut settings, Some(mode));
+                        }
+                        let bot = this.settings.bot.take();
+                        let environment = std::mem::take(&mut this.settings.environment);
+                        this.replace_settings(settings, cx);
+                        this.attach_account(cx);
+                        this.settings.bot = bot;
+                        this.settings.environment = environment;
                     }
-                    this.model = settings.model.clone();
-                    let bot = this.settings.bot.take();
-                    let environment = std::mem::take(&mut this.settings.environment);
-                    this.settings = settings;
-                    this.attach_account(cx);
-                    this.settings.bot = bot;
-                    this.settings.environment = environment;
                 }
                 match result {
                     Ok(history) => {
+                        this.loaded_history_revision = Some(rev);
                         match history {
                             history::InitialHistory::Complete(history) => this
                                 .transcript
@@ -317,6 +315,7 @@ impl Conversation {
                         }
                         this.status = "Ready".into();
                         this.loaded = true;
+                        this.refresh_catalog(cx);
                         if let Some(message) = this
                             .follow_ups
                             .state
@@ -330,19 +329,20 @@ impl Conversation {
                         if let Some((row, query)) = this.pending_search.take() {
                             this.reveal_search(row, query, cx);
                         }
-                        this.sync_review(cx);
+                        this.refresh_git(cx);
                         this.run_history_actions(cx);
                         this.pump_follow_ups(cx);
                         if this.history_partial
-                            && (!this.history_actions.is_empty()
+                            && (complete_requested
+                                || !this.history_actions.is_empty()
                                 || !this.follow_ups.state.messages.is_empty())
                         {
-                            this.load(cx);
+                            this.load_complete(cx);
                         }
                     }
-                    Err(e) => this.status = e,
+                    Err(error) => this.history_load_failed(error, cx),
                 }
-                cx.emit(SessionChanged);
+                cx.emit(SessionChanged::Loaded);
                 cx.notify();
             });
         })
@@ -359,10 +359,10 @@ impl Conversation {
 
     fn refresh_history(&mut self, recovering: bool, cx: &mut Context<Self>) {
         if !self.loaded {
-            self.load(cx);
+            self.load_history(recovering, cx);
             return;
         }
-        if self.loading || self.busy || self.stopping {
+        if self.history_loading() || self.turn_in_flight() {
             return;
         }
         // A partial transcript is refreshed when a cursor or mutation guard
@@ -374,12 +374,9 @@ impl Conversation {
             self.reload_history(cx);
             return;
         }
-        if self.is_remote() {
-            self.refresh_remote_snapshot(cx);
-            return;
-        }
+
         if recovering {
-            self.loading = true;
+            self.history_read = history::ReadState::Reading;
         }
         let id = self.summary.id;
         let store = self.store.clone();
@@ -392,27 +389,20 @@ impl Conversation {
             if !recovering && current_rev == Some(rev) {
                 return Ok::<_, String>(None);
             }
-            let history = store.load(id)?;
-            let settings = store.agent_settings(id)?.unwrap_or_default();
-            let binding = if recovering {
-                store
-                    .sessions()?
-                    .into_iter()
-                    .find(|session| session.id == id)
-                    .map(|session| {
-                        (
-                            session.provider,
-                            session.provider_id,
-                            settings.account.id.clone(),
-                        )
-                    })
-            } else {
-                None
-            };
+            let history = store.load_local_history(id)?;
+            let settings = history.settings?.unwrap_or_default();
+            let binding = history.binding.filter(|_| recovering).map(|binding| {
+                (
+                    binding.provider,
+                    binding.provider_id,
+                    settings.account.id.clone(),
+                )
+            });
+            drop(store);
             Ok(Some((
-                crate::transcript::PreparedHistory::new(history.rows, bot),
+                crate::transcript::PreparedHistory::new(history.transcript.rows, bot),
                 settings.turns,
-                rev,
+                history.revision,
                 binding,
             )))
         });
@@ -423,16 +413,15 @@ impl Conversation {
                 // restore or refresh takes ownership of the visible transcript.
                 if this.submission_generation != submission
                     || this.loaded_history_revision != current_rev
-                    || (this.loading && !recovering)
+                    || (this.history_loading() && !recovering)
                     || this.history_unloaded
                     || this.history_partial
-                    || this.busy
-                    || this.stopping
+                    || this.turn_in_flight()
                 {
                     return;
                 }
                 if recovering {
-                    this.loading = false;
+                    this.history_read = history::ReadState::Idle;
                     if let Err(error) = &result {
                         this.status = format!("Could not refresh saved history: {error}");
                         cx.notify();
@@ -477,7 +466,7 @@ impl Conversation {
                         this.run_history_actions(cx);
                     }
                     this.sync_review(cx);
-                    cx.emit(SessionChanged);
+                    cx.emit(SessionChanged::Loaded);
                     cx.notify();
                 }
             });

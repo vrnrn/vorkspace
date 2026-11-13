@@ -66,12 +66,13 @@ fn hovering_keeps_card_size_and_menu_archive_preserves_history(cx: &mut TestAppC
         .unwrap();
     cx.refresh().unwrap();
     let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
-    let row = visual.debug_bounds("rail-session-1").unwrap();
+    let selector = Box::leak(format!("rail-session-{a}").into_boxed_str());
+    let row = visual.debug_bounds(selector).unwrap();
     visual.simulate_mouse_move(row.center(), None, Default::default());
     visual.run_until_parked();
     visual.refresh().unwrap();
     // Hover reveals nothing on the card, so passing over cards never moves them.
-    assert_eq!(visual.debug_bounds("rail-session-1").unwrap(), row);
+    assert_eq!(visual.debug_bounds(selector).unwrap(), row);
     window
         .update(visual, |shell, window, cx| {
             shell.run_menu(MenuTarget::Session(a), "archive", None, window, cx);
@@ -119,10 +120,10 @@ fn working_marks_animate_independently_and_completed_replies_clear_when_seen(
     let transcript = window
         .update(cx, |shell, _, cx| {
             shell.sessions[&a].update(cx, |session, cx| {
-                session.busy = true;
+                session.set_running_for_test(true);
                 session.summary.cwd = "/work/vorkspace".into();
                 session.summary.has_messages = true;
-                cx.emit(SessionChanged);
+                cx.emit(SessionChanged::Loaded);
             });
             shell.sessions[&b].read(cx).transcript.clone()
         })
@@ -140,8 +141,8 @@ fn working_marks_animate_independently_and_completed_replies_clear_when_seen(
     window
         .update(cx, |shell, _, cx| {
             shell.sessions[&a].update(cx, |session, cx| {
-                session.busy = false;
-                cx.emit(SessionChanged);
+                session.set_running_for_test(false);
+                cx.emit(SessionChanged::Loaded);
             });
         })
         .unwrap();
@@ -166,7 +167,6 @@ fn hover_preview_waits_and_never_materializes_a_conversation(cx: &mut TestAppCon
     let (id, count) = window
         .update(cx, |shell, window, cx| {
             // Classic previews remain available without loading a conversation.
-            shell.workspace.classic_layout = true;
             let mut summary = locked(&shell.store)
                 .unwrap()
                 .create("codex", "/work/vorkspace")
@@ -174,15 +174,15 @@ fn hover_preview_waits_and_never_materializes_a_conversation(cx: &mut TestAppCon
             summary.has_messages = true;
             let id = summary.id;
             shell.order.push(id);
-            shell.session_summaries.insert(id, summary);
+            shell.seed_session_summary(summary, cx);
             let anchor = AnchorSlot::default();
             anchor.set(Some(Bounds::new(
                 window.mouse_position() - gpui::point(px(5.), px(5.)),
                 gpui::size(px(20.), px(20.)),
             )));
             let count = shell.sessions.len();
-            shell.hover_session(id, anchor, true, true, window, cx);
-            assert!(shell.session_preview.is_none());
+            shell.hover_session(id, anchor, true, window, cx);
+            assert!(shell.preview.session_preview.is_none());
             (id, count)
         })
         .unwrap();
@@ -193,7 +193,11 @@ fn hover_preview_waits_and_never_materializes_a_conversation(cx: &mut TestAppCon
     window
         .update(cx, |shell, _, _| {
             assert_eq!(
-                shell.session_preview.as_ref().map(|preview| preview.id),
+                shell
+                    .preview
+                    .session_preview
+                    .as_ref()
+                    .map(|preview| preview.id),
                 Some(id)
             );
             assert_eq!(shell.sessions.len(), count);
@@ -244,6 +248,7 @@ fn sidebar_rows_have_a_gap_and_preview_survives_crossing_into_the_card(cx: &mut 
     let (first, surface) = window
         .update(cx, |shell, _, _| {
             let preview = shell
+                .preview
                 .session_preview
                 .as_ref()
                 .expect("hover opens a preview");
@@ -262,9 +267,9 @@ fn sidebar_rows_have_a_gap_and_preview_survives_crossing_into_the_card(cx: &mut 
     move_to(surface.center(), cx);
     window
         .update(cx, |shell, _, _| {
-            assert!(shell.session_preview.is_some());
+            assert!(shell.preview.session_preview.is_some());
             assert!(
-                shell.preview_close.is_none(),
+                shell.preview.close.is_none(),
                 "entering the card cancels the close timer"
             );
         })
@@ -276,12 +281,12 @@ fn sidebar_rows_have_a_gap_and_preview_survives_crossing_into_the_card(cx: &mut 
     cx.refresh().unwrap();
     window
         .update(cx, |shell, window, cx| {
-            let preview = shell.session_preview.as_ref().unwrap();
+            let preview = shell.preview.session_preview.as_ref().unwrap();
             assert_eq!(preview.id, a, "another row replaces the old preview");
             assert!((preview.anchor.get().unwrap().top() - second.top()).abs() < px(2.));
             shell.open(a, window, cx);
             assert!(
-                shell.session_preview.is_none(),
+                shell.preview.session_preview.is_none(),
                 "selection dismisses the card"
             );
         })
@@ -359,7 +364,7 @@ fn usage_footer_follows_active_tabs_and_provider_changes(cx: &mut TestAppContext
             assert_eq!(shell.usage_footer.read(cx).kind(), Kind::Claude);
             shell.sessions[&b].update(cx, |conversation, cx| {
                 conversation.summary.provider = "codex".into();
-                cx.emit(SessionChanged);
+                cx.emit(SessionChanged::Loaded);
             });
         })
         .unwrap();
@@ -467,7 +472,10 @@ fn tab_lifecycle_new_and_split_requests_do_not_undo_project_navigation(cx: &mut 
                 if split {
                     assert_eq!(shell.workspace.tabs.len(), 3);
                     let created = shell.workspace.tabs[2];
-                    assert_eq!(shell.session_summaries[&created].cwd, "/work/vorkspace");
+                    assert_eq!(
+                        shell.session_summary(created, cx).unwrap().cwd,
+                        "/work/vorkspace"
+                    );
                     let saved = locked(&shell.store).unwrap().ui_state().unwrap().unwrap();
                     let restored: Workspace = serde_json::from_str(&saved).unwrap();
                     assert!(restored.tabs.contains(&created));
@@ -492,12 +500,12 @@ fn tab_lifecycle_closing_an_inactive_tab_keeps_notes_and_focus(cx: &mut TestAppC
         .update(cx, |shell, w, cx| {
             shell.open_notes(w, cx);
             let pane = shell.workspace.active.unwrap();
-            let notes = shell.notes.clone().unwrap();
+            let notes = shell.page_tabs.notes.clone().unwrap();
             shell.close(a, w, cx);
             assert_eq!(shell.workspace.tab_of(a), None);
             assert_eq!(shell.workspace.active, Some(pane));
-            assert_eq!(shell.notes.as_ref(), Some(&notes));
-            assert_eq!(shell.active_app_view, Some(app_views::AppView::Notes));
+            assert_eq!(shell.page_tabs.notes.as_ref(), Some(&notes));
+            assert_eq!(shell.pages.active_app_view, Some(app_views::AppView::Notes));
             assert!(notes.focus_handle(cx).contains_focused(w, cx));
             assert_eq!(shell.workspace.project, "/work/vorkspace");
         })
@@ -519,12 +527,12 @@ fn tab_lifecycle_closing_an_inactive_split_pane_keeps_notes(cx: &mut TestAppCont
             shell.open(b, w, cx);
             shell.open_notes(w, cx);
             let pane = shell.workspace.active.unwrap();
-            let notes = shell.notes.clone().unwrap();
+            let notes = shell.page_tabs.notes.clone().unwrap();
             shell.close_pane(a, w, cx);
             assert_eq!(shell.workspace.active, Some(pane));
             assert_eq!(shell.workspace.tabs, [c, b, pane]);
-            assert_eq!(shell.notes.as_ref(), Some(&notes));
-            assert_eq!(shell.active_app_view, Some(app_views::AppView::Notes));
+            assert_eq!(shell.page_tabs.notes.as_ref(), Some(&notes));
+            assert_eq!(shell.pages.active_app_view, Some(app_views::AppView::Notes));
             assert!(notes.focus_handle(cx).contains_focused(w, cx));
             assert_eq!(shell.workspace.project, "/work/vorkspace");
         })
@@ -582,7 +590,7 @@ fn tab_lifecycle_close_stays_in_project_and_keeps_running_drafts(cx: &mut TestAp
     window
         .update(cx, |shell, w, cx| {
             shell.sessions[&b].update(cx, |s, cx| {
-                s.busy = true;
+                s.set_running_for_test(true);
                 s.input.update(cx, |i, cx| {
                     i.replace_text_in_range(None, "Keep this draft", w, cx)
                 });
@@ -599,7 +607,7 @@ fn tab_lifecycle_close_stays_in_project_and_keeps_running_drafts(cx: &mut TestAp
             assert_ne!(blank, b);
             assert_eq!(shell.workspace.tabs, [a, blank]);
             assert!(!shell.sessions[&blank].read(cx).summary.has_messages);
-            assert!(shell.sessions[&b].read(cx).busy);
+            assert!(shell.sessions[&b].read(cx).responding());
             shell.open(b, w, cx);
             assert_eq!(
                 shell.sessions[&b].read(cx).input.read(cx).content.as_ref(),
@@ -707,7 +715,7 @@ fn tab_lifecycle_closing_a_file_only_tab_restores_the_project_chat(cx: &mut Test
                 w,
                 cx,
             );
-            let review = shell.reviews[&b].clone();
+            let review = shell.review.reviews[&b].clone();
             review.update(cx, |r, cx| {
                 r.state.chat_hidden = true;
                 r.close_active(cx);
@@ -719,7 +727,7 @@ fn tab_lifecycle_closing_a_file_only_tab_restores_the_project_chat(cx: &mut Test
         .update(cx, |shell, _, cx| {
             assert_eq!(shell.workspace.project, "/work/vorkspace");
             assert!(shell.workspace.tabs.contains(&a));
-            assert!(!shell.reviews.contains_key(&b));
+            assert!(!shell.review.reviews.contains_key(&b));
             let active = shell.workspace.active.unwrap();
             assert_eq!(
                 shell.sessions[&active].read(cx).summary.cwd,
@@ -776,7 +784,7 @@ fn header_menu_switches_projects_from_its_picker_flyout(cx: &mut TestAppContext)
     });
     let before = window
         .update(cx, |shell, w, cx| {
-            let anchor = Anchor::Slot(shell.project_anchor.clone());
+            let anchor = Anchor::Slot(shell.sidebar.project_anchor.clone());
             shell.open_menu(MenuTarget::Header, anchor, w, cx);
             shell.workspace.project.clone()
         })
@@ -954,7 +962,6 @@ fn project_tools_shortcut_keeps_working_after_hiding_focused_history(cx: &mut Te
             .update(cx, |shell, _, _| {
                 assert_eq!(shell.workspace.sidebar_tab(), SidebarTab::Graph);
                 assert_eq!(shell.workspace.sidebar_visible, visible);
-                assert!(!shell.workspace.right_panel_open);
             })
             .unwrap();
     }
@@ -977,10 +984,8 @@ fn removed_layout_shortcut_preserves_the_original_workspace_and_composer(cx: &mu
     cx.run_until_parked();
     window
         .update(cx, |shell, _, cx| {
-            assert!(shell.workspace.classic_layout);
             let session = shell.sessions[&shell.workspace.active.unwrap()].read(cx);
             assert_eq!(session.input.read(cx).content, "Keep this draft");
-            assert!(!shell.workspace.right_panel_open);
         })
         .unwrap();
 }
@@ -991,8 +996,8 @@ fn title_tabs_draw_their_own_session_marks(cx: &mut TestAppContext) {
     window
         .update(cx, |shell, _, cx| {
             shell.sessions[&a].update(cx, |session, cx| {
-                session.busy = true;
-                cx.emit(SessionChanged);
+                session.set_running_for_test(true);
+                cx.emit(SessionChanged::Loaded);
             });
         })
         .unwrap();
@@ -1025,15 +1030,15 @@ fn resizing_project_rail_with_working_session_marks_keeps_cached_paint_valid(
                 shell.sessions[&id].update(cx, |session, cx| {
                     session.summary.cwd = "/work/vorkspace".into();
                     session.summary.has_messages = true;
-                    cx.emit(SessionChanged);
+                    cx.emit(SessionChanged::Loaded);
                 });
             }
             shell.sessions[&a].update(cx, |session, cx| {
-                session.busy = true;
-                cx.emit(SessionChanged);
+                session.set_running_for_test(true);
+                cx.emit(SessionChanged::Loaded);
             });
             shell.focus_active(w, cx);
-            shell.toggle_right_panel(w, cx);
+            shell.toggle_sidebar(w, cx);
             for _ in 0..30 {
                 shell.workspace.tabs.extend([a, b]);
             }
@@ -1198,7 +1203,7 @@ fn left_tool_tabs_keep_file_review_and_shortcuts_live(cx: &mut TestAppContext) {
             .update(visual, |shell, w, cx| {
                 assert_eq!(shell.workspace.sidebar_tab(), expected);
                 assert!(shell.workspace.sidebar_visible);
-                assert!(shell.reviews.contains_key(&active));
+                assert!(shell.review.reviews.contains_key(&active));
                 assert!(
                     shell
                         .right_panel
@@ -1219,7 +1224,7 @@ fn left_tool_tabs_keep_file_review_and_shortcuts_live(cx: &mut TestAppContext) {
             .update(visual, |shell, _, _| {
                 assert_eq!(shell.workspace.sidebar_tab(), SidebarTab::Graph);
                 assert_eq!(shell.workspace.sidebar_visible, visible);
-                assert!(shell.reviews.contains_key(&active));
+                assert!(shell.review.reviews.contains_key(&active));
             })
             .unwrap();
     }
@@ -1309,7 +1314,7 @@ fn crowded_tabs_fit_and_hold_the_new_tab_button_still_while_one_opens(cx: &mut T
     }
     window
         .update(cx, |shell, _, cx| {
-            assert_eq!(shell.tab_scroll.max_offset().x, px(0.), "nothing scrolls");
+            assert_eq!(shell.tabs.scroll.max_offset().x, px(0.), "nothing scrolls");
             shell.create(Kind::Codex, cx);
         })
         .unwrap();
@@ -1446,11 +1451,7 @@ fn compact_rail_follows_the_full_rail_and_sessions_opens_it(cx: &mut TestAppCont
 }
 #[gpui::test]
 fn original_layout_keeps_project_rail_sidebar_and_workspace_independent(cx: &mut TestAppContext) {
-    vorkspace_ui::theme::configure(
-        &vorkspace_ui::preferences::Preferences::default(),
-        false,
-        true,
-    );
+    vorkspace_ui::theme::configure(&vorkspace_ui::preferences::Preferences::default(), false);
     vorkspace_ui::clock::use_test_clock(cx);
     let (window, a, b) = window(cx);
     let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
@@ -1571,7 +1572,6 @@ fn original_layout_keeps_project_rail_sidebar_and_workspace_independent(cx: &mut
                 let summaries =
                     [a, b].map(|id| (id, shell.session_metadata(id, cx).summary.cwd.clone()));
                 let restored = Workspace::restore(Some(&saved), &summaries, "/work/vorkspace");
-                assert!(restored.classic_layout);
                 assert_eq!(
                     restored.project_rail_open,
                     shell.workspace.project_rail_open
@@ -1697,19 +1697,19 @@ fn sidebar_transition_uses_executor_frames_and_retargets_without_jumping(cx: &mu
     draw(cx);
     window
         .update(cx, |shell, _, _| {
-            assert!(shell.sidebar_slide.is_some());
-            assert_eq!(shell.sidebar_fraction, 1.);
+            assert!(shell.sidebar.slide.is_some());
+            assert_eq!(shell.sidebar.fraction, 1.);
         })
         .unwrap();
     draw(cx);
     window
-        .update(cx, |shell, _, _| assert_eq!(shell.sidebar_fraction, 1.))
+        .update(cx, |shell, _, _| assert_eq!(shell.sidebar.fraction, 1.))
         .unwrap();
     cx.executor().advance_clock(Duration::from_millis(70));
     draw(cx);
     let middle = window
         .update(cx, |shell, w, cx| {
-            let middle = shell.sidebar_fraction;
+            let middle = shell.sidebar.fraction;
             assert!(middle > 0. && middle < 1.);
             shell.toggle_sidebar(w, cx);
             middle
@@ -1719,15 +1719,15 @@ fn sidebar_transition_uses_executor_frames_and_retargets_without_jumping(cx: &mu
     window
         .update(cx, |shell, _, _| {
             // Retargeting recomputes the spring around a new target.
-            assert!((shell.sidebar_fraction - middle).abs() < f32::EPSILON);
+            assert!((shell.sidebar.fraction - middle).abs() < f32::EPSILON);
         })
         .unwrap();
     cx.executor().advance_clock(Duration::from_secs(1));
     draw(cx);
     window
         .update(cx, |shell, _, _| {
-            assert!(shell.sidebar_slide.is_none());
-            assert_eq!(shell.sidebar_fraction, 1.);
+            assert!(shell.sidebar.slide.is_none());
+            assert_eq!(shell.sidebar.fraction, 1.);
         })
         .unwrap();
 }
@@ -1781,7 +1781,8 @@ fn main_pane_covers_a_fixed_sidebar_with_a_clipped_fade(cx: &mut TestAppContext)
             window
                 .update(visual, |shell, _, cx| {
                     shell
-                        .sidebar_slide
+                        .sidebar
+                        .slide
                         .as_ref()
                         .unwrap()
                         .freeze_elapsed(Duration::from_millis(ms));
@@ -1805,7 +1806,7 @@ fn main_pane_covers_a_fixed_sidebar_with_a_clipped_fade(cx: &mut TestAppContext)
             assert!((clip.right() - main.left()).abs() < px(1.));
             window
                     .update(visual, |shell, w, _| {
-                        let fraction = shell.sidebar_fraction;
+                        let fraction = shell.sidebar.fraction;
                         assert!(if visible {
                             fraction > previous
                         } else {
@@ -1837,7 +1838,8 @@ fn main_pane_covers_a_fixed_sidebar_with_a_clipped_fade(cx: &mut TestAppContext)
         window
             .update(visual, |shell, _, cx| {
                 shell
-                    .sidebar_slide
+                    .sidebar
+                    .slide
                     .as_ref()
                     .unwrap()
                     .elapsed(Duration::from_secs(1));
@@ -1852,8 +1854,8 @@ fn main_pane_covers_a_fixed_sidebar_with_a_clipped_fade(cx: &mut TestAppContext)
             .unwrap();
         window
             .update(visual, |shell, _, _| {
-                assert!(shell.sidebar_slide.is_none());
-                assert_eq!(shell.sidebar_fraction, if visible { 1. } else { 0. });
+                assert!(shell.sidebar.slide.is_none());
+                assert_eq!(shell.sidebar.fraction, if visible { 1. } else { 0. });
             })
             .unwrap();
     }
@@ -1862,12 +1864,14 @@ fn main_pane_covers_a_fixed_sidebar_with_a_clipped_fade(cx: &mut TestAppContext)
         .update(visual, |shell, w, cx| {
             shell.toggle_sidebar(w, cx);
             shell
-                .sidebar_slide
+                .sidebar
+                .slide
                 .as_ref()
                 .unwrap()
                 .elapsed(Duration::from_millis(65));
             let before = shell
-                .sidebar_slide
+                .sidebar
+                .slide
                 .as_ref()
                 .unwrap()
                 .at(vorkspace_ui::clock::Instant::now())
@@ -1875,7 +1879,8 @@ fn main_pane_covers_a_fixed_sidebar_with_a_clipped_fade(cx: &mut TestAppContext)
             shell.toggle_sidebar(w, cx);
             assert!(shell.workspace.sidebar_visible);
             let after = shell
-                .sidebar_slide
+                .sidebar
+                .slide
                 .as_ref()
                 .unwrap()
                 .at(vorkspace_ui::clock::Instant::now())
@@ -1892,8 +1897,8 @@ fn main_pane_covers_a_fixed_sidebar_with_a_clipped_fade(cx: &mut TestAppContext)
         .unwrap();
     window
         .update(visual, |shell, _, _| {
-            assert!(shell.sidebar_slide.is_none());
-            assert_eq!(shell.sidebar_fraction, 1.);
+            assert!(shell.sidebar.slide.is_none());
+            assert_eq!(shell.sidebar.fraction, 1.);
         })
         .unwrap();
 }
@@ -1939,7 +1944,7 @@ fn switching_session_in_current_tab_keeps_its_slot_and_selection_settled(cx: &mu
                     tabs,
                     [TitleTab::Workspace(first), TitleTab::Workspace(expected)]
                 );
-                let (slots, moving) = shell.title_tab_motion.sync(
+                let (slots, moving) = shell.tabs.motion.sync(
                     tabs.into_iter().map(|tab| (tab, ())).collect(),
                     true,
                     vorkspace_ui::clock::Instant::now(),
@@ -1952,12 +1957,9 @@ fn switching_session_in_current_tab_keeps_its_slot_and_selection_settled(cx: &mu
                     slot,
                     vorkspace_ui::tab_motion::Slot::Live { open, .. } if *open == 1.
                 )));
-                assert_eq!(
-                    shell.title_tab_selection.1,
-                    Some(TitleTab::Workspace(expected))
-                );
+                assert_eq!(shell.tabs.selection.1, Some(TitleTab::Workspace(expected)));
                 assert!(
-                    shell.title_tab_selection.0.is_none(),
+                    shell.tabs.selection.0.is_none(),
                     "the selected slot did not change"
                 );
             })
@@ -2047,6 +2049,14 @@ fn tab_project_and_session_keys_follow_vorkspace(cx: &mut TestAppContext) {
 #[gpui::test]
 fn session_menu_copies_ids_through_its_submenu(cx: &mut TestAppContext) {
     let (window, a, _) = window(cx);
+    let original = window
+        .update(cx, |shell, _, _| {
+            locked(&shell.store)
+                .unwrap()
+                .persisted_session_id(a)
+                .unwrap()
+        })
+        .unwrap();
     cx.update(crate::popover::bind);
     window
         .update(cx, |shell, w, cx| {
@@ -2063,11 +2073,11 @@ fn session_menu_copies_ids_through_its_submenu(cx: &mut TestAppContext) {
         .update(cx, |shell, _, _| assert!(shell.menu.is_none()))
         .unwrap();
     let copied = cx.update(|cx| cx.read_from_clipboard().and_then(|c| c.text()));
-    assert_eq!(copied, Some(a.to_string()));
+    assert_eq!(copied, Some(original));
 }
 #[gpui::test]
 fn desktop_database_sessions_load_and_copy_their_original_ids(cx: &mut TestAppContext) {
-    let mut store = Store::open_vorkspace(std::path::Path::new(":memory:")).unwrap();
+    let mut store = Store::test(std::path::Path::new(":memory:")).unwrap();
     let summary = store.create("codex", "/work/vorkspace").unwrap();
     let id = summary.id;
     let original = store.persisted_session_id(id).unwrap();
@@ -2135,7 +2145,7 @@ fn typing_in_the_session_filter_matches_titles_without_case_and_keeps_session_st
                 shell.sessions[&id].update(cx, |session, cx| {
                     session.summary.title = title.into();
                     session.summary.has_messages = true;
-                    cx.emit(SessionChanged);
+                    cx.emit(SessionChanged::Loaded);
                 });
             }
             shell.sessions[&b].update(cx, |session, cx| {
@@ -2187,7 +2197,8 @@ fn typing_in_the_session_filter_matches_titles_without_case_and_keeps_session_st
                 );
             })
             .unwrap();
-        for (id, selector) in [(a, "rail-session-1"), (b, "rail-session-2")] {
+        for id in [a, b] {
+            let selector = Box::leak(format!("rail-session-{id}").into_boxed_str());
             assert_eq!(
                 visual.debug_bounds(selector).is_some(),
                 expected.contains(&id),
@@ -2210,7 +2221,10 @@ fn sidebar_hover_updates_labels_without_rebuilding_the_chat(cx: &mut TestAppCont
     })
     .unwrap();
     cx.run_until_parked();
-    assert_eq!(root.read_with(cx, |s, _| s.sidebar_hover), Some("GitHub"));
+    assert_eq!(
+        root.read_with(cx, |s, _| s.sidebar.hover),
+        Some(SidebarNavigation::Connector(Connector::Github))
+    );
     let notes = gpui::VisualTestContext::from_window(window.into(), cx)
         .debug_bounds("sidebar-navigation-Notes")
         .unwrap();
@@ -2219,7 +2233,10 @@ fn sidebar_hover_updates_labels_without_rebuilding_the_chat(cx: &mut TestAppCont
     })
     .unwrap();
     cx.run_until_parked();
-    assert_eq!(root.read_with(cx, |s, _| s.sidebar_hover), Some("Notes"));
+    assert_eq!(
+        root.read_with(cx, |s, _| s.sidebar.hover),
+        Some(SidebarNavigation::Notes)
+    );
     assert_eq!(transcript.read_with(cx, |t, _| t.render_passes), before);
 }
 #[gpui::test]
@@ -2247,15 +2264,16 @@ fn many_blank_tabs_fit_without_creating_sidebar_conversations(cx: &mut TestAppCo
         .update(cx, |shell, w, cx| {
             // The tabs share the strip instead of scrolling it.
             assert_eq!(
-                shell.tab_scroll.max_offset().x,
+                shell.tabs.scroll.max_offset().x,
                 px(0.),
                 "viewport {:?}, strip {:?}, children {}, first {:?}, last {:?}",
                 w.viewport_size(),
-                shell.tab_scroll.bounds(),
-                shell.tab_scroll.children_count(),
-                shell.tab_scroll.bounds_for_item(0),
+                shell.tabs.scroll.bounds(),
+                shell.tabs.scroll.children_count(),
+                shell.tabs.scroll.bounds_for_item(0),
                 shell
-                    .tab_scroll
+                    .tabs
+                    .scroll
                     .bounds_for_item(shell.workspace.tabs.len() - 1)
             );
             let id = shell.workspace.active.unwrap();
@@ -2347,7 +2365,7 @@ fn pane_limit_rejects_a_fourth_session_and_preserves_the_source(cx: &mut TestApp
             let before = shell.workspace.clone();
             let target = shell.workspace.active.unwrap();
             assert!(!shell.placement_allowed(DragSource::Session(a), target, Edge::Bottom));
-            shell.pane_drag = Some(PaneDrag {
+            shell.panes.drag = Some(PaneDrag {
                 source: DragSource::Session(a),
                 start: gpui::point(px(0.), px(0.)),
                 position: gpui::point(px(0.), px(0.)),
@@ -2392,8 +2410,8 @@ fn pane_limit_async_creation_rechecks_space_before_publication(cx: &mut TestAppC
     window
         .update(cx, |shell, w, cx| {
             shell.open(session, w, cx);
-            shell.viewport_width = 1800.;
-            shell.pane_viewport.set(Some(Bounds::new(
+            shell.window.viewport_width = 1800.;
+            shell.panes.viewport.set(Some(Bounds::new(
                 gpui::point(px(0.), px(0.)),
                 gpui::size(px(1200.), px(800.)),
             )));
@@ -2408,7 +2426,7 @@ fn pane_limit_async_creation_rechecks_space_before_publication(cx: &mut TestAppC
                 .unwrap();
             let revision = shell.navigation_revision;
             // Exercise the actual foreground continuation with a new size.
-            shell.pane_viewport.set(Some(Bounds::new(
+            shell.panes.viewport.set(Some(Bounds::new(
                 gpui::point(px(0.), px(0.)),
                 gpui::size(px(500.), px(800.)),
             )));
@@ -2423,13 +2441,13 @@ fn pane_limit_async_creation_rechecks_space_before_publication(cx: &mut TestAppC
         .unwrap();
     cx.run_until_parked();
     window
-        .update(cx, |shell, _, _| {
+        .update(cx, |shell, _, cx| {
             let new = shell.workspace.active.unwrap();
             assert_ne!(new, session);
             assert_eq!(shell.workspace.tab_of(new), Some(new));
             assert_eq!(shell.workspace.layout(session).leaf_ids(), [session]);
             assert_eq!(shell.error.as_deref(), Some(PANE_LIMIT_MESSAGE));
-            assert!(shell.session_summaries.contains_key(&new));
+            assert!(shell.has_session(new, cx));
         })
         .unwrap();
 }
@@ -2476,7 +2494,7 @@ fn pane_limit_rejected_chat_drop_keeps_attached_dirty_file(cx: &mut TestAppConte
     vorkspace_ui::clock::settle_animations(window, cx);
     window
         .update(cx, |shell, w, cx| {
-            let review = shell.reviews[&source].clone();
+            let review = shell.review.reviews[&source].clone();
             let editor = review.read(cx).active_editor().unwrap();
             let input = editor.read(cx).input.clone();
             input.update(cx, |input, cx| {
@@ -2488,12 +2506,12 @@ fn pane_limit_rejected_chat_drop_keeps_attached_dirty_file(cx: &mut TestAppConte
     vorkspace_ui::clock::settle_animations(window, cx);
     window
         .update(cx, |shell, w, cx| {
-            let review = shell.reviews[&source].clone();
+            let review = shell.review.reviews[&source].clone();
             let editor = review.read(cx).active_editor().unwrap();
             assert!(editor.read(cx).dirty);
             let before = shell.workspace.layout(target);
             assert!(!shell.placement_allowed(DragSource::Pane(source), target, Edge::Bottom));
-            shell.pane_drag = Some(PaneDrag {
+            shell.panes.drag = Some(PaneDrag {
                 source: DragSource::Pane(source),
                 start: gpui::point(px(0.), px(0.)),
                 position: gpui::point(px(0.), px(0.)),
@@ -2504,7 +2522,7 @@ fn pane_limit_rejected_chat_drop_keeps_attached_dirty_file(cx: &mut TestAppConte
             shell.finish_pane_drag(w, cx);
             assert_eq!(shell.workspace.layout(target), before);
             assert!(shell.workspace.review_owners.is_empty());
-            assert_eq!(shell.reviews[&source], review);
+            assert_eq!(shell.review.reviews[&source], review);
             assert_eq!(review.read(cx).active_editor().unwrap(), editor);
             assert!(editor.read(cx).dirty);
         })
@@ -2532,9 +2550,11 @@ fn pane_limit_overfull_layout_retains_and_reveals_all_panes(cx: &mut TestAppCont
             }
             let saved = serde_json::to_string(&shell.workspace).unwrap();
             let sessions = shell
-                .session_summaries
+                .directory
+                .read(cx)
+                .rows
                 .values()
-                .map(|s| (s.id, s.cwd.clone()))
+                .map(|row| (row.summary.id, row.summary.cwd.clone()))
                 .collect::<Vec<_>>();
             shell.workspace = Workspace::restore(Some(&saved), &sessions, "/work/vorkspace");
             cx.notify();
@@ -2549,14 +2569,14 @@ fn pane_limit_overfull_layout_retains_and_reveals_all_panes(cx: &mut TestAppCont
         .unwrap();
     visual.run_until_parked();
     let top_offset = window
-        .update(visual, |shell, _, _| shell.pane_scroll.offset().y)
+        .update(visual, |shell, _, _| shell.panes.scroll.offset().y)
         .unwrap();
     let down = visual.debug_bounds("pane-scroll-down").unwrap().center();
     visual.simulate_click(down, Default::default());
     visual.run_until_parked();
     window
         .update(visual, |shell, _, _| {
-            assert!(shell.pane_scroll.offset().y < top_offset)
+            assert!(shell.panes.scroll.offset().y < top_offset)
         })
         .unwrap();
     window
@@ -2567,7 +2587,7 @@ fn pane_limit_overfull_layout_retains_and_reveals_all_panes(cx: &mut TestAppCont
     visual.run_until_parked();
     window
         .update(visual, |shell, _, _| {
-            assert!(shell.pane_scroll.offset().y < top_offset);
+            assert!(shell.panes.scroll.offset().y < top_offset);
             assert_eq!(shell.workspace.layout(b).leaf_ids(), ids);
         })
         .unwrap();
@@ -2604,8 +2624,8 @@ fn pane_limit_width_changes_with_window_and_preserves_horizontal_overflow(cx: &m
     let geometry = window
         .update(visual, |shell, _, _| {
             (
-                shell.pane_viewport.get(),
-                shell.pane_bounds.get(),
+                shell.panes.viewport.get(),
+                shell.panes.bounds.get(),
                 shell.workspace.layout(b),
                 shell.workspace.active,
             )
@@ -2620,8 +2640,8 @@ fn pane_limit_width_changes_with_window_and_preserves_horizontal_overflow(cx: &m
         .update(visual, |shell, _, _| {
             assert_eq!(shell.workspace.layout(b), before);
             assert_eq!(shell.workspace.layout(b).leaf_ids(), [b, a]);
-            let viewport = shell.pane_viewport.get().unwrap().size.width.as_f32();
-            let canvas = shell.pane_bounds.get().unwrap().size.width.as_f32();
+            let viewport = shell.panes.viewport.get().unwrap().size.width.as_f32();
+            let canvas = shell.panes.bounds.get().unwrap().size.width.as_f32();
             assert!(
                 canvas > viewport,
                 "the other pane remains reachable by scrolling"
@@ -2641,7 +2661,7 @@ fn pane_limit_native_capture() {
     let output = std::path::PathBuf::from(std::env::var_os("VORKSPACE_PANE_CAPTURE_DIR").unwrap());
     assert!(output.is_absolute() && output.is_dir());
     let store = Arc::new(Mutex::new(
-        Store::open(std::path::Path::new(":memory:")).unwrap(),
+        Store::test(std::path::Path::new(":memory:")).unwrap(),
     ));
     let sessions: Vec<_> = (0..5)
             .map(|_| {
@@ -2738,13 +2758,47 @@ fn selected_file_reference_preserves_the_live_draft_and_requests_focus(cx: &mut 
 pub(super) fn window(cx: &mut TestAppContext) -> (WindowHandle<Shell>, i64, i64) {
     window_with_scale(cx, 100)
 }
+
+#[gpui::test]
+fn escape_closes_explorer_search_before_stopping_a_turn(cx: &mut TestAppContext) {
+    cx.update(bind_keys);
+    let (window, _, id) = window(cx);
+    let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+    window
+        .update(visual, |shell, window, cx| {
+            let chat = shell.sessions[&id].clone();
+            chat.update(cx, |chat, cx| {
+                chat.set_running_for_test(true);
+                window.focus(&chat.input.read(cx).focus_handle(cx), cx);
+                cx.notify();
+            });
+        })
+        .unwrap();
+    visual.simulate_keystrokes("cmd-shift-f");
+    visual.run_until_parked();
+    assert!(visual.debug_bounds("explorer-project-search").is_some());
+    window
+        .update(visual, |shell, window, cx| {
+            let input = &shell.sessions[&id].read(cx).input;
+            window.focus(&input.read(cx).focus_handle(cx), cx);
+        })
+        .unwrap();
+    visual.simulate_keystrokes("escape");
+    visual.run_until_parked();
+    assert!(visual.debug_bounds("explorer-project-search").is_none());
+    window
+        .update(visual, |shell, _, cx| {
+            assert!(shell.sessions[&id].read(cx).responding());
+        })
+        .unwrap();
+}
 pub(super) fn window_with_scale(
     cx: &mut TestAppContext,
     scale: u32,
 ) -> (WindowHandle<Shell>, i64, i64) {
-    let mut store = Store::open(std::path::Path::new(":memory:")).unwrap();
+    let mut store = Store::test(std::path::Path::new(":memory:")).unwrap();
     let mut a = store.create("codex", "/work/another-project").unwrap();
-    let b = store.create("claude", "/work/vorkspace").unwrap();
+    let mut b = store.create("claude", "/work/vorkspace").unwrap();
     store
         .write_rows(
             a.id,
@@ -2758,10 +2812,23 @@ pub(super) fn window_with_scale(
         )
         .unwrap();
     a.has_messages = true;
+    // Seed recency explicitly: two creations may share a millisecond, and
+    // UUID session IDs do not encode their insertion order.
+    let conn = rusqlite::Connection::open(store.database_path()).unwrap();
+    for (session, time) in [(&mut a, 1_000), (&mut b, 2_000)] {
+        session.updated_at = time;
+        conn.execute(
+            "UPDATE sessions SET updated_at=?2 WHERE id=?1",
+            rusqlite::params![
+                store.persisted_session_id(session.id).unwrap(),
+                i64::try_from(time).unwrap()
+            ],
+        )
+        .unwrap();
+    }
     let ids = (a.id, b.id);
     let mut state = Workspace::default();
     state.preferences.ui_scale = scale;
-    assert!(state.classic_layout);
     state.add_project("/work/another-project");
     state.add_project("/work/vorkspace");
     state.open(a.id);
@@ -2806,7 +2873,7 @@ fn compact_review_switches_surfaces_without_changing_the_draft_or_split(cx: &mut
                 w,
                 cx,
             );
-            shell.reviews[&id].read(cx).state.ratio
+            shell.review.reviews[&id].read(cx).state.ratio
         })
         .unwrap();
     vorkspace_ui::clock::settle_animations(window, visual);
@@ -2818,7 +2885,7 @@ fn compact_review_switches_surfaces_without_changing_the_draft_or_split(cx: &mut
     assert!(visual.debug_bounds("composer-box").unwrap().size.height > px(20.));
     window
         .update(visual, |shell, w, cx| {
-            assert!(!shell.review_focused);
+            assert!(!shell.review.focused);
             let input = shell.sessions[&id].read(cx).input.read(cx);
             assert_eq!(input.content, "Keep my draft");
             assert!(input.focus_handle(cx).is_focused(w));
@@ -2836,9 +2903,9 @@ fn compact_review_switches_surfaces_without_changing_the_draft_or_split(cx: &mut
     assert!(visual.debug_bounds("review-frame").is_some());
     window
         .update(visual, |shell, _, cx| {
-            assert!(shell.review_focused);
-            assert_eq!(shell.reviews[&id].read(cx).state.ratio, ratio);
-            assert!(!shell.reviews[&id].read(cx).state.chat_hidden);
+            assert!(shell.review.focused);
+            assert_eq!(shell.review.reviews[&id].read(cx).state.ratio, ratio);
+            assert!(!shell.review.reviews[&id].read(cx).state.chat_hidden);
         })
         .unwrap();
 }
@@ -2899,7 +2966,7 @@ fn tab_delete_confirms_and_targets_the_original_session(cx: &mut TestAppContext)
     cx.run_until_parked();
     window
         .update(cx, |shell, w, cx| {
-            assert!(shell.session_summaries.contains_key(&a));
+            assert!(shell.has_session(a, cx));
             shell.open(a, w, cx);
             shell.run_menu(MenuTarget::Tab(a), "delete", None, w, cx);
             shell.open(b, w, cx);
@@ -2910,9 +2977,9 @@ fn tab_delete_confirms_and_targets_the_original_session(cx: &mut TestAppContext)
     cx.simulate_prompt_answer("Delete");
     cx.run_until_parked();
     window
-        .update(cx, |shell, _, _| {
-            assert!(!shell.session_summaries.contains_key(&a));
-            assert!(shell.session_summaries.contains_key(&b));
+        .update(cx, |shell, _, cx| {
+            assert!(!shell.has_session(a, cx));
+            assert!(shell.has_session(b, cx));
             assert!(
                 !locked(&shell.store)
                     .unwrap()
@@ -2939,7 +3006,8 @@ fn sidebar_and_review_surfaces_keep_their_width_during_motion(cx: &mut TestAppCo
         window
             .update(cx, |shell, _, cx| {
                 shell
-                    .sidebar_slide
+                    .sidebar
+                    .slide
                     .as_ref()
                     .unwrap()
                     .freeze_elapsed(Duration::from_millis(ms));
@@ -2964,7 +3032,8 @@ fn sidebar_and_review_surfaces_keep_their_width_during_motion(cx: &mut TestAppCo
     window
         .update(cx, |shell, w, cx| {
             shell
-                .sidebar_slide
+                .sidebar
+                .slide
                 .as_ref()
                 .unwrap()
                 .elapsed(Duration::from_secs(1));
@@ -2979,7 +3048,8 @@ fn sidebar_and_review_surfaces_keep_their_width_during_motion(cx: &mut TestAppCo
                 cx,
             );
             shell
-                .review_slide
+                .review
+                .slide
                 .as_ref()
                 .unwrap()
                 .1
@@ -2996,7 +3066,8 @@ fn sidebar_and_review_surfaces_keep_their_width_during_motion(cx: &mut TestAppCo
         window
             .update(cx, |shell, _, cx| {
                 shell
-                    .review_slide
+                    .review
+                    .slide
                     .as_ref()
                     .unwrap()
                     .1
@@ -3020,10 +3091,10 @@ fn sidebar_and_review_surfaces_keep_their_width_during_motion(cx: &mut TestAppCo
     window
         .update(cx, |shell, _, _| {
             let late = Duration::from_secs(2);
-            if let Some(slide) = &shell.sidebar_slide {
+            if let Some(slide) = &shell.sidebar.slide {
                 slide.elapsed(late);
             }
-            if let Some((_, slide, _)) = &shell.review_slide {
+            if let Some((_, slide, _)) = &shell.review.slide {
                 slide.elapsed(late);
             }
         })
@@ -3035,8 +3106,8 @@ fn sidebar_and_review_surfaces_keep_their_width_during_motion(cx: &mut TestAppCo
     .unwrap();
     window
         .update(cx, |shell, _, _| {
-            assert!(shell.sidebar_slide.is_none());
-            assert!(shell.review_slide.is_none());
+            assert!(shell.sidebar.slide.is_none());
+            assert!(shell.review.slide.is_none());
         })
         .unwrap();
 }
@@ -3080,11 +3151,11 @@ fn pane_motion_frame_cost_with_long_history(cx: &mut TestAppContext) {
             .unwrap();
         for frame in 1..=40 {
             let root = window.root(cx).unwrap();
-            let before = root.read_with(cx, |shell, _| shell.render_passes);
+            let before = root.read_with(cx, |shell, _| shell.window.render_passes);
             let start = Instant::now();
             window
                 .update(cx, |shell, window, cx| {
-                    if let Some(slide) = &shell.sidebar_slide {
+                    if let Some(slide) = &shell.sidebar.slide {
                         slide.freeze_elapsed(Duration::from_secs_f32(frame as f32 / 120.));
                     }
                     // Deliver animation invalidations before drawing. Doing
@@ -3094,13 +3165,13 @@ fn pane_motion_frame_cost_with_long_history(cx: &mut TestAppContext) {
                     cx.notify();
                 })
                 .unwrap();
-            if root.read_with(cx, |shell, _| shell.render_passes) == before {
+            if root.read_with(cx, |shell, _| shell.window.render_passes) == before {
                 cx.update_window(window.into(), |_, window, cx| {
                     window.draw(cx).clear(cx);
                 })
                 .unwrap();
             }
-            let rendered = root.read_with(cx, |shell, _| shell.render_passes) - before;
+            let rendered = root.read_with(cx, |shell, _| shell.window.render_passes) - before;
             // The workspace sidebar keeps the current composer focus.
             // Each controlled animation sample must draw exactly once,
             // including the frame that completes the transition.
@@ -3159,7 +3230,7 @@ fn explorer_files_share_the_review_pane_and_dirty_close_can_cancel_or_save(
     vorkspace_ui::clock::settle_animations(window, cx);
     window
         .update(cx, |shell, w, cx| {
-            let pane = shell.reviews[&id].clone();
+            let pane = shell.review.reviews[&id].clone();
             pane.update(cx, |pane, cx| {
                 pane.navigate_file(1, 4, cx);
                 let editor = pane.active_editor().unwrap();
@@ -3194,7 +3265,7 @@ fn explorer_files_share_the_review_pane_and_dirty_close_can_cancel_or_save(
     window
         .update(cx, |shell, _, cx| {
             assert!(shell.unsaved_files(cx));
-            shell.reviews[&id].update(cx, |pane, cx| pane.close_active(cx));
+            shell.review.reviews[&id].update(cx, |pane, cx| pane.close_active(cx));
         })
         .unwrap();
     cx.refresh().unwrap();
@@ -3203,9 +3274,9 @@ fn explorer_files_share_the_review_pane_and_dirty_close_can_cancel_or_save(
     cx.run_until_parked();
     window
         .update(cx, |shell, _, cx| {
-            assert_eq!(shell.reviews[&id].read(cx).state.tabs.len(), 1);
+            assert_eq!(shell.review.reviews[&id].read(cx).state.tabs.len(), 1);
             assert!(shell.unsaved_files(cx));
-            shell.reviews[&id].update(cx, |pane, cx| pane.close_active(cx));
+            shell.review.reviews[&id].update(cx, |pane, cx| pane.close_active(cx));
         })
         .unwrap();
     cx.refresh().unwrap();
@@ -3214,11 +3285,111 @@ fn explorer_files_share_the_review_pane_and_dirty_close_can_cancel_or_save(
     assert!(std::fs::read_to_string(&path).unwrap().contains(" edited"));
     window
         .update(cx, |shell, _, cx| {
-            assert!(!shell.reviews.contains_key(&id));
+            assert!(!shell.review.reviews.contains_key(&id));
             assert!(!shell.unsaved_files(cx));
         })
         .unwrap();
     std::fs::remove_file(path).unwrap();
+}
+
+#[gpui::test]
+fn native_workspace_menu_retains_its_root_fallback_for_a_retired_focus(cx: &mut TestAppContext) {
+    cx.update(crate::app_menu::init);
+    let (window, _, _) = window(cx);
+    let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+    visual.run_until_parked();
+    let before = window
+        .read_with(visual, |shell, _| shell.workspace.sidebar_visible)
+        .unwrap();
+    visual.deactivate_window();
+    let retired = window
+        .update(visual, |shell, window, cx| {
+            let retired = cx.focus_handle();
+            window.focus(&retired, cx);
+            assert!(!window.is_action_available_in(&ToggleRightPanel, &retired));
+            assert!(window.is_action_available_in(&ToggleRightPanel, &shell.menu_focus()));
+            retired
+        })
+        .unwrap();
+    visual.cx.update(|cx| cx.dispatch_action(&ToggleRightPanel));
+    visual.run_until_parked();
+    assert_eq!(
+        window
+            .read_with(visual, |shell, _| shell.workspace.sidebar_visible)
+            .unwrap(),
+        !before
+    );
+    drop(retired);
+}
+
+#[gpui::test]
+fn native_editor_menu_uses_retained_focus_and_respects_a_management_modal(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        vorkspace_ui::clock::use_test_clock(cx);
+        crate::app_menu::init(cx);
+    });
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("menu.json");
+    let source = "{\"emoji\":\"🙂\",\"items\":[1,2]}";
+    std::fs::write(&path, source).unwrap();
+    let (window, _, id) = window(cx);
+    let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
+    window
+        .update(visual, |shell, window, cx| {
+            shell.open(id, window, cx);
+            shell.open_review(
+                crate::git_tools::review::ReviewTab::File {
+                    cwd: directory.path().to_string_lossy().into_owned(),
+                    path: path.to_string_lossy().into_owned(),
+                },
+                window,
+                cx,
+            );
+        })
+        .unwrap();
+    visual.run_until_parked();
+    vorkspace_ui::clock::settle_animations(window, visual);
+    let editor = window
+        .update(visual, |shell, window, cx| {
+            let editor = shell.review.reviews[&id].read(cx).active_editor().unwrap();
+            let input = &editor.read(cx).input;
+            assert_eq!(input.read(cx).content.as_ref(), source);
+            let focus = input.read(cx).focus_handle(cx);
+            assert!(window.is_action_available_in(&crate::file_tools::file_editor::Format, &focus));
+            window.focus(&focus, cx);
+            editor
+        })
+        .unwrap();
+    visual.deactivate_window();
+    visual.cx.update(|cx| {
+        assert!(cx.active_window().is_none());
+        cx.dispatch_action(&crate::file_tools::file_editor::Format);
+    });
+    visual.run_until_parked();
+    editor.read_with(visual, |editor, cx| {
+        assert_eq!(
+            editor.input.read(cx).content.as_ref(),
+            "{ \"emoji\": \"🙂\", \"items\": [1, 2] }\n"
+        );
+    });
+    window
+        .update(visual, |shell, window, cx| {
+            let input = editor.read(cx).input.clone();
+            input.update(cx, |input, cx| input.set_text(source.into(), cx));
+            shell.open_vorkspace_dialog(None, window, cx);
+            assert!(shell.management_modal_focus(cx).is_some());
+        })
+        .unwrap();
+    visual.run_until_parked();
+    visual.deactivate_window();
+    visual
+        .cx
+        .update(|cx| cx.dispatch_action(&crate::file_tools::file_editor::Format));
+    visual.run_until_parked();
+    editor.read_with(visual, |editor, cx| {
+        assert_eq!(editor.input.read(cx).content.as_ref(), source)
+    });
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), source);
 }
 
 #[gpui::test]
@@ -3335,7 +3506,7 @@ fn panes_split_resize_and_take_drops_from_panes_tabs_and_the_sidebar(cx: &mut Te
     cx.simulate_mouse_move(below, MouseButton::Left, Modifiers::default());
     window
         .update(cx, |shell, _, _| {
-            let drag = shell.pane_drag.as_ref().unwrap();
+            let drag = shell.panes.drag.as_ref().unwrap();
             assert_eq!(drag.over, Some((new, Edge::Bottom)));
         })
         .unwrap();
@@ -3347,7 +3518,7 @@ fn panes_split_resize_and_take_drops_from_panes_tabs_and_the_sidebar(cx: &mut Te
             assert_eq!(shell.workspace.tabs, [b]);
             assert_eq!(shell.workspace.layout(b).leaf_ids(), [b, new, a]);
             assert_eq!(shell.workspace.active, Some(a));
-            assert!(shell.pane_drag.is_none());
+            assert!(shell.panes.drag.is_none());
         })
         .unwrap();
     cx.refresh().unwrap();
@@ -3397,7 +3568,7 @@ fn panes_split_resize_and_take_drops_from_panes_tabs_and_the_sidebar(cx: &mut Te
                 first_mouse: false,
             };
             shell.start_tab_drag(TitleTab::Workspace(b), &event, cx);
-            assert!(shell.tab_drag.is_some());
+            assert!(shell.tabs.drag.is_some());
         })
         .unwrap();
     cx.simulate_mouse_move(
@@ -3406,7 +3577,7 @@ fn panes_split_resize_and_take_drops_from_panes_tabs_and_the_sidebar(cx: &mut Te
         Modifiers::default(),
     );
     window
-        .update(cx, |shell, _, _| assert!(shell.tab_drag.is_none()))
+        .update(cx, |shell, _, _| assert!(shell.tabs.drag.is_none()))
         .unwrap();
     // A title tab pulled down onto a pane's left half moves in beside it.
     // This successful drop needs enough room for all three panes.
@@ -3442,10 +3613,10 @@ fn panes_split_resize_and_take_drops_from_panes_tabs_and_the_sidebar(cx: &mut Te
     );
     window
         .update(cx, |shell, _, _| {
-            let drag = shell.tab_drag.as_ref().unwrap();
+            let drag = shell.tabs.drag.as_ref().unwrap();
             assert!(drag.armed);
             assert_eq!((drag.offset, drag.to), (px(0.), drag.from));
-            assert!(shell.pane_drag.is_some());
+            assert!(shell.panes.drag.is_some());
         })
         .unwrap();
     cx.simulate_mouse_move(left_half, MouseButton::Left, Modifiers::default());
@@ -3488,7 +3659,8 @@ fn a_split_pane_slides_in_from_its_edge_then_settles(cx: &mut TestAppContext) {
     window
         .update(cx, |shell, _, _| {
             shell
-                .pane_motion
+                .panes
+                .motion
                 .as_ref()
                 .unwrap()
                 .slide
@@ -3500,7 +3672,7 @@ fn a_split_pane_slides_in_from_its_edge_then_settles(cx: &mut TestAppContext) {
     let new = window
         .update(cx, |shell, _, _| {
             let new = shell.workspace.active.unwrap();
-            let motion = shell.pane_motion.as_ref().expect("the split animates");
+            let motion = shell.panes.motion.as_ref().expect("the split animates");
             assert_eq!(motion.entering.get(&new), Some(&Edge::Right));
             assert_eq!(motion.from[&b].w, 1.);
             new
@@ -3520,7 +3692,8 @@ fn a_split_pane_slides_in_from_its_edge_then_settles(cx: &mut TestAppContext) {
     window
         .update(cx, |shell, _, cx| {
             shell
-                .pane_motion
+                .panes
+                .motion
                 .as_ref()
                 .unwrap()
                 .slide
@@ -3531,7 +3704,7 @@ fn a_split_pane_slides_in_from_its_edge_then_settles(cx: &mut TestAppContext) {
     cx.refresh().unwrap();
     cx.run_until_parked();
     window
-        .update(cx, |shell, _, _| assert!(shell.pane_motion.is_none()))
+        .update(cx, |shell, _, _| assert!(shell.panes.motion.is_none()))
         .unwrap();
     let entering = cx
         .debug_bounds(Box::leak(format!("pane-{new}").into_boxed_str()))
@@ -3563,7 +3736,7 @@ fn a_closed_pane_slides_out_to_its_edge_while_its_neighbour_grows(cx: &mut TestA
         .update(cx, |shell, w, cx| {
             let new = shell.workspace.active.unwrap();
             shell.close_pane(new, w, cx);
-            let motion = shell.pane_motion.as_ref().expect("closing animates");
+            let motion = shell.panes.motion.as_ref().expect("closing animates");
             assert_eq!(motion.header, Some(false));
             assert_eq!(motion.leaving.len(), 1);
             assert_eq!(
@@ -3584,7 +3757,7 @@ fn a_closed_pane_slides_out_to_its_edge_while_its_neighbour_grows(cx: &mut TestA
         .update(cx, |shell, _, _| {
             // Midway it has slid half its width toward the right edge,
             // and the lone pane has grown over the same distance.
-            let motion = shell.pane_motion.as_ref().unwrap();
+            let motion = shell.panes.motion.as_ref().unwrap();
             let (leaf, _, to) = motion.leaving[0];
             let mid = leaf.rect.lerp(to, 0.5);
             let grown = motion.from[&b].lerp(Rect::FULL, 0.5);
@@ -3594,7 +3767,7 @@ fn a_closed_pane_slides_out_to_its_edge_while_its_neighbour_grows(cx: &mut TestA
         .unwrap();
     window
         .update(cx, |shell, _, cx| {
-            let motion = shell.pane_motion.as_ref().unwrap();
+            let motion = shell.panes.motion.as_ref().unwrap();
             motion.slide.elapsed(std::time::Duration::from_secs(1));
             cx.notify();
         })
@@ -3602,7 +3775,7 @@ fn a_closed_pane_slides_out_to_its_edge_while_its_neighbour_grows(cx: &mut TestA
     cx.refresh().unwrap();
     cx.run_until_parked();
     window
-        .update(cx, |shell, _, _| assert!(shell.pane_motion.is_none()))
+        .update(cx, |shell, _, _| assert!(shell.panes.motion.is_none()))
         .unwrap();
     assert!(
         cx.debug_bounds(Box::leak(format!("pane-{new}").into_boxed_str()))
@@ -3665,14 +3838,16 @@ fn assert_closed_header_stays_hidden(cx: &mut TestAppContext, file: bool) {
             root.update(cx, |shell, _| {
                 if file {
                     shell
-                        .review_slide
+                        .review
+                        .slide
                         .as_ref()
                         .unwrap()
                         .1
                         .elapsed(Duration::from_secs(1));
                 } else {
                     shell
-                        .pane_motion
+                        .panes
+                        .motion
                         .as_ref()
                         .unwrap()
                         .slide
@@ -3731,7 +3906,7 @@ fn reordered_tabs_slide_into_place_instead_of_jumping(cx: &mut TestAppContext) {
     window
         .update(cx, |shell, _, _| {
             // The neighbour makes room by easing toward the vacated slot.
-            let shift = shell.tab_shifts[&TitleTab::Workspace(b)];
+            let shift = shell.tabs.shifts[&TitleTab::Workspace(b)];
             assert_eq!(shift.to, -slot);
             assert!(shift.at(shift.start).0 == 0.);
             let (later, _) = shift.at(shift.start + std::time::Duration::from_millis(80));
@@ -3748,7 +3923,7 @@ fn reordered_tabs_slide_into_place_instead_of_jumping(cx: &mut TestAppContext) {
             assert_eq!(shell.workspace.tabs, [b, a]);
             // Released short of its slot, the tab glides the rest of
             // the way rather than snapping there.
-            let shift = shell.tab_shifts[&TitleTab::Workspace(a)];
+            let shift = shell.tabs.shifts[&TitleTab::Workspace(a)];
             assert!((shift.from - (-slot * 0.2)).abs() < 2., "{}", shift.from);
             assert_eq!(shift.to, 0.);
             let end = shift.start + std::time::Duration::from_millis(200);
@@ -3783,7 +3958,7 @@ fn the_terminal_dock_toggles_adds_closes_and_moves(cx: &mut TestAppContext) {
             let dock = &shell.workspace.docks[&project];
             assert!(dock.open);
             assert_eq!(dock.terminals.as_slice(), std::slice::from_ref(&project));
-            assert_eq!(shell.terminals[&project].len(), 1);
+            assert_eq!(shell.dock.terminals[&project].len(), 1);
             // The new terminal has the keys.
             assert_eq!(shell.dock_focused(w, cx), Some(0));
             project
@@ -3813,7 +3988,7 @@ fn the_terminal_dock_toggles_adds_closes_and_moves(cx: &mut TestAppContext) {
         .update(cx, |shell, _, _| {
             assert_eq!(shell.workspace.tabs.len(), tabs);
             assert_eq!(shell.workspace.docks[&project].terminals.len(), 1);
-            assert_eq!(shell.terminals[&project].len(), 1);
+            assert_eq!(shell.dock.terminals[&project].len(), 1);
         })
         .unwrap();
     // Docked right, it takes width: a narrow window gives up its sidebar.
@@ -3870,7 +4045,7 @@ fn closing_the_last_review_tab_removes_the_pane(cx: &mut TestAppContext) {
     cx.run_until_parked();
     window
         .update(cx, |shell, _, cx| {
-            assert!(shell.reviews.contains_key(&b));
+            assert!(shell.review.reviews.contains_key(&b));
             assert_eq!(shell.workspace.reviews[&b].tabs.len(), 1);
             // A chat with a file beside it: the chat's line, then the
             // file's, which heads the tab while it has focus.
@@ -3879,19 +4054,19 @@ fn closing_the_last_review_tab_removes_the_pane(cx: &mut TestAppContext) {
             assert_eq!(copy.headline, label);
             let keys: Vec<_> = copy.panes.iter().map(|p| p.key).collect();
             assert_eq!((keys, copy.focus), (vec![(b, false), (b, true)], 1));
-            shell.review_focused = false;
+            shell.review.focused = false;
             shell.sessions[&b].update(cx, |s, _| s.summary.title = "Fix login".into());
             let copy = shell.tab_copy(b, cx);
             assert_eq!(copy.headline, "Fix login");
             assert_eq!((copy.panes[0].title.as_str(), copy.focus), ("Fix login", 0));
-            let review = shell.reviews[&b].clone();
+            let review = shell.review.reviews[&b].clone();
             review.update(cx, |r, cx| r.close_active(cx));
         })
         .unwrap();
     cx.run_until_parked();
     window
         .update(cx, |shell, _, cx| {
-            assert!(!shell.reviews.contains_key(&b));
+            assert!(!shell.review.reviews.contains_key(&b));
             assert!(!shell.workspace.reviews.contains_key(&b));
             // Rendering again never rebuilds an empty pane.
             assert!(shell.review_for(b, cx).is_none());
@@ -3900,7 +4075,9 @@ fn closing_the_last_review_tab_removes_the_pane(cx: &mut TestAppContext) {
     cx.refresh().unwrap();
     cx.run_until_parked();
     window
-        .update(cx, |shell, _, _| assert!(!shell.reviews.contains_key(&b)))
+        .update(cx, |shell, _, _| {
+            assert!(!shell.review.reviews.contains_key(&b))
+        })
         .unwrap();
 }
 #[gpui::test]
@@ -3909,7 +4086,7 @@ fn closing_and_reopening_tabs_preserves_busy_session_draft_and_history(cx: &mut 
     window
         .update(cx, |shell, w, cx| {
             shell.sessions[&b].update(cx, |v, cx| {
-                v.busy = true;
+                v.set_running_for_test(true);
                 v.input.update(cx, |i, cx| {
                     i.replace_text_in_range(None, "A retained draft 🙂", w, cx)
                 });
@@ -3917,7 +4094,7 @@ fn closing_and_reopening_tabs_preserves_busy_session_draft_and_history(cx: &mut 
             shell.close(b, w, cx);
             assert_eq!(shell.workspace.active, None);
             assert_eq!(shell.workspace.project, "/work/vorkspace");
-            assert!(shell.sessions[&b].read(cx).busy);
+            assert!(shell.sessions[&b].read(cx).responding());
             shell.open(a, w, cx);
             shell.open(b, w, cx);
             assert_eq!(shell.workspace.active, Some(b));
@@ -3954,7 +4131,7 @@ fn closing_and_reopening_tabs_preserves_busy_session_draft_and_history(cx: &mut 
         .unwrap();
 }
 #[gpui::test]
-fn typing_and_streaming_do_not_rebuild_sidebar_or_tabs(cx: &mut TestAppContext) {
+fn chat_edits_and_catalog_refreshes_do_not_rebuild_sidebar_or_tabs(cx: &mut TestAppContext) {
     let (window, _, b) = window(cx);
     let root = window.root(cx).unwrap();
     let chrome = root.read_with(cx, |s, _| (s.sidebar_frame.clone(), s.tabs_frame.clone()));
@@ -3984,6 +4161,8 @@ fn typing_and_streaming_do_not_rebuild_sidebar_or_tabs(cx: &mut TestAppContext) 
                         cx,
                     )
                 });
+                cx.emit(SessionChanged::Configuration);
+                cx.emit(SessionChanged::History);
                 cx.notify();
             })
         })

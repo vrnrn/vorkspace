@@ -23,6 +23,81 @@ impl SettingsView {
         if self.ctx.cwd.is_empty() {
             rows.push(note("Open a project to see its archived conversations."));
         }
+        self.archived_session_rows(&mut rows, cx);
+        let title = if self.ctx.cwd.is_empty() {
+            "Archived conversations".into()
+        } else {
+            format!("Archived in {}", self.ctx.project_label)
+        };
+        let projects = self.archived_project_rows(cx);
+        // Empty sections collapse into one explanation instead of a card per
+        // kind that each say there is nothing in it.
+        let mut page = Vec::new();
+        if projects.is_empty() && self.ctx.archived.is_empty() {
+            page.push(
+                super::super::widgets::empty_card(
+                    "archive",
+                    "Nothing archived",
+                    "Archived projects and conversations wait here until you restore them.",
+                )
+                .into_any_element(),
+            );
+        } else if !projects.is_empty() {
+            page.push(self.group(
+                None,
+                true,
+                "Archived projects",
+                Some("Archived projects keep their conversations and files.".into()),
+                None,
+                projects,
+            ));
+        }
+        page.push(self.group(None, false, SharedString::from(title), None, None, rows));
+        page
+    }
+
+    fn archived_project_rows(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let mut projects = Vec::new();
+        for path in &self.ctx.archived_projects {
+            let path = path.clone();
+            let restore = path.clone();
+            projects.push(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_3()
+                    .border_t_1()
+                    .border_color(content(0.05))
+                    .px_4()
+                    .py(px(10.))
+                    .child(
+                        div()
+                            .min_w_0()
+                            .flex_1()
+                            .text_size(px(13.))
+                            .child(path.clone()),
+                    )
+                    .child(
+                        secondary_button(
+                            SharedString::from(format!("restore-project-{path}")),
+                            "Restore project",
+                            false,
+                            false,
+                        )
+                        .debug_selector(move || format!("restore-project-{path}"))
+                        .child("Restore")
+                        .on_click(cx.listener(move |_, _, _, cx| {
+                            cx.emit(SettingsEvent::RestoreProject(restore.clone()))
+                        })),
+                    )
+                    .into_any_element(),
+            );
+        }
+
+        projects
+    }
+
+    fn archived_session_rows(&self, rows: &mut Vec<AnyElement>, cx: &mut Context<Self>) {
         for session in &self.ctx.archived {
             let id = session.id;
             let date = chrono::DateTime::from_timestamp_millis(
@@ -89,70 +164,5 @@ impl SettingsView {
                     .into_any_element(),
             );
         }
-        let title = if self.ctx.cwd.is_empty() {
-            "Archived conversations".into()
-        } else {
-            format!("Archived in {}", self.ctx.project_label)
-        };
-        let mut projects = Vec::new();
-        for path in &self.ctx.archived_projects {
-            let path = path.clone();
-            let restore = path.clone();
-            projects.push(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_3()
-                    .border_t_1()
-                    .border_color(content(0.05))
-                    .px_4()
-                    .py(px(10.))
-                    .child(
-                        div()
-                            .min_w_0()
-                            .flex_1()
-                            .text_size(px(13.))
-                            .child(path.clone()),
-                    )
-                    .child(
-                        secondary_button(
-                            SharedString::from(format!("restore-project-{path}")),
-                            "Restore project",
-                            false,
-                            false,
-                        )
-                        .debug_selector(move || format!("restore-project-{path}"))
-                        .child("Restore")
-                        .on_click(cx.listener(move |_, _, _, cx| {
-                            cx.emit(SettingsEvent::RestoreProject(restore.clone()))
-                        })),
-                    )
-                    .into_any_element(),
-            );
-        }
-        // Empty sections collapse into one explanation instead of a card per
-        // kind that each say there is nothing in it.
-        let mut page = Vec::new();
-        if projects.is_empty() && self.ctx.archived.is_empty() {
-            page.push(
-                super::super::widgets::empty_card(
-                    "archive",
-                    "Nothing archived",
-                    "Archived projects and conversations wait here until you restore them.",
-                )
-                .into_any_element(),
-            );
-        } else if !projects.is_empty() {
-            page.push(self.group(
-                None,
-                true,
-                "Archived projects",
-                Some("Archived projects keep their conversations and files.".into()),
-                None,
-                projects,
-            ));
-        }
-        page.push(self.group(None, false, SharedString::from(title), None, None, rows));
-        page
     }
 }

@@ -1,8 +1,62 @@
 use super::*;
 use vorkspace_core::follow_up::{Message, State};
 
+#[test]
+fn an_ordinary_context_flush_preserves_an_independently_replaced_thread() {
+    {
+        for source_thread in [None, Some("admitted-thread")] {
+            let directory = tempfile::tempdir().unwrap();
+            let path = directory.path().join("context.db");
+            let open = { Store::test };
+            let owner = open(&path).unwrap();
+            let id = owner.create("codex", "/fixture").unwrap().id;
+            owner
+                .save_agent_preferences(id, &Settings::default())
+                .unwrap();
+            if let Some(thread) = source_thread {
+                owner.provider_id(id, thread).unwrap();
+            }
+            let peer = open(&path).unwrap();
+            let database = Arc::new(Mutex::new(owner));
+            let now = Instant::now();
+            let mut pending = PendingSave::new(now);
+            pending.own_context("codex", vorkspace_core::accounts::DEFAULT, source_thread);
+            let current = vorkspace_core::context::Usage {
+                used: 8000,
+                window: Some(10000),
+            };
+            let stale = vorkspace_core::context::Usage {
+                used: 9000,
+                window: Some(10000),
+            };
+            peer.provider_id(id, "replacement-thread").unwrap();
+            peer.save_context_usage(id, &current).unwrap();
+            pending.context_changed();
+            pending
+                .flush(&database, id, &Transcript::default(), &stale, now)
+                .unwrap();
+            assert_eq!(peer.context_usage(id).unwrap(), Some(current));
+
+            pending.own_context_thread(Some("superseded-observation"));
+            pending.context_changed();
+            pending
+                .flush(&database, id, &Transcript::default(), &stale, now)
+                .unwrap();
+            assert_eq!(peer.context_usage(id).unwrap(), Some(current));
+
+            peer.provider_id(id, "current-observation").unwrap();
+            pending.own_context_thread(Some("current-observation"));
+            pending.context_changed();
+            pending
+                .flush(&database, id, &Transcript::default(), &stale, now)
+                .unwrap();
+            assert_eq!(peer.context_usage(id).unwrap(), Some(stale));
+        }
+    }
+}
+
 fn conversation() -> (Database, i64, Transcript) {
-    let mut store = Store::open_vorkspace(std::path::Path::new(":memory:")).unwrap();
+    let mut store = Store::test(std::path::Path::new(":memory:")).unwrap();
     let session = store.create("codex", "/project").unwrap();
     let mut transcript = Transcript::default();
     transcript.begin("user");
@@ -16,7 +70,7 @@ fn conversation() -> (Database, i64, Transcript) {
 fn token_batches_coalesce_but_final_stop_flush_preserves_all_pending_rows() {
     let (store, id, mut transcript) = conversation();
     let now = Instant::now();
-    let mut pending = PendingSave::new(true, now);
+    let mut pending = PendingSave::new(now);
     for text in ["One ", "two ", "three"] {
         pending.changed(transcript.append(text));
     }
@@ -59,7 +113,7 @@ fn accepted_queue_message_flushes_prior_tokens_and_its_receipt_atomically() {
         )
         .unwrap();
     let now = Instant::now();
-    let mut pending = PendingSave::new(true, now);
+    let mut pending = PendingSave::new(now);
     pending.changed(transcript.append("Still streaming"));
     let from = transcript.begin("user");
     transcript.append("Next");
@@ -78,14 +132,6 @@ fn accepted_queue_message_flushes_prior_tokens_and_its_receipt_atomically() {
 }
 
 #[test]
-fn legacy_row_store_keeps_incremental_save_behavior() {
-    let now = Instant::now();
-    let mut pending = PendingSave::new(false, now);
-    pending.changed(0);
-    assert!(pending.due(false, now));
-}
-
-#[test]
 fn settled_turn_receipt_persists_without_a_view_and_keeps_newer_picker_settings() {
     let (store, id, transcript) = conversation();
     let mut settings = locked(&store).unwrap().agent_settings(id).unwrap().unwrap();
@@ -96,26 +142,28 @@ fn settled_turn_receipt_persists_without_a_view_and_keeps_newer_picker_settings(
         .save_agent_settings(id, &settings)
         .unwrap();
     let started_at = transcript.rows[0].sent_at.unwrap();
-    save_turn_receipt(
-        &store,
-        id,
-        1,
-        vorkspace_core::agent::TurnInfo {
-            provider: "codex".into(),
-            model: "Turn Model".into(),
-            model_id: Some("turn-model".into()),
-            provider_turn_id: Some("turn-id".into()),
-            started_at: Some(started_at),
-            duration_ms: 9000,
-            duration_known: true,
-            completed_at: Some(started_at + 9000),
-            metrics: Some(vorkspace_core::agent::TurnMetrics {
-                output_tokens: 5,
-                ..Default::default()
-            }),
-        },
-    )
-    .unwrap();
+    locked(&store)
+        .unwrap()
+        .save_turn_info(
+            id,
+            1,
+            vorkspace_core::agent::TurnInfo {
+                provider: "codex".into(),
+                model: "Turn Model".into(),
+                model_id: Some("turn-model".into()),
+                provider_turn_id: Some("turn-id".into()),
+                started_at: Some(started_at),
+                duration_ms: 9000,
+                duration_known: true,
+                completed_at: Some(started_at + 9000),
+                metrics: Some(vorkspace_core::agent::TurnMetrics {
+                    output_tokens: 5,
+                    ..Default::default()
+                }),
+            },
+            None,
+        )
+        .unwrap();
     let store = locked(&store).unwrap();
     let saved = store.agent_settings(id).unwrap().unwrap();
     assert_eq!(saved.revision, 42);
@@ -134,6 +182,7 @@ fn cancelled_initial_delivery_replays_accepted_rows_in_the_final_update() {
     let (_control, controls) = std::sync::mpsc::channel();
     run_turn_using(
         TurnInput {
+            composer_origin: None,
             summary,
             prompt: "Accepted before stopping".into(),
             settings: Settings::default(),
@@ -145,14 +194,17 @@ fn cancelled_initial_delivery_replays_accepted_rows_in_the_final_update() {
         |_| None, // No real CLI lookup or launch, even if cancellation regresses.
     );
     let result = rx.try_recv().unwrap();
-    assert!(result.finished);
+    assert!(result.finished());
     assert_eq!(result.status, "Ready");
-    assert_eq!(result.start, history.rows.len());
-    assert_eq!(result.rows.len(), 2);
-    assert_eq!(result.rows[0].text, "Accepted before stopping");
-    assert_eq!(result.rows[1].role, "assistant");
+    let TranscriptPatch::Tail { start, rows } = result.transcript else {
+        panic!("the final update must replay the accepted tail");
+    };
+    assert_eq!(start, history.rows.len());
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0].text, "Accepted before stopping");
+    assert_eq!(rows[1].role, "assistant");
     let mut visible = history.rows;
-    visible.extend(result.rows);
+    visible.extend(rows);
     assert_eq!(visible, locked(&store).unwrap().load(id).unwrap().rows);
     assert!(rx.try_recv().is_err());
 }
@@ -164,12 +216,15 @@ fn rejected_preflight_preserves_existing_history_without_a_provider_launch() {
     let (tx, rx) = async_channel::bounded(2);
     let (_control, controls) = std::sync::mpsc::channel();
     run_turn(
-        summary,
-        "Unsent".into(),
-        Settings {
-            worktree_removed: true,
-            bot_message_id: Some("not-accepted".into()),
-            ..Default::default()
+        TurnInput {
+            summary,
+            prompt: "Unsent".into(),
+            settings: Settings {
+                worktree_removed: true,
+                bot_message_id: Some("not-accepted".into()),
+                ..Default::default()
+            },
+            composer_origin: None,
         },
         controls,
         store.clone(),
@@ -177,9 +232,9 @@ fn rejected_preflight_preserves_existing_history_without_a_provider_launch() {
         tx,
     );
     let result = rx.try_recv().unwrap();
-    assert!(result.finished);
+    assert!(result.finished());
     assert!(result.status.contains("worktree"));
-    assert!(result.rows.is_empty());
+    assert!(matches!(result.transcript, TranscriptPatch::Unchanged));
     assert!(
         result.delivered.is_none(),
         "Rejected messages must stay queued"
@@ -222,7 +277,7 @@ fn worktree_creation_follows_message_acceptance_and_reports_the_checkout_in_the_
             String::from_utf8_lossy(&result.stderr)
         );
     }
-    let store = Store::open(std::path::Path::new(":memory:")).unwrap();
+    let store = Store::test(std::path::Path::new(":memory:")).unwrap();
     let summary = store.create("codex", repo.to_str().unwrap()).unwrap();
     let id = summary.id;
     let store = Arc::new(Mutex::new(store));
@@ -230,6 +285,7 @@ fn worktree_creation_follows_message_acceptance_and_reports_the_checkout_in_the_
     let (_control, controls) = std::sync::mpsc::channel();
     run_turn_using(
         TurnInput {
+            composer_origin: None,
             summary,
             prompt: "Create the checkout".into(),
             settings: Settings {
@@ -244,15 +300,15 @@ fn worktree_creation_follows_message_acceptance_and_reports_the_checkout_in_the_
         |_| None, // No real CLI lookup or launch, even if cancellation regresses.
     );
     let first = rx.try_recv().unwrap();
-    assert!(!first.finished);
+    assert!(!first.finished());
     assert_eq!(first.status, "Creating worktree…");
-    assert_eq!(first.rows[0].text, "Create the checkout");
+    assert_eq!(first.transcript.rows()[0].text, "Create the checkout");
     assert!(first.worktree_cwd.is_none());
     let created = rx.try_recv().unwrap();
     let cwd = created.worktree_cwd.unwrap();
     assert!(std::path::Path::new(&cwd).is_dir());
     let finished = rx.try_recv().unwrap();
-    assert!(finished.finished);
+    assert!(finished.finished());
     assert_eq!(finished.worktree_cwd.as_deref(), Some(cwd.as_str()));
     let store = locked(&store).unwrap();
     let settings = store.agent_settings(id).unwrap().unwrap();
@@ -304,17 +360,21 @@ fn first_turn_with_setup(command: &str) -> (String, Vec<Update>, std::path::Path
         assert!(result.status.success());
     }
     let repo = repo.canonicalize().unwrap();
-    vorkspace_core::worktree_setup::set_commands(&std::collections::HashMap::from([(
-        repo.to_string_lossy().into_owned(),
-        command.to_owned(),
-    )]));
-    let store = Store::open(std::path::Path::new(":memory:")).unwrap();
+    vorkspace_core::worktree_setup::configure(
+        Some(&root),
+        &std::collections::HashMap::from([(
+            repo.to_string_lossy().into_owned(),
+            command.to_owned(),
+        )]),
+    );
+    let store = Store::test(&root.join("fixture.db")).unwrap();
     let summary = store.create("codex", repo.to_str().unwrap()).unwrap();
     let store = Arc::new(Mutex::new(store));
     let (tx, rx) = async_channel::bounded(8);
     let (_control, controls) = std::sync::mpsc::channel();
     run_turn_using(
         TurnInput {
+            composer_origin: None,
             summary,
             prompt: "Create the checkout".into(),
             settings: Settings {
@@ -346,6 +406,7 @@ fn the_first_turn_in_a_new_worktree_runs_its_setup() {
     assert!(updates.iter().any(|u| u.status == "Preparing worktree…"));
     assert!(std::path::Path::new(&cwd).join("prepared").exists());
     assert!(!vorkspace_core::worktree_setup::is_due(
+        repo.parent().unwrap(),
         std::path::Path::new(&cwd)
     ));
     tidy(&repo);
@@ -357,7 +418,10 @@ fn a_setup_failure_outlives_a_turn_that_never_reached_the_agent() {
 
     let (cwd, _, repo) = first_turn_with_setup("echo no network >&2; exit 3");
     let cwd = std::path::Path::new(&cwd);
-    assert!(vorkspace_core::worktree_setup::is_due(cwd));
+    assert!(vorkspace_core::worktree_setup::is_due(
+        repo.parent().unwrap(),
+        cwd
+    ));
 
     let binary = repo.join("mock-provider");
     std::fs::write(&binary, r#"#!/usr/bin/env python3
@@ -377,12 +441,13 @@ for line in sys.stdin:
     std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700)).unwrap();
 
     let turn = |attachments| {
-        let store = Store::open(std::path::Path::new(":memory:")).unwrap();
+        let store = Store::test(&repo.parent().unwrap().join("fixture.db")).unwrap();
         let summary = store.create("codex", repo.to_str().unwrap()).unwrap();
         let (tx, rx) = async_channel::unbounded();
         let (_control, controls) = std::sync::mpsc::channel();
         run_turn_using(
             TurnInput {
+                composer_origin: None,
                 summary,
                 prompt: "Continue in this worktree".into(),
                 settings: Settings {
@@ -400,7 +465,7 @@ for line in sys.stdin:
         );
         loop {
             let update = rx.try_recv().unwrap();
-            if update.finished {
+            if update.finished() {
                 break update.status;
             }
         }
@@ -408,10 +473,16 @@ for line in sys.stdin:
 
     let status = turn(vec![repo.join("removed-attachment.txt")]);
     assert!(status.contains("removed-attachment.txt"), "{status}");
-    assert!(vorkspace_core::worktree_setup::is_due(cwd));
+    assert!(vorkspace_core::worktree_setup::is_due(
+        repo.parent().unwrap(),
+        cwd
+    ));
 
     assert_eq!(turn(vec![]), "Ready");
-    assert!(!vorkspace_core::worktree_setup::is_due(cwd));
+    assert!(!vorkspace_core::worktree_setup::is_due(
+        repo.parent().unwrap(),
+        cwd
+    ));
     tidy(&repo);
 }
 
@@ -452,6 +523,7 @@ for line in sys.stdin:
     let (_control, controls) = std::sync::mpsc::channel();
     run_turn_using(
         TurnInput {
+            composer_origin: None,
             summary,
             prompt: "The competing prompt".into(),
             settings: Settings::default(),
@@ -473,15 +545,15 @@ for line in sys.stdin:
         },
     );
     let finished = std::iter::from_fn(|| rx.try_recv().ok())
-        .find(|update| update.finished)
+        .find(|update| update.finished())
         .unwrap();
     assert_eq!(
-        finished.history_recovery,
+        finished.settlement().unwrap().history_recovery,
         Some(HistoryRecovery::Saved),
         "{}",
         finished.status
     );
-    assert!(finished.rows.is_empty());
+    assert!(matches!(finished.transcript, TranscriptPatch::Unchanged));
     let reopened = Store::read_vorkspace(&path).unwrap();
     let saved = reopened.load(id).unwrap();
     assert!(

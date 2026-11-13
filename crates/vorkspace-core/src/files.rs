@@ -1,12 +1,10 @@
 //! Explorer filesystem operations, plus the pure name and path helpers from the files feature model.
 pub mod document;
 mod index;
-pub(crate) use index::{git_output_capped, is_indexable_root};
+pub(crate) use index::is_indexable_root;
 pub use index::{list_project_files, list_project_files_sync_cancellable, ProjectFile};
 mod name;
 mod paths;
-pub use crate::remote_workspace as remote;
-pub use crate::remote_workspace::run_remote_command;
 
 use std::collections::HashSet;
 use std::io::{ErrorKind, Write};
@@ -37,9 +35,6 @@ pub struct DirEntry {
 
 /// Immediate children of `path` (project tree). Folders first, then natural name order.
 pub fn list_dir(path: &Path) -> Result<Vec<DirEntry>, String> {
-    if remote::is_remote(path) {
-        return remote::command("list_dir", serde_json::json!({"path":path}));
-    }
     let dir = expand_home(path);
     let reader = std::fs::read_dir(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
 
@@ -86,7 +81,7 @@ pub fn list_dir(path: &Path) -> Result<Vec<DirEntry>, String> {
 }
 
 /// Case-insensitive order where digit runs compare by numeric value.
-pub fn compare_natural_names(a: &str, b: &str) -> std::cmp::Ordering {
+pub(crate) fn compare_natural_names(a: &str, b: &str) -> std::cmp::Ordering {
     use std::cmp::Ordering;
 
     let (a, b) = (a.as_bytes(), b.as_bytes());
@@ -274,15 +269,19 @@ fn missing(path: &Path) -> String {
     format!("{}: No such file or directory", path.display())
 }
 
+fn entry_metadata(path: &Path) -> Result<std::fs::Metadata, String> {
+    std::fs::symlink_metadata(path).map_err(|error| {
+        if error.kind() == ErrorKind::NotFound {
+            missing(path)
+        } else {
+            format!("{}: {error}", path.display())
+        }
+    })
+}
+
 /// Create a file or folder under `parent`. `name` may contain `/` or `\` to
 /// nest. Returns the created path.
 pub fn create_path(parent: &Path, name: &str, is_dir: bool) -> Result<String, String> {
-    if remote::is_remote(parent) {
-        return remote::command(
-            "create_path",
-            serde_json::json!({"parent":parent,"name":name,"isDir":is_dir}),
-        );
-    }
     let parent_dir = expand_home(parent);
     let dest = resolve_under(&parent_dir, name)?;
     let label = file_label(&dest, name);
@@ -311,9 +310,6 @@ pub fn create_path(parent: &Path, name: &str, is_dir: bool) -> Result<String, St
 
 /// Rename `path` to `name` (relative to the current parent; `/` nests).
 pub fn rename_path(path: &Path, name: &str) -> Result<String, String> {
-    if remote::is_remote(path) {
-        return remote::command("rename_path", serde_json::json!({"path":path,"name":name}));
-    }
     let from = expand_home(path);
     if !from.exists() {
         return Err(missing(&from));
@@ -357,14 +353,9 @@ pub fn rename_path(path: &Path, name: &str) -> Result<String, String> {
 
 /// Permanently delete a file or folder (not the trash).
 pub fn delete_path(path: &Path) -> Result<(), String> {
-    if remote::is_remote(path) {
-        return remote::command("delete_path", serde_json::json!({"path":path}));
-    }
     let path = expand_home(path);
-    if !path.exists() {
-        return Err(missing(&path));
-    }
-    if path.is_dir() {
+    let meta = entry_metadata(&path)?;
+    if meta.is_dir() {
         std::fs::remove_dir_all(&path).map_err(|e| format!("{}: {e}", path.display()))
     } else {
         std::fs::remove_file(&path).map_err(|e| format!("{}: {e}", path.display()))
@@ -374,27 +365,19 @@ pub fn delete_path(path: &Path) -> Result<(), String> {
 /// Copy `from` into `dest_parent`, naming collisions `name copy.ext`,
 /// `name copy 2.ext`, …. Returns the new path.
 pub fn copy_path(from: &Path, dest_parent: &Path) -> Result<String, String> {
-    if remote::is_remote(from) || remote::is_remote(dest_parent) {
-        return remote::command(
-            "copy_path",
-            serde_json::json!({"from":from,"destParent":dest_parent}),
-        );
-    }
     let from = expand_home(from);
-    if !from.exists() {
-        return Err(missing(&from));
-    }
+    let meta = entry_metadata(&from)?;
     let dest_parent = expand_home(dest_parent);
     if !dest_parent.is_dir() {
         return Err(format!("{} is not a folder", dest_parent.display()));
     }
-    if from.is_dir() && dir_contains(&from, &dest_parent) {
+    if meta.is_dir() && dir_contains(&from, &dest_parent) {
         return Err("Cannot paste a folder into itself.".into());
     }
     let name = unique_name_in(
         &dest_parent,
         &file_label(&from, from.to_str().unwrap_or("copy")),
-    );
+    )?;
     let dest = dest_parent.join(&name);
     copy_recursive(&from, &dest)?;
     Ok(dest.to_string_lossy().into_owned())
@@ -402,12 +385,6 @@ pub fn copy_path(from: &Path, dest_parent: &Path) -> Result<String, String> {
 
 /// Move `from` into `dest_parent`, keeping its name. Returns the new path.
 pub fn move_path(from: &Path, dest_parent: &Path) -> Result<String, String> {
-    if remote::is_remote(from) || remote::is_remote(dest_parent) {
-        return remote::command(
-            "move_path",
-            serde_json::json!({"from":from,"destParent":dest_parent}),
-        );
-    }
     let from = expand_home(from);
     if !from.exists() {
         return Err(missing(&from));
@@ -433,9 +410,6 @@ pub fn move_path(from: &Path, dest_parent: &Path) -> Result<String, String> {
 
 /// Open a local file with its registered application. Run off the UI thread.
 pub fn open_path_with_default_app(path: &Path) -> Result<(), String> {
-    if remote::is_remote(path) {
-        return Err("This isn’t available for projects on another machine yet.".into());
-    }
     let path = expand_home(path);
     if !path.exists() {
         return Err(missing(&path));
@@ -459,9 +433,6 @@ pub fn open_path_with_default_app(path: &Path) -> Result<(), String> {
 /// Show `path` in Finder / Explorer, or open its folder elsewhere.
 /// Blocking on Linux, where `xdg-open` may wait for the file manager.
 pub fn reveal_path(path: &Path) -> Result<(), String> {
-    if remote::is_remote(path) {
-        return Err("This isn’t available for projects on another machine yet.".into());
-    }
     let path = expand_home(path);
     if !path.exists() {
         return Err(missing(&path));
@@ -498,7 +469,7 @@ fn split_stem_ext(name: &str) -> (&str, &str) {
     }
 }
 
-fn unique_name_in(dir: &Path, name: &str) -> String {
+fn unique_name_in(dir: &Path, name: &str) -> Result<String, String> {
     let (stem, ext) = split_stem_ext(name);
     let mut n = 0u32;
     loop {
@@ -507,8 +478,10 @@ fn unique_name_in(dir: &Path, name: &str) -> String {
             1 => format!("{stem} copy{ext}"),
             _ => format!("{stem} copy {n}{ext}"),
         };
-        if !dir.join(&candidate).exists() {
-            return candidate;
+        match std::fs::symlink_metadata(dir.join(&candidate)) {
+            Err(error) if error.kind() == ErrorKind::NotFound => return Ok(candidate),
+            Err(error) => return Err(error.to_string()),
+            Ok(_) => {}
         }
         n += 1;
         if n > 1000 {
@@ -516,13 +489,17 @@ fn unique_name_in(dir: &Path, name: &str) -> String {
                 .duration_since(UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_nanos();
-            return format!("{stem} copy {stamp}{ext}");
+            return Ok(format!("{stem} copy {stamp}{ext}"));
         }
     }
 }
 
 fn copy_recursive(from: &Path, to: &Path) -> Result<(), String> {
-    let meta = std::fs::metadata(from).map_err(|e| format!("{}: {e}", from.display()))?;
+    let meta = entry_metadata(from)?;
+    if meta.is_symlink() {
+        let target = std::fs::read_link(from).map_err(|e| e.to_string())?;
+        return std::os::unix::fs::symlink(target, to).map_err(|e| e.to_string());
+    }
     if meta.is_dir() {
         std::fs::create_dir(to).map_err(|e| format!("{}: {e}", to.display()))?;
         for ent in std::fs::read_dir(from).map_err(|e| format!("{}: {e}", from.display()))? {

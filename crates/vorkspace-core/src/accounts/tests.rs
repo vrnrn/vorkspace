@@ -26,7 +26,7 @@ fn account_metadata_selection_and_removal_round_trip_without_credentials() {
     assert!(book.remove(Kind::Codex, DEFAULT).is_err());
     assert!(book.add(Kind::from_id("devin"), "Second").is_err());
     assert!(book.add(Kind::from_id("opencode"), "Second").is_err());
-    let store = Store::open(Path::new(":memory:")).unwrap();
+    let store = Store::test(Path::new(":memory:")).unwrap();
     store.save_provider_accounts(&book).unwrap();
     let mut saved = store.provider_accounts().unwrap();
     assert_eq!(saved.selected(Kind::Codex, "/work/project"), account.id);

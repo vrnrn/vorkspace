@@ -16,6 +16,42 @@ struct PriorityQueues<T> {
 }
 
 impl<T> PriorityQueues<T> {
+    // algorithm is the loaded die from biased coin from
+    // https://www.keithschwarz.com/darts-dice-coins/
+    fn pop(&mut self, rand: &mut SmallRng) -> Option<T> {
+        use Priority as P;
+
+        let high = P::High.weight() * !self.high_priority.is_empty() as u32;
+        let medium = P::Medium.weight() * !self.medium_priority.is_empty() as u32;
+        let low = P::Low.weight() * !self.low_priority.is_empty() as u32;
+        let mut mass = high + medium + low;
+
+        if !self.high_priority.is_empty() {
+            let flip = rand.random_ratio(P::High.weight(), mass);
+            if flip {
+                return self.high_priority.pop_front();
+            }
+            mass -= P::High.weight();
+        }
+
+        if !self.medium_priority.is_empty() {
+            let flip = rand.random_ratio(P::Medium.weight(), mass);
+            if flip {
+                return self.medium_priority.pop_front();
+            }
+            mass -= P::Medium.weight();
+        }
+
+        if !self.low_priority.is_empty() {
+            let flip = rand.random_ratio(P::Low.weight(), mass);
+            if flip {
+                return self.low_priority.pop_front();
+            }
+        }
+
+        None
+    }
+
     fn is_empty(&self) -> bool {
         self.high_priority.is_empty()
             && self.medium_priority.is_empty()
@@ -183,7 +219,6 @@ impl<T> Drop for PriorityQueueSender<T> {
 pub struct PriorityQueueReceiver<T> {
     state: Arc<PriorityQueueState<T>>,
     rand: SmallRng,
-    disconnected: bool,
 }
 
 impl<T> Clone for PriorityQueueReceiver<T> {
@@ -194,7 +229,6 @@ impl<T> Clone for PriorityQueueReceiver<T> {
         Self {
             state: Arc::clone(&self.state),
             rand: SmallRng::seed_from_u64(0),
-            disconnected: self.disconnected,
         }
     }
 }
@@ -232,7 +266,6 @@ impl<T> PriorityQueueReceiver<T> {
         let receiver = PriorityQueueReceiver {
             state,
             rand: SmallRng::seed_from_u64(0),
-            disconnected: false,
         };
 
         (sender, receiver)
@@ -272,41 +305,10 @@ impl<T> PriorityQueueReceiver<T> {
     }
 
     pub fn spin_try_pop(&mut self) -> Result<Option<T>, RecvError> {
-        use Priority as P;
-
         let Some(mut queues) = self.state.spin_try_recv()? else {
             return Ok(None);
         };
-
-        let high = P::High.weight() * !queues.high_priority.is_empty() as u32;
-        let medium = P::Medium.weight() * !queues.medium_priority.is_empty() as u32;
-        let low = P::Low.weight() * !queues.low_priority.is_empty() as u32;
-        let mut mass = high + medium + low;
-
-        if !queues.high_priority.is_empty() {
-            let flip = self.rand.random_ratio(P::High.weight(), mass);
-            if flip {
-                return Ok(queues.high_priority.pop_front());
-            }
-            mass -= P::High.weight();
-        }
-
-        if !queues.medium_priority.is_empty() {
-            let flip = self.rand.random_ratio(P::Medium.weight(), mass);
-            if flip {
-                return Ok(queues.medium_priority.pop_front());
-            }
-            mass -= P::Medium.weight();
-        }
-
-        if !queues.low_priority.is_empty() {
-            let flip = self.rand.random_ratio(P::Low.weight(), mass);
-            if flip {
-                return Ok(queues.low_priority.pop_front());
-            }
-        }
-
-        Ok(None)
+        Ok(queues.pop(&mut self.rand))
     }
 
     /// Pops an element from the priority queue blocking if necessary.
@@ -337,11 +339,7 @@ impl<T> PriorityQueueReceiver<T> {
     }
 
     #[inline(always)]
-    // algorithm is the loaded die from biased coin from
-    // https://www.keithschwarz.com/darts-dice-coins/
     fn pop_inner(&mut self, block: bool) -> Result<Option<T>, RecvError> {
-        use Priority as P;
-
         let mut queues = if !block {
             let Some(queues) = self.state.try_recv()? else {
                 return Ok(None);
@@ -351,35 +349,7 @@ impl<T> PriorityQueueReceiver<T> {
             self.state.recv()?
         };
 
-        let high = P::High.weight() * !queues.high_priority.is_empty() as u32;
-        let medium = P::Medium.weight() * !queues.medium_priority.is_empty() as u32;
-        let low = P::Low.weight() * !queues.low_priority.is_empty() as u32;
-        let mut mass = high + medium + low; //%
-
-        if !queues.high_priority.is_empty() {
-            let flip = self.rand.random_ratio(P::High.weight(), mass);
-            if flip {
-                return Ok(queues.high_priority.pop_front());
-            }
-            mass -= P::High.weight();
-        }
-
-        if !queues.medium_priority.is_empty() {
-            let flip = self.rand.random_ratio(P::Medium.weight(), mass);
-            if flip {
-                return Ok(queues.medium_priority.pop_front());
-            }
-            mass -= P::Medium.weight();
-        }
-
-        if !queues.low_priority.is_empty() {
-            let flip = self.rand.random_ratio(P::Low.weight(), mass);
-            if flip {
-                return Ok(queues.low_priority.pop_front());
-            }
-        }
-
-        Ok(None)
+        Ok(queues.pop(&mut self.rand))
     }
 }
 
@@ -416,7 +386,7 @@ impl<T> Iterator for TryIter<T> {
         }
 
         let res = self.receiver.try_pop();
-        self.ended = res.is_err();
+        self.ended = !matches!(&res, Ok(Some(_)));
 
         res.transpose()
     }

@@ -1,4 +1,4 @@
-//! ProjectSearch.tsx: content search inside the Explorer, scoped to its checkout.
+//! Content search inside the Explorer, scoped to its checkout.
 use crate::{
     input::{self, Input},
     panel_kit::{spinner, stroke, tabular},
@@ -60,6 +60,7 @@ pub(crate) struct ProjectSearch {
     groups: Vec<Group>,
     count: usize,
     truncated: bool,
+    revision: u64,
     cancel: Arc<AtomicBool>,
     debounce: Option<Task<()>>,
     scroll: ScrollHandle,
@@ -115,6 +116,7 @@ impl ProjectSearch {
             groups: Vec::new(),
             count: 0,
             truncated: false,
+            revision: 0,
             cancel: Arc::new(AtomicBool::new(false)),
             debounce: None,
             scroll: ScrollHandle::new(),
@@ -172,19 +174,21 @@ impl ProjectSearch {
     fn refresh(&mut self, cx: &mut Context<Self>) {
         self.cancel.store(true, Ordering::Release);
         self.cancel = Arc::new(AtomicBool::new(false));
+        self.revision += 1;
         self.debounce = None;
         self.loading = false;
         self.error = None;
         self.truncated = false;
+        self.groups.clear();
+        self.count = 0;
         let options = self.options(cx);
         if options.query.is_empty() || self.cwd.is_empty() || self.cwd == "~" {
-            self.groups.clear();
-            self.count = 0;
             self.scroll.set_offset(point(px(0.), px(0.)));
             cx.notify();
             return;
         }
         if self.active {
+            self.loading = true;
             let check = self.cancel.clone();
             self.debounce = Some(cx.spawn(async move |this, cx| {
                 cx.background_executor()
@@ -311,42 +315,13 @@ impl ProjectSearch {
             .child(div().min_w_0().flex_1().child(input))
             .into_any_element()
     }
-}
 
-impl Render for ProjectSearch {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        if self.cwd.is_empty() || self.cwd == "~" {
-            return div()
-                .px_3()
-                .py_2()
-                .text_size(px(12.))
-                .text_color(content(0.5))
-                .child("No project folder")
-                .into_any_element();
-        }
-        let status = if self.loading {
-            "Searching…".to_owned()
-        } else if let Some(error) = &self.error {
-            error.clone()
-        } else if self.query.read(cx).content.trim().is_empty() {
-            "Type to search across the project".to_owned()
-        } else if self.count == 0 {
-            "No results".to_owned()
-        } else {
-            format!(
-                "{} result{} in {} file{}{}",
-                self.count,
-                if self.count == 1 { "" } else { "s" },
-                self.groups.len(),
-                if self.groups.len() == 1 { "" } else { "s" },
-                if self.truncated { " (limited)" } else { "" }
-            )
-        };
-        let groups = self
-            .groups
+    fn result_groups(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        self.groups
             .iter()
             .enumerate()
             .map(|(group_index, group)| {
+                let revision = self.revision;
                 div()
                     .w_full()
                     .min_w_0()
@@ -444,12 +419,47 @@ impl Render for ProjectSearch {
                                     .child(text),
                             )
                             .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
-                                this.pick(group_index, index, event.click_count() >= 2, cx);
+                                if this.revision == revision {
+                                    this.pick(group_index, index, event.click_count() >= 2, cx);
+                                }
                             }))
                     }))
                     .into_any_element()
             })
-            .collect::<Vec<_>>();
+            .collect::<Vec<_>>()
+    }
+}
+
+impl Render for ProjectSearch {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.cwd.is_empty() || self.cwd == "~" {
+            return div()
+                .px_3()
+                .py_2()
+                .text_size(px(12.))
+                .text_color(content(0.5))
+                .child("No project folder")
+                .into_any_element();
+        }
+        let status = if self.loading {
+            "Searching…".to_owned()
+        } else if let Some(error) = &self.error {
+            error.clone()
+        } else if self.query.read(cx).content.trim().is_empty() {
+            "Type to search across the project".to_owned()
+        } else if self.count == 0 {
+            "No results".to_owned()
+        } else {
+            format!(
+                "{} result{} in {} file{}{}",
+                self.count,
+                if self.count == 1 { "" } else { "s" },
+                self.groups.len(),
+                if self.groups.len() == 1 { "" } else { "s" },
+                if self.truncated { " (limited)" } else { "" }
+            )
+        };
+        let groups = self.result_groups(cx);
         div()
             .id("explorer-project-search")
             .debug_selector(|| "explorer-project-search".into())
@@ -612,7 +622,7 @@ impl Render for ProjectSearch {
                         content(0.45)
                     })
                     .when(self.loading, |d| {
-                        d.child(spinner("project-search-spinner", "loader", 12.))
+                        d.child(spinner("project-search-spinner", 12.))
                     })
                     .child(div().min_w_0().flex_1().child(status)),
             )

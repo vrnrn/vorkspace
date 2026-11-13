@@ -1,9 +1,9 @@
-//! The React Bot habit schedule, claiming and run-history policy.
+//! Bot habit schedules, run claiming and run-history policy.
 use super::files;
 use chrono::{DateTime, Datelike, Duration, Local, Timelike};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
-pub const MAX: usize = 20;
+pub(crate) const MAX: usize = 20;
 pub const GRACE_MS: u64 = 2 * 60 * 60 * 1000;
 pub const TIMEOUT_MS: u64 = 60 * 60 * 1000;
 pub const APPROVAL_WAIT_MS: u64 = 12 * 60 * 60 * 1000;
@@ -200,7 +200,7 @@ fn parse(text: Option<&str>) -> Result<Vec<Habit>, String> {
     Ok(values
         .into_iter()
         .filter_map(|mut value| {
-            // The desktop parser accepts each recent run independently. A bad
+            // The parser accepts each recent run independently. A bad
             // history item must not make the habit (and its controls) disappear.
             if let Some(items) = value.get_mut("runs") {
                 let runs: Vec<Run> = items
@@ -265,7 +265,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn desktop_habit_optional_timestamps_and_partial_history_remain_editable() {
+    fn saved_habit_optional_timestamps_and_partial_history_remain_editable() {
         let text = r#"[{"id":"desktop","name":"Digest","instructions":"Check the news",
             "schedule":{"scheduleKind":"daily"},"fromCard":"suggestion-1",
             "runs":[{"at":100,"outcome":"posted","report":"**News**"},

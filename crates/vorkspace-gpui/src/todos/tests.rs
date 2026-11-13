@@ -34,7 +34,7 @@ fn tile_window(
                 cx.new(|cx| BoardTile {
                     board: cx.new(|cx| {
                         let store: Database = std::sync::Arc::new(std::sync::Mutex::new(
-                            vorkspace_core::store::Store::open(std::path::Path::new(":memory:"))
+                            vorkspace_core::store::Store::test(std::path::Path::new(":memory:"))
                                 .unwrap(),
                         ));
                         let mut view = TodoBoardView::new(store, columns, cx);
@@ -91,6 +91,50 @@ fn columns_wrap_at_tile_width_and_stay_four_across_when_space_fits(cx: &mut Test
     assert!(todo.origin.y < progress.origin.y);
     assert!(progress.origin.y < review.origin.y);
     assert!(review.origin.y < done.origin.y);
+}
+
+#[gpui::test]
+fn board_switches_keep_quick_add_text_and_failed_submissions_separate(cx: &mut TestAppContext) {
+    let tile = tile_window(cx, 800., true, 700.);
+    tile.update(cx, |tile, _, cx| {
+        tile.board.update(cx, |board, cx| {
+            let personal = TodoBoard::Personal;
+            let other = TodoBoard::Bot("other".into());
+            board
+                .draft
+                .update(cx, |input, cx| input.set_text("Personal draft".into(), cx));
+            board.set_board(Some(other.clone()), cx);
+            assert!(board.draft.read(cx).content.is_empty());
+            board
+                .draft
+                .update(cx, |input, cx| input.set_text("Other draft".into(), cx));
+            board.finish_change(
+                Err("Failed".into()),
+                Some("Older submission".into()),
+                &personal,
+                None,
+                cx,
+            );
+            assert_eq!(board.draft.read(cx).content.as_ref(), "Other draft");
+            board.set_board(Some(personal.clone()), cx);
+            assert_eq!(board.draft.read(cx).content.as_ref(), "Personal draft");
+            board
+                .draft
+                .update(cx, |input, cx| input.set_text(String::new(), cx));
+            board.set_board(Some(other), cx);
+            board.finish_change(
+                Err("Failed".into()),
+                Some("Failed submission".into()),
+                &personal,
+                None,
+                cx,
+            );
+            assert_eq!(board.draft.read(cx).content.as_ref(), "Other draft");
+            board.set_board(Some(personal), cx);
+            assert_eq!(board.draft.read(cx).content.as_ref(), "Failed submission");
+        });
+    })
+    .unwrap();
 }
 
 #[gpui::test]
@@ -213,7 +257,7 @@ fn task_details_overlay_preserves_the_board_and_keeps_edit_actions_visible(
 
 fn board_window(cx: &mut TestAppContext) -> (gpui::WindowHandle<TodoBoardView>, Database) {
     let store: Database = std::sync::Arc::new(std::sync::Mutex::new(
-        vorkspace_core::store::Store::open(std::path::Path::new(":memory:")).unwrap(),
+        vorkspace_core::store::Store::test(std::path::Path::new(":memory:")).unwrap(),
     ));
     let window = cx.update(|cx| {
         crate::input::bind(cx);

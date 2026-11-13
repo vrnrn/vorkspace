@@ -1,7 +1,58 @@
 //! Streaming state and the frame clock that drives live reveal.
 use super::*;
 
+#[derive(Default)]
+pub(super) struct Reveals {
+    pub(super) active: HashMap<usize, PacedText>,
+    // Text received while hidden or with pacing disabled stays fully shown
+    // if a later patch rebuilds the same message.
+    settled_before: usize,
+}
+
+impl Reveals {
+    pub(super) fn settle_through(&mut self, source_len: usize) {
+        self.active = HashMap::new();
+        self.settled_before = source_len;
+    }
+}
+
 impl TranscriptView {
+    pub(super) fn should_pace(&self, at: usize) -> bool {
+        self.streaming
+            && self.visible
+            && self.smooth_reveal
+            && at >= self.live_start.max(self.reveals.settled_before)
+    }
+
+    pub(super) fn prepare_reveal(&mut self, at: usize, end: usize, text: &str, now: Instant) {
+        let start_pacing = self.should_pace(at);
+        let paced = match self.reveals.active.entry(at) {
+            std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
+            std::collections::hash_map::Entry::Vacant(entry) if start_pacing => {
+                entry.insert(PacedText::new(text, now))
+            }
+            _ => return,
+        };
+        paced.update(text, now);
+        paced.step(now, self.streaming && end == self.source.len());
+    }
+
+    pub(super) fn answer_visible(&self, answer: usize) -> bool {
+        if self.source[answer].text.trim().is_empty() {
+            return false;
+        }
+        if answer < self.live_start.max(self.reveals.settled_before)
+            || !self.visible
+            || !self.smooth_reveal
+        {
+            return true;
+        }
+        self.reveals
+            .active
+            .get(&answer)
+            .map_or(!self.streaming, |r| !r.text().trim().is_empty())
+    }
+
     /// Stop visible work immediately, while the provider drains and saves.
     pub(crate) fn stop_streaming(&mut self, cx: &mut Context<Self>) {
         let start = self
@@ -30,10 +81,7 @@ impl TranscriptView {
                     .saturating_add(row.text.len());
             }
         }
-        let now = Instant::now();
-        for reveal in self.reveals.values_mut() {
-            reveal.settle(now);
-        }
+        self.reveals.settle_through(self.source.len());
         self.streaming(false, cx);
         self.rebuild(start, cx);
         cx.notify();
@@ -77,9 +125,10 @@ impl TranscriptView {
         if streaming {
             self.active_provider_turn_id = None;
             self.live_start = self.source.len();
+            self.reveals.settled_before = 0;
             // The provider starts before its prompt arrives. Keep an ordinary
             // chat's existing spacer and scroll position until patch accepts
-            // that prompt, just as React pins on lastUserId rather than busy.
+            // that prompt: pin on the last user message, not on busy.
             // Otherwise the old spacer collapses for a frame before the new
             // prompt gets its own anchor and entrance.
             if self.bot {
@@ -88,6 +137,9 @@ impl TranscriptView {
             }
             self.started = Some(vorkspace_ui::clock::Instant::now());
         } else {
+            self.reveals
+                .active
+                .retain(|_, reveal| reveal.active(Instant::now()));
             self.follow.until = Some(Instant::now() + std::time::Duration::from_millis(1200));
             if let Some(started) = self.started.take()
                 && let Some(turn) = self.active_turn()
@@ -127,13 +179,12 @@ impl TranscriptView {
         let now = self.frame_now;
         if self.visible
             && (resized
-                || (self.streaming && !vorkspace_ui::clock::suppress_endless_animation_frames())
                 || !self.motions.is_empty()
                 || self.agent_panels.animating()
                 || self.prompt_rise.is_some_and(|(_, born)| {
                     now.saturating_duration_since(born).as_secs_f32() < 0.88
                 })
-                || self.reveals.values().any(|r| r.active(now))
+                || self.reveals.active.values().any(|r| r.active(now))
                 || self.chat_animating())
             && !self.frame_scheduled
         {
@@ -152,7 +203,9 @@ impl TranscriptView {
             return;
         }
         let mut changed_phases = HashSet::new();
-        for start in self.agent_panels.animate() {
+        let panels = self.agent_panels.animate();
+        let heights_changed = !panels.is_empty() || !self.motions.is_empty();
+        for start in panels {
             for (ix, row) in self.rows.iter().enumerate() {
                 if row.key.0 == start {
                     self.list.remeasure_items(ix..ix + 1);
@@ -162,7 +215,7 @@ impl TranscriptView {
         }
         let now = self.animation_now();
         let mut changed = None;
-        for (&at, reveal) in &mut self.reveals {
+        for (&at, reveal) in &mut self.reveals.active {
             if reveal.step(now, self.streaming) {
                 changed = Some(changed.map_or(at, |old: usize| old.min(at)));
             }
@@ -170,39 +223,50 @@ impl TranscriptView {
         if let Some(start) = changed {
             self.rebuild(start, cx);
         }
+        self.reveals
+            .active
+            .retain(|&at, reveal| (self.streaming && at >= self.live_start) || reveal.active(now));
         let mut removed = Vec::new();
-        let offset = self.list.logical_scroll_top();
-        let anchor = (!self.list.is_following_tail())
-            .then(|| self.rows.get(offset.item_ix).map(|r| r.key))
-            .flatten();
-        for (ix, row) in self.rows.iter().enumerate() {
-            if let Some(motion) = self.motions.get(&row.key) {
-                changed_phases.extend(row.phase_group());
-                if motion.finished(now) && !motion.opening {
-                    removed.push(ix);
-                } else {
+        if !self.motions.is_empty() {
+            for (ix, row) in self.rows.iter().enumerate() {
+                if let Some(motion) = self.motions.get(&row.key) {
+                    changed_phases.extend(row.phase_group());
+                    if motion.finished(now) && !motion.opening {
+                        removed.push(ix);
+                    } else {
+                        self.list.remeasure_items(ix..ix + 1);
+                    }
+                }
+            }
+        }
+        if !changed_phases.is_empty() {
+            for (ix, row) in self.rows.iter().enumerate() {
+                if matches!(row.body, Body::Phase { group, .. } if changed_phases.contains(&group) && self.windowed_phase(group))
+                {
                     self.list.remeasure_items(ix..ix + 1);
                 }
             }
         }
-        for (ix, row) in self.rows.iter().enumerate() {
-            if matches!(row.body, Body::Phase { group, .. } if changed_phases.contains(&group) && self.windowed_phase(group))
-            {
-                self.list.remeasure_items(ix..ix + 1);
+        if let Some(&start) = removed.first() {
+            let offset = self.list.logical_scroll_top();
+            let anchor = (!self.list.is_following_tail())
+                .then(|| self.rows.get(offset.item_ix).map(|r| r.key))
+                .flatten();
+            self.invalidate_message_indices(start);
+            for ix in removed.into_iter().rev() {
+                self.rows.remove(ix);
+                self.list.splice(ix..ix + 1, 0);
             }
-        }
-        for ix in removed.into_iter().rev() {
-            self.rows.remove(ix);
-            self.list.splice(ix..ix + 1, 0);
-        }
-        if let Some(key) = anchor
-            && let Some(item_ix) = self.rows.iter().position(|r| r.key == key)
-            && item_ix != offset.item_ix
-        {
-            self.list.scroll_to(ListOffset {
-                item_ix,
-                offset_in_item: offset.offset_in_item,
-            });
+            if let Some(key) = anchor
+                && let Some(item_ix) = self.rows.iter().position(|r| r.key == key)
+                && item_ix != offset.item_ix
+            {
+                self.list.scroll_to(ListOffset {
+                    item_ix,
+                    offset_in_item: offset.offset_in_item,
+                });
+            }
+            self.index_messages_from(start);
         }
         self.motions.retain(|_, motion| !motion.finished(now));
         self.entrances
@@ -214,9 +278,10 @@ impl TranscriptView {
                 *born = None;
             }
         }
-        self.list
-            .remeasure_items(self.footer_ix()..self.footer_ix() + 1);
-        self.index_messages();
+        if heights_changed {
+            self.list
+                .remeasure_items(self.footer_ix()..self.footer_ix() + 1);
+        }
         cx.notify();
     }
 }

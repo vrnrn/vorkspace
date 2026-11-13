@@ -32,4 +32,12 @@ Terminal escape sequences can write plain text to the clipboard, capped at 1 MiB
 
 The crate checksums and unpacks `vendor/libghostty-vt/source.tar.gz` and `dependencies.tar.gz` into Cargo's build directory, then builds the pinned static library with Zig 0.17.x. Set `ZIG` to use an explicit executable. The Zig build uses an offline package directory and baseline CPU instructions. Neither a system Ghostty installation nor a runtime Ghostty library is required. The bundle includes the linked code's license notices. Source provenance and update instructions are in `vendor/libghostty-vt/README.md`.
 
-Run the engine tests with `cargo test -p vorkspace-terminal --offline`. `cargo test -p vorkspace-gpui terminal::tests --offline` exercises keyboard mapping, background continuity, selection scrolling and real PTY startup, resizing, final-output delivery and shutdown. The GPUI test runtime requires a macOS graphics session; PTY tests require permission to create a PTY and launch a shell.
+Run `npm run test:rust` for the terminal engine and desktop checks. To focus on the terminal, use the same verification profile and checkout output.
+
+```sh
+cargo nextest run --locked --cargo-profile verify -p vorkspace-terminal
+cargo nextest run --locked --cargo-profile verify -p vorkspace-gpui -E 'test(terminal::)'
+npm run target:prune
+```
+
+The desktop tests exercise keyboard mapping, background continuity, selection scrolling and real PTY startup, resizing, final-output delivery and shutdown. The GPUI test runtime requires a macOS graphics session. PTY tests need permission to create a PTY and launch a shell.

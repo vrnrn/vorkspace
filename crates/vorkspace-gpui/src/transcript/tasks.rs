@@ -29,9 +29,9 @@ pub(super) fn render(
     width: Option<Pixels>,
     cx: &mut Context<TranscriptView>,
 ) -> Option<AnyElement> {
-    Some(match call.panel()? {
-        Panel::Tasks(list) => task_list(&list, start),
-        Panel::Agent(run) => agent(view, call, &run, start, width, cx),
+    Some(match &*call.panel()? {
+        Panel::Tasks(list) => task_list(list, start),
+        Panel::Agent(run) => agent(view, call, run, start, width, cx),
     })
 }
 fn task_list(list: &TaskList, start: usize) -> AnyElement {
@@ -683,7 +683,7 @@ fn agent_trail(
             .iter()
             .filter(|call| {
                 matches!(call.state, ToolState::Failed | ToolState::Cancelled)
-                    && matches!(call.panel(), Some(Panel::Agent(_)))
+                    && matches!(call.panel().as_deref(), Some(Panel::Agent(_)))
             })
             .count();
         let title = if failed_agents > 0 {
@@ -713,7 +713,6 @@ fn agent_trail(
                 parent,
                 phase.steps[0],
                 start,
-                true,
                 (width - px(inset)).max(px(1.)),
                 cx,
             );
@@ -825,15 +824,7 @@ fn agent_trail(
                 );
             }
             for (index, step) in phase.steps.iter().enumerate() {
-                let row = agent_step(
-                    view,
-                    parent,
-                    step,
-                    start,
-                    true,
-                    (width - px(20.)).max(px(1.)),
-                    cx,
-                );
+                let row = agent_step(view, parent, step, start, (width - px(20.)).max(px(1.)), cx);
                 let arrival = view
                     .agent_panels
                     .arrivals
@@ -893,7 +884,6 @@ fn agent_step(
     parent: &ToolCall,
     step: &AgentStep,
     start: usize,
-    bare: bool,
     width: Pixels,
     cx: &mut Context<TranscriptView>,
 ) -> AnyElement {
@@ -934,7 +924,6 @@ fn agent_step(
                 .text_color(content(if reasoning { 0.5 } else { 0.7 }))
                 .cursor_pointer()
                 .hover(|s| s.text_color(content(0.8)))
-                .when(!bare, |d| d.child(icon("minus", 14.)))
                 .child(
                     div()
                         .flex_1()
@@ -951,19 +940,17 @@ fn agent_step(
                 })),
         );
     if open {
-        row = row.child(div().min_w_0().pb_2().when(!bare, |d| d.pl(px(20.))).child(
-            markdown_text(
-                view,
-                &step.text,
-                &identity,
-                if reasoning {
-                    markdown::Tone::Reasoning
-                } else {
-                    markdown::Tone::Normal
-                },
-                cx,
-            ),
-        ));
+        row = row.child(div().min_w_0().pb_2().child(markdown_text(
+            view,
+            &step.text,
+            &identity,
+            if reasoning {
+                markdown::Tone::Reasoning
+            } else {
+                markdown::Tone::Normal
+            },
+            cx,
+        )));
     }
     row.into_any_element()
 }

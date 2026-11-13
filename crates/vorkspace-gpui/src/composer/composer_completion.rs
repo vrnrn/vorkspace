@@ -44,7 +44,7 @@ pub(crate) struct Completion {
     input: Entity<input::Input>,
     bot_chat: bool,
     store: Option<vorkspace_runtime::runtime::Database>,
-    notes: Vec<vorkspace_core::notes::Note>,
+    notes: Vec<vorkspace_core::notes::NoteSummary>,
     cwd: String,
     token: Option<Token>,
     dismissed: Option<Token>,
@@ -273,9 +273,6 @@ impl Completion {
         self.highlight(cx);
     }
     pub(crate) fn prepare_prompt(&self, text: &str) -> String {
-        if self.cwd.starts_with("remote://") {
-            return text.to_owned();
-        }
         let text = vorkspace_core::provider::native_prompt(self.provider, text);
         let text = self
             .store
@@ -328,14 +325,6 @@ impl Completion {
         cx.notify();
     }
     fn sync(&mut self, cx: &mut Context<Self>) {
-        if self.cwd.starts_with("remote://") {
-            self.choices.clear();
-            self.token = None;
-            self.input.update(cx, |input, cx| {
-                input.highlight_composer_tokens(Vec::new(), cx)
-            });
-            return;
-        }
         let disabled = cx
             .try_global::<vorkspace_ui::preferences::Preferences>()
             .map(|p| p.disabled_skill_paths.clone())
@@ -447,7 +436,7 @@ impl Completion {
                 .and_then(|s| {
                     vorkspace_runtime::runtime::locked(&s)
                         .ok()
-                        .and_then(|s| s.list_notes().ok())
+                        .and_then(|s| s.list_note_summaries().ok())
                 })
                 .unwrap_or_default();
             let skills = vorkspace_core::skills::list_skills(cwd.clone(), Some(disabled))

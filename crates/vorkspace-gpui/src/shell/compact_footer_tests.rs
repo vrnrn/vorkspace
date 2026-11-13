@@ -5,6 +5,7 @@ use crate::{
     usage_footer::UsageFooter,
 };
 use gpui::{TestAppContext, VisualTestContext, WindowHandle, size};
+use std::time::{Duration, Instant};
 use vorkspace_core::{store::Store, usage::Snapshot};
 
 fn default_key(kind: Kind) -> Key {
@@ -47,7 +48,7 @@ fn accounts(multiple: bool, cx: &mut App) -> Vec<Key> {
 fn shell(cx: &mut TestAppContext) -> (tempfile::TempDir, WindowHandle<Shell>) {
     let directory = tempfile::tempdir().unwrap();
     let store = Arc::new(Mutex::new(
-        Store::open(&directory.path().join("native.sqlite")).unwrap(),
+        Store::test(&directory.path().join("native.sqlite")).unwrap(),
     ));
     cx.update(|cx| {
         crate::shell::bind_keys(cx);
@@ -134,22 +135,14 @@ fn compact_footer_centers_and_fits_through_zoom_accounts_and_expansion(cx: &mut 
     let (_directory, window) = shell(cx);
     let visual = &mut VisualTestContext::from_window(window.into(), cx);
     visual.simulate_resize(size(px(1400.), px(1000.)));
+    let mut sample_time = Instant::now();
     for multiple in [false, true] {
         let keys = visual.update(|_, cx| accounts(multiple, cx));
         assert_eq!(keys.len(), if multiple { 3 } else { 1 });
         for scale in [75, 100, 150] {
-            // Each scale is a fresh fixture, so the real warning's 60-second
-            // notice cooldown does not prevent the next scenario's admission.
-            window
-                .update(visual, |shell, _, cx| {
-                    shell.resources = cx.new(|cx| {
-                        let mut monitor = ResourceMonitor::new(cx);
-                        monitor.set_classic(true, cx);
-                        monitor
-                    });
-                })
-                .unwrap();
             for shown in [false, true, false] {
+                // Advance past the shared warning's cooldown between scenarios.
+                sample_time += Duration::from_secs(60);
                 window
                     .update(visual, |shell, _, cx| {
                         shell.workspace.preferences.ui_scale = scale;
@@ -157,9 +150,9 @@ fn compact_footer_centers_and_fits_through_zoom_accounts_and_expansion(cx: &mut 
                         shell.workspace.preferences.collapsed_project_rail = "compact".into();
                         shell.resources.update(cx, |monitor, cx| {
                             if shown {
-                                monitor.saturate(cx);
+                                monitor.saturate_at(sample_time, cx);
                             } else {
-                                monitor.recover(cx);
+                                monitor.recover_at(sample_time, cx);
                             }
                         });
                         shell.invalidate_chrome(cx);
@@ -354,7 +347,9 @@ fn compact_footer_keeps_click_keyboard_focus_and_live_popover_anchor(cx: &mut Te
     activate(visual, "tab");
     activate(visual, "enter");
     window
-        .update(visual, |shell, _, _| assert!(shell.settings.is_some()))
+        .update(visual, |shell, _, _| {
+            assert!(shell.pages.settings.is_some())
+        })
         .unwrap();
 }
 
@@ -393,7 +388,7 @@ fn native_compact_footer_capture() {
     assert!(output.is_absolute() && output.is_dir());
     let directory = tempfile::tempdir().unwrap();
     let store = Arc::new(Mutex::new(
-        Store::open(&directory.path().join("native.sqlite")).unwrap(),
+        Store::test(&directory.path().join("native.sqlite")).unwrap(),
     ));
     let mut cx = gpui::HeadlessAppContext::with_platform(
         Arc::new(gpui_apple::AppleTextSystem::new()),
@@ -408,21 +403,24 @@ fn native_compact_footer_capture() {
         vorkspace_ui::clock::use_test_clock(cx);
         crate::accounts::install(store, cx);
     });
+    let mut sample_time = Instant::now();
     for multiple in [false, true] {
         cx.update(|cx| {
             accounts(multiple, cx);
         });
         for scale in [75, 100, 150] {
             for shown in [true, false] {
+                sample_time += Duration::from_secs(60);
                 let window = cx
                     .open_window(size(px(100.), px(360.)), |window, cx| {
                         window.set_ui_scale(scale as f32 / 100., cx);
                         let resources = cx.new(|cx| {
                             let mut monitor = ResourceMonitor::new(cx);
-                            monitor.set_classic(true, cx);
                             monitor.set_compact(true, cx);
                             if shown {
-                                monitor.saturate(cx);
+                                monitor.saturate_at(sample_time, cx);
+                            } else {
+                                monitor.recover_at(sample_time, cx);
                             }
                             monitor
                         });
@@ -481,7 +479,7 @@ fn native_sidebar_usage_capture() {
     assert!(output.is_absolute() && output.is_dir());
     let directory = tempfile::tempdir().unwrap();
     let store = Arc::new(Mutex::new(
-        Store::open(&directory.path().join("native.sqlite")).unwrap(),
+        Store::test(&directory.path().join("native.sqlite")).unwrap(),
     ));
     let mut cx = gpui::HeadlessAppContext::with_platform(
         Arc::new(gpui_apple::AppleTextSystem::new()),

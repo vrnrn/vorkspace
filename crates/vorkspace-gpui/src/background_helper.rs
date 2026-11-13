@@ -1,10 +1,10 @@
 //! Connection and process lifetime for the Vorkspace background helper.
 use gpui::{App, AppContext, Context, Entity, EventEmitter, Global};
-#[cfg(not(test))]
-use vorkspace_helper::Supervisor;
 use vorkspace_helper::{
     Action, AudioNotice, Command, DictationConfig, DictationPhase, DictationStatus, Notice,
 };
+#[cfg(not(test))]
+use vorkspace_helper::{Lifetime, Supervisor};
 // Keep the existing action identifiers for keybindings.
 gpui::actions!(
     clipboard,
@@ -85,16 +85,27 @@ impl Service {
             return;
         };
         let helper = vorkspace_helper::helper_executable(&app);
-        let socket = vorkspace_helper::socket_path(&helper);
+        let lifetime = if crate::dev_reload::enabled() {
+            Lifetime::Client
+        } else {
+            Lifetime::Background
+        };
+        let socket = vorkspace_helper::socket_path(&helper, lifetime);
         let (notices, received) = async_channel::bounded(256);
         let arguments = std::env::args_os()
             .skip(1)
             .map(|argument| argument.to_string_lossy().into_owned())
             .collect();
         let relaunch = vorkspace_helper::relaunch_command(&app, arguments);
-        self.supervisor = Some(Supervisor::start(helper, socket, relaunch, move |notice| {
-            let _ = notices.send_blocking(notice);
-        }));
+        self.supervisor = Some(Supervisor::start(
+            helper,
+            socket,
+            lifetime,
+            relaunch,
+            move |notice| {
+                let _ = notices.send_blocking(notice);
+            },
+        ));
         self._notices = Some(cx.spawn(async move |this, cx| {
             while let Ok(notice) = received.recv().await {
                 let _ = this.update(cx, |this, cx| this.notice(notice, cx));

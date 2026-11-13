@@ -175,17 +175,15 @@ fn header_modes_share_motion_without_pointer_gaze() {
         let (header, next) = header_anim_at(look.seed, status, true, at);
         let (autonomous, _) = bot_anim_at(look.seed, status, true, at, None);
         let (tracking, _) = bot_anim_at(look.seed, status, true, at, Some((0.78, 0.68)));
-        let key = |anim| frame_cache_key(true, &look, status == "needs-you", 128, anim);
         assert!(next.is_some_and(|next| next > at));
-        assert!(key(header) == key(autonomous));
-        assert!(key(header) != key(tracking));
+        assert_eq!(header, autonomous);
+        assert_ne!(header, tracking);
         assert_eq!(tracking.yaw, 0.78);
         assert_eq!(tracking.pitch, 0.68);
         assert!(!header.crossed_eyes);
     }
-    let (working, next) = header_anim_at(look.seed, "working", true, at);
+    let (_, next) = header_anim_at(look.seed, "working", true, at);
     let (attention, _) = header_anim_at(look.seed, "needs-you", true, at);
-    assert_eq!(working.tex_rot, 84.);
     assert_eq!(next, Some(Duration::from_millis(6_006)));
     assert_eq!(attention.wide, 1.14);
 }
@@ -198,12 +196,8 @@ fn header_hidden_state_is_frozen_without_frame_requests() {
         let (later, later_next) =
             header_anim_at(look.seed, status, false, Duration::from_secs(900));
         assert!(next.is_none() && later_next.is_none());
-        assert!(
-            frame_cache_key(true, &look, status == "needs-you", 128, first)
-                == frame_cache_key(true, &look, status == "needs-you", 128, later)
-        );
+        assert_eq!(first, later);
         assert_eq!(first.blink, 1.);
         assert_eq!(first.hop_y, 0.);
-        assert_eq!(first.tex_rot, 0.);
     }
 }

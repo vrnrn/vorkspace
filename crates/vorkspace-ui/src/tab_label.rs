@@ -1,4 +1,4 @@
-//! TabLabel.tsx: leave short labels clear and fade the last 40px only on overflow.
+//! Tab labels: leave short labels clear and fade the last 40px only on overflow.
 use gpui::{ContentMask, SharedString, TextAlign, TextRun, canvas, prelude::*, px};
 
 pub fn tab_label(text: impl Into<SharedString>) -> impl IntoElement {

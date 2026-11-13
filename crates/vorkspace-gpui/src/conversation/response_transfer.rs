@@ -12,7 +12,7 @@ impl Conversation {
             self.defer_edit_transfer(settings, prompt, cx);
             return;
         }
-        if self.needs_history_restore() || self.stopping {
+        if self.needs_history_restore() || self.is_stopping() {
             self.defer_history_action(
                 move |this, cx| {
                     // Bot callers may configure their live context immediately
@@ -37,7 +37,7 @@ impl Conversation {
             return;
         }
         self.model = settings.model.clone();
-        self.settings = settings;
+        self.replace_settings(settings, cx);
         self.attach_account(cx);
         self.loaded = true;
         self.status = "Ready".into();
@@ -70,13 +70,10 @@ impl Conversation {
         }
         if self.history_partial && !matches!(request, ResponseRequest::QuoteSelection { .. }) {
             self.status = "Loading complete history; please retry the action".into();
-            self.load(cx);
+            self.load_complete(cx);
             return;
         }
         match request {
-            ResponseRequest::RemotePlan { id, text, build } => {
-                self.remote_plan_request(id, text, *build, cx)
-            }
             ResponseRequest::QuoteSelection { text } => self.bot_quote(text, window, cx),
             ResponseRequest::EditLastTurn { turn } => self.begin_edit_last_turn(*turn, window, cx),
             ResponseRequest::Draft { send } => self.draft_action(*send, cx),

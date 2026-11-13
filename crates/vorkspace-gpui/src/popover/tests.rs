@@ -32,7 +32,7 @@ fn danger_rows_keep_readable_ink_when_highlighted_or_hovered() {
             theme: appearance.into(),
             ..Default::default()
         };
-        let _restore = test_appearance(&preferences, false, false);
+        let _restore = test_appearance(&preferences, false);
         for highlighted in [false, true] {
             let ink = danger_ink(highlighted);
             for fill in [
@@ -270,7 +270,7 @@ fn selected_danger_row_repaints_on_theme_change_without_losing_focus(
             theme: appearance.into(),
             ..Default::default()
         };
-        let _restore = test_appearance(&preferences, false, false);
+        let _restore = test_appearance(&preferences, false);
         window.update(cx, |_, _, cx| cx.notify()).unwrap();
         cx.refresh().unwrap();
         vorkspace_ui::clock::settle_animations(window, cx);

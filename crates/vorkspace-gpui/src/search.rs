@@ -6,7 +6,7 @@ use crate::{
 use gpui::{
     AnyElement, App, Context, Entity, EventEmitter, FocusHandle, Focusable, HighlightStyle,
     MouseButton, MouseMoveEvent, Pixels, Point, Render, Role, ScrollHandle, StyledText,
-    Subscription, Task, Window, div, img, point, prelude::*, px, relative,
+    Subscription, Task, Window, div, point, prelude::*, px, relative,
 };
 use std::{
     collections::HashMap,
@@ -23,7 +23,6 @@ use vorkspace_core::{
     transcript::Row,
 };
 use vorkspace_runtime::runtime::{Database, locked};
-use vorkspace_ui::radius;
 use vorkspace_ui::theme::*;
 
 pub(crate) enum Event {
@@ -36,23 +35,24 @@ pub(crate) struct Sources {
     pub live: HashMap<i64, Arc<Vec<Row>>>,
     pub projects: Vec<String>,
     pub recent: Vec<String>,
-    pub logos: HashMap<String, String>,
 }
 pub(crate) struct SearchView {
     pub(crate) input: Entity<Input>,
     cwd: String,
     store: Database,
-    summaries: Vec<Session>,
+    summaries: Arc<Vec<Session>>,
     live: HashMap<i64, Arc<Vec<Row>>>,
-    projects: Vec<String>,
-    recent: Vec<String>,
-    logos: HashMap<String, String>,
-    files: Vec<vorkspace_core::files::ProjectFile>,
+    projects: Arc<Vec<String>>,
+    recent: Arc<Vec<String>>,
+    files: Arc<Vec<vorkspace_core::files::ProjectFile>>,
     visible: bool,
     listing_pending: bool,
     scope: Scope,
     query: String,
     hits: Vec<Hit>,
+    catalog_hits: Vec<Hit>,
+    catalog_task: Option<Task<()>>,
+    catalog_revision: u64,
     remote: Vec<Hit>,
     local: Vec<Hit>,
     live_task: Option<Task<()>>,
@@ -100,17 +100,19 @@ impl SearchView {
             input,
             cwd,
             store,
-            summaries: sources.summaries,
+            summaries: Arc::new(sources.summaries),
             live: sources.live,
-            projects: sources.projects,
-            recent: sources.recent,
-            logos: sources.logos,
-            files: vec![],
+            projects: Arc::new(sources.projects),
+            recent: Arc::new(sources.recent),
+            files: Arc::default(),
             visible: true,
             listing_pending: false,
             scope: Scope::All,
             query: String::new(),
             hits: vec![],
+            catalog_hits: vec![],
+            catalog_task: None,
+            catalog_revision: 0,
             remote: vec![],
             local: vec![],
             live_task: None,
@@ -129,6 +131,7 @@ impl SearchView {
             _changed: changed,
         };
         this.reload_files(cx);
+        this.request_catalog(cx);
         this
     }
 
@@ -140,11 +143,10 @@ impl SearchView {
     pub(crate) fn set_active(&mut self, sources: Option<Sources>, cx: &mut Context<Self>) {
         self.visible = sources.is_some();
         if let Some(sources) = sources {
-            self.summaries = sources.summaries;
+            self.summaries = Arc::new(sources.summaries);
             self.live = sources.live;
-            self.projects = sources.projects;
-            self.recent = sources.recent;
-            self.logos = sources.logos;
+            self.projects = Arc::new(sources.projects);
+            self.recent = Arc::new(sources.recent);
             self.live_revision += 1;
             self.reload_files(cx);
             self.refresh(cx);
@@ -167,12 +169,8 @@ impl SearchView {
         let work = cx.background_executor().spawn(async move {
             let mut files =
                 vorkspace_core::files::list_project_files_sync_cancellable(&root, Some(&flag))?;
-            if !vorkspace_core::remote_workspace::is_remote(Path::new(&root)) {
-                // git ls-files includes cached paths deleted from the working copy.
-                files.retain(|file| {
-                    !flag.load(Ordering::Acquire) && Path::new(&file.path).is_file()
-                });
-            }
+            // git ls-files includes cached paths deleted from the working copy.
+            files.retain(|file| !flag.load(Ordering::Acquire) && Path::new(&file.path).is_file());
             Ok::<_, String>(files)
         });
         cx.spawn(async move |this, cx| {
@@ -183,9 +181,10 @@ impl SearchView {
                 }
                 this.listing_pending = false;
                 if let Ok(files) = result {
-                    this.files = files;
+                    this.files = Arc::new(files);
+                    this.request_catalog(cx);
                 }
-                this.rank(cx);
+                cx.notify();
             });
         })
         .detach();
@@ -214,12 +213,18 @@ impl SearchView {
         rows: Option<Arc<Vec<Row>>>,
         cx: &mut Context<Self>,
     ) {
-        if let Some(old) = self.summaries.iter_mut().find(|s| s.id == summary.id) {
-            *old = summary.clone();
-        } else {
-            self.summaries.push(summary.clone());
-        }
         let id = summary.id;
+        let changed = match self.summaries.iter().position(|s| s.id == id) {
+            Some(index) if self.summaries[index] != summary => {
+                Arc::make_mut(&mut self.summaries)[index] = summary;
+                true
+            }
+            Some(_) => false,
+            None => {
+                Arc::make_mut(&mut self.summaries).push(summary);
+                true
+            }
+        };
         if let Some(rows) = rows {
             self.live.insert(id, rows);
         } else {
@@ -230,8 +235,9 @@ impl SearchView {
         }
         self.live_revision += 1;
         if self.visible {
-            // Recents and results both follow the session; only a query has
-            // live transcript rows to search again.
+            if changed && (self.scope.sessions() || self.query.is_empty()) {
+                self.request_catalog(cx);
+            }
             self.rank(cx);
             if !self.query.is_empty() {
                 self.refresh_live(cx);
@@ -239,7 +245,7 @@ impl SearchView {
         }
     }
     pub(crate) fn forget_session(&mut self, id: i64, cx: &mut Context<Self>) {
-        self.summaries.retain(|session| session.id != id);
+        Arc::make_mut(&mut self.summaries).retain(|session| session.id != id);
         self.live.remove(&id);
         self.live_revision += 1;
         if self.scope.sessions() {
@@ -272,10 +278,10 @@ impl SearchView {
                 Some((
                     cx.background_executor().spawn(async move {
                         summaries
-                            .into_iter()
+                            .iter()
                             .flat_map(|s| {
                                 live.get(&s.id)
-                                    .map(|rows| search::messages(&s, rows, &query, &flag))
+                                    .map(|rows| search::messages(s, rows, &query, &flag))
                                     .unwrap_or_default()
                             })
                             .collect::<Vec<_>>()
@@ -300,30 +306,67 @@ impl SearchView {
             });
         }));
     }
-    fn rank(&mut self, cx: &mut Context<Self>) {
-        self.hits = if self.query.is_empty() {
-            search::recents(
-                &self.summaries,
-                &self.files,
-                &self.recent,
-                &self.projects,
-                self.scope,
-            )
-        } else {
-            search::grouped(
-                search::titles(&self.summaries, &self.query)
-                    .into_iter()
-                    .chain(self.local.clone())
-                    .chain(self.remote.clone())
-                    .chain(search::filenames(&self.files, &self.query, &self.recent))
-                    .chain(self.content.clone())
-                    .chain(search::projects(&self.projects, &self.query)),
-                self.scope,
-            )
-        };
-        if self.active >= self.hits.len() {
-            self.active = 0;
+    fn request_catalog(&mut self, cx: &mut Context<Self>) {
+        self.catalog_revision += 1;
+        self.start_catalog(cx);
+    }
+
+    fn start_catalog(&mut self, cx: &mut Context<Self>) {
+        if !self.visible || self.catalog_task.is_some() {
+            return;
         }
+        let revision = self.catalog_revision;
+        let (query, scope) = (self.query.clone(), self.scope);
+        let summaries = self.summaries.clone();
+        let files = self.files.clone();
+        let projects = self.projects.clone();
+        let recent = self.recent.clone();
+        let work = cx.background_executor().spawn(async move {
+            if query.is_empty() {
+                return search::recents(&summaries, &files, &recent, &projects, scope);
+            }
+            let titles = scope.sessions().then(|| search::titles(&summaries, &query));
+            let names = scope
+                .files()
+                .then(|| search::filenames(&files, &query, &recent));
+            let projects = matches!(scope, Scope::All | Scope::Projects)
+                .then(|| search::projects(&projects, &query));
+            search::grouped(
+                titles.into_iter().chain(names).chain(projects).flatten(),
+                scope,
+            )
+        });
+        self.catalog_task = Some(cx.spawn(async move |this, cx| {
+            let hits = work.await;
+            let _ = this.update(cx, |this, cx| {
+                this.catalog_task = None;
+                if !this.visible {
+                    return;
+                }
+                if revision == this.catalog_revision {
+                    this.catalog_hits = hits;
+                    this.rank(cx);
+                } else {
+                    this.start_catalog(cx);
+                }
+            });
+        }));
+    }
+
+    fn rank(&mut self, cx: &mut Context<Self>) {
+        let selected = self.hits.get(self.active).map(|hit| hit.id.clone());
+        self.hits = search::grouped(
+            self.catalog_hits
+                .iter()
+                .chain(&self.local)
+                .chain(&self.remote)
+                .chain(&self.content)
+                .cloned(),
+            self.scope,
+        );
+        self.active = selected
+            .and_then(|id| self.hits.iter().position(|hit| hit.id == id))
+            .unwrap_or(0);
         self.pointer = None;
         cx.notify();
     }
@@ -338,10 +381,12 @@ impl SearchView {
         self.local.clear();
         self.remote.clear();
         self.content.clear();
+        self.catalog_hits.clear();
         self.error = None;
         self.truncated = (false, false);
         self.sessions_loading = !self.query.is_empty() && self.scope.sessions();
         self.files_loading = !self.query.is_empty() && self.scope.files();
+        self.request_catalog(cx);
         self.rank(cx);
         self.scroll.set_offset(point(px(0.), px(0.)));
         if !self.visible || self.query.is_empty() {
@@ -370,9 +415,9 @@ impl SearchView {
             let revision = self.live_revision;
             let work = cx.background_executor().spawn(async move {
                 let mut local = vec![];
-                for s in summaries {
+                for s in summaries.iter() {
                     if let Some(rows) = live.get(&s.id) {
-                        local.extend(search::messages(&s, rows, &query, &flag));
+                        local.extend(search::messages(s, rows, &query, &flag));
                     }
                 }
                 let saved = locked(&store)
@@ -469,6 +514,12 @@ impl SearchView {
             cx.emit(Event::Open(hit.target.clone(), self.query.clone()));
         }
     }
+
+    fn pick_hit(&mut self, id: &str, cx: &mut Context<Self>) {
+        if let Some(ix) = self.hits.iter().position(|hit| hit.id == id) {
+            self.pick(ix, cx);
+        }
+    }
 }
 fn empty_state() -> AnyElement {
     page::empty(
@@ -487,6 +538,8 @@ impl Render for SearchView {
             .iter()
             .enumerate()
             .map(|(ix, hit)| {
+                let id = hit.id.clone();
+                let hover_id = id.clone();
                 let mark = match &hit.target {
                     Target::Conversation(_) => provider_icon(&hit.provider, 14.).into_any_element(),
                     Target::Message { .. } => icon("message-square", 14.)
@@ -498,16 +551,7 @@ impl Render for SearchView {
                         false,
                         16.,
                     ),
-                    Target::Project(path) => self
-                        .logos
-                        .get(path)
-                        .map(|logo| {
-                            img(std::path::PathBuf::from(logo))
-                                .size(px(14.))
-                                .rounded(px(radius::SMALL))
-                                .into_any_element()
-                        })
-                        .unwrap_or_else(|| icon("folder", 14.).into_any_element()),
+                    Target::Project(path) => crate::project_mark::project_icon(path, 14.),
                 };
                 let text = StyledText::new(hit.title.clone()).with_highlights(
                     hit.highlights.iter().cloned().map(|range| {
@@ -558,19 +602,23 @@ impl Render for SearchView {
                         .child(hit.meta.clone()),
                 )
                 .on_mouse_move(cx.listener(move |this, event: &MouseMoveEvent, _, cx| {
-                    if this.pointer.is_some_and(|old| old != event.position) && this.active != ix {
-                        this.active = ix;
+                    if this.pointer.is_some_and(|old| old != event.position)
+                        && let Some(current) = this.hits.iter().position(|hit| hit.id == hover_id)
+                        && this.active != current
+                    {
+                        this.active = current;
                         cx.notify();
                     }
                     this.pointer = Some(event.position);
                 }))
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                .on_click(cx.listener(move |this, _, _, cx| this.pick(ix, cx)))
+                .on_click(cx.listener(move |this, _, _, cx| this.pick_hit(&id, cx)))
                 .into_any_element()
             })
             .collect();
         let loading = self.sessions_loading
             || self.files_loading
+            || self.catalog_task.is_some()
             || (self.listing_pending && self.scope.files() && !self.query.is_empty());
         div()
             .id("app-search")
@@ -614,11 +662,7 @@ impl Render for SearchView {
                             .child(div().flex_1().min_w_0().child(self.input.clone())),
                     )
                     .when(loading, |d| {
-                        d.child(crate::panel_kit::spinner(
-                            "app-search-loading",
-                            "loader",
-                            14.,
-                        ))
+                        d.child(crate::panel_kit::spinner("app-search-loading", 14.))
                     }),
             )
             .child(

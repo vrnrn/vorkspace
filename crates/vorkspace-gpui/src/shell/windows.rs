@@ -1,5 +1,5 @@
 //! Native workspace window layouts. Each record belongs to a window, and
-//! the last focused record also feeds the legacy single-window setting.
+//! the last focused record also feeds the single-window `workspace` setting.
 use super::*;
 use gpui::{WindowBounds, point, size};
 use serde::{Deserialize, Serialize};
@@ -9,7 +9,7 @@ pub(crate) const WINDOW_STATE_KEY: &str = "workspace-windows";
 #[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct WindowLayout {
     pub(crate) id: u64,
-    pub(crate) workspace: String,
+    pub(crate) workspace: Arc<str>,
 }
 
 #[derive(Clone, Default, Serialize, Deserialize)]
@@ -17,13 +17,20 @@ pub(crate) struct WindowLayout {
 pub(crate) struct WindowLayouts {
     pub(crate) entries: Vec<WindowLayout>,
     pub(crate) focused: Option<u64>,
-    pub(super) shared: Option<WindowShared>,
+    pub(super) shared: Option<Arc<WindowShared>>,
     #[serde(skip)]
     pub(super) imported_projects: Vec<String>,
 }
 
 impl WindowLayouts {
     pub(crate) fn load(store: &vorkspace_core::store::Store) -> Self {
+        Self::load_with_single_window(store, store.ui_state().ok().flatten().as_deref())
+    }
+
+    pub(crate) fn load_with_single_window(
+        store: &vorkspace_core::store::Store,
+        single_window: Option<&str>,
+    ) -> Self {
         let mut layouts: Self = store
             .setting(WINDOW_STATE_KEY)
             .ok()
@@ -41,15 +48,15 @@ impl WindowLayouts {
             layouts.focused = layouts.entries.first().map(|entry| entry.id);
         }
         if !layouts.entries.is_empty()
-            && let Some(current) = store.ui_state().ok().flatten()
+            && let Some(current) = single_window
         {
-            layouts.reconcile_legacy(&current);
+            layouts.reconcile_single_window(current);
         }
         layouts
     }
 
-    fn reconcile_legacy(&mut self, raw: &str) {
-        let Ok(legacy) = serde_json::from_str::<Workspace>(raw) else {
+    fn reconcile_single_window(&mut self, raw: &str) {
+        let Ok(single_window) = serde_json::from_str::<Workspace>(raw) else {
             return;
         };
         if let Some(previous) = &self.shared {
@@ -58,46 +65,29 @@ impl WindowLayouts {
                 .iter()
                 .map(|path| vorkspace_core::files::path_key(path))
                 .collect::<HashSet<_>>();
-            self.imported_projects = legacy
+            self.imported_projects = single_window
                 .projects
                 .iter()
                 .filter(|path| !known.contains(&vorkspace_core::files::path_key(path)))
                 .cloned()
                 .collect();
         }
-        self.shared = Some(WindowShared::from_workspace(&legacy));
-        for entry in &mut self.entries {
-            // Keep each layout's selected project, panes and zoom. Carry the
-            // desktop merge baseline forward so the next launch can detect edits.
-            let Ok(mut layout) = serde_json::from_str::<Workspace>(&entry.workspace) else {
-                continue;
-            };
-            layout
-                .project_appearance
-                .clone_from(&legacy.project_appearance);
-            layout
-                .desktop_project_preferences
-                .clone_from(&legacy.desktop_project_preferences);
-            layout
-                .desktop_preferences_metadata
-                .clone_from(&legacy.desktop_preferences_metadata);
-            layout
-                .desktop_workspace_snapshot
-                .clone_from(&legacy.desktop_workspace_snapshot);
-            entry.workspace = serde_json::to_string(&layout).expect("serialize reconciled window");
-        }
+        self.shared = Some(Arc::new(WindowShared::from_workspace(&single_window)));
     }
 
     pub(super) fn record(&mut self, id: u64, workspace: String, focused: bool) -> bool {
         let mut changed = false;
         match self.entries.iter_mut().find(|entry| entry.id == id) {
-            Some(entry) if entry.workspace != workspace => {
-                entry.workspace = workspace;
+            Some(entry) if entry.workspace.as_ref() != workspace => {
+                entry.workspace = workspace.into();
                 changed = true;
             }
             Some(_) => {}
             None => {
-                self.entries.push(WindowLayout { id, workspace });
+                self.entries.push(WindowLayout {
+                    id,
+                    workspace: workspace.into(),
+                });
                 changed = true;
             }
         }
@@ -121,11 +111,31 @@ impl WindowLayouts {
         self.entries.len() != len
     }
 
-    pub(super) fn legacy(&self) -> Option<&str> {
+    pub(super) fn single_window(&self) -> Option<&str> {
         self.entries
             .iter()
             .find(|entry| Some(entry.id) == self.focused)
-            .map(|entry| entry.workspace.as_str())
+            .map(|entry| entry.workspace.as_ref())
+    }
+
+    pub(super) fn settings_values(&self) -> [(&'static str, String); 2] {
+        let mut single_window = self
+            .single_window()
+            .and_then(|raw| serde_json::from_str::<Workspace>(raw).ok())
+            .unwrap_or_default();
+        if let Some(shared) = &self.shared {
+            shared.apply(&mut single_window);
+        }
+        [
+            (
+                WINDOW_STATE_KEY,
+                serde_json::to_string(self).expect("serialize windows"),
+            ),
+            (
+                "workspace",
+                serde_json::to_string(&single_window).expect("serialize the focused workspace"),
+            ),
+        ]
     }
 }
 
@@ -231,10 +241,13 @@ impl Shell {
                     {
                         return Err("That vorkspace was removed. Choose another one.".into());
                     }
+                    core.update(cx, |core, cx| {
+                        core.reconcile_session_directory(&sessions, &metadata, cx);
+                    });
                     crate::open_workspace_window(
                         store,
-                        sessions,
-                        metadata,
+                        &sessions,
+                        &metadata,
                         crate::WorkspaceWindowStart {
                             cwd,
                             saved: Some(saved),
@@ -284,8 +297,8 @@ impl Shell {
             return false;
         }
         if self.unsaved_files(cx) {
-            if !self.quit_prompted {
-                self.quit_prompted = true;
+            if !self.window.quit_prompted {
+                self.window.quit_prompted = true;
                 let answer = window.prompt(
                     gpui::PromptLevel::Warning,
                     "Close window with unsaved file edits?",
@@ -296,7 +309,7 @@ impl Shell {
                 cx.spawn_in(window, async move |shell, cx| {
                     let answer = answer.await;
                     let _ = shell.update_in(cx, |shell, window, cx| {
-                        shell.quit_prompted = false;
+                        shell.window.quit_prompted = false;
                         if matches!(answer, Ok(0)) && shell.finish_window_close(cx) {
                             window.remove_window();
                         }
@@ -312,16 +325,17 @@ impl Shell {
     fn finish_window_close(&mut self, cx: &mut Context<Self>) -> bool {
         let conversation_active = self.sessions.values().any(|view| {
             let view = view.read(cx);
-            view.busy || view.external_submission_pending()
+            view.external_submission_pending()
         });
         let bot_active = self
             .bots
             .as_ref()
             .is_some_and(|bots| bots.read(cx).has_active_work(cx));
         let terminal_active = self
+            .pages
             .terminal_tabs
             .values()
-            .chain(self.terminals.values().flatten())
+            .chain(self.dock.terminals.values().flatten())
             .any(|terminal| terminal.read(cx).foreground_process().is_some());
         let voice_active = self
             .vox
@@ -333,6 +347,7 @@ impl Shell {
             || voice_active
             || self.automation_work_in_progress()
             || self
+                .sidebar
                 .group_writes
                 .as_ref()
                 .is_some_and(|task| !task.is_ready())
@@ -358,7 +373,10 @@ impl Shell {
             cx.notify();
             return false;
         }
-        self.window_closing = true;
+        for view in self.sessions.values() {
+            view.update(cx, |view, cx| view.save_side_question_draft(cx));
+        }
+        self.window.closing = true;
         self.forget_closed_window(cx);
         true
     }
@@ -367,7 +385,7 @@ impl Shell {
 /// App-wide choices shared by the window layouts. UI zoom follows the window.
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub(super) struct WindowShared {
-    preferences: vorkspace_ui::preferences::Preferences,
+    pub(super) preferences: vorkspace_ui::preferences::Preferences,
     projects: Vec<String>,
     archived: HashMap<String, bool>,
     deleted: HashSet<String>,
@@ -394,39 +412,21 @@ impl WindowShared {
         workspace.deleted_projects.clone_from(&self.deleted);
     }
 
-    pub(super) fn apply_edits(&mut self, before: &Self, next: Self) {
-        if next.preferences != before.preferences {
-            // Windows may save independent settings before a peer's observer
-            // runs. Apply only fields this editor changed.
-            let encode = |value| {
-                serde_json::to_value(value)
-                    .expect("serialize preferences")
-                    .as_object()
-                    .expect("preferences object")
-                    .clone()
-            };
-            let before = encode(&before.preferences);
-            let mut current = encode(&self.preferences);
-            for (key, value) in encode(&next.preferences) {
-                if before.get(&key) != Some(&value) {
-                    current.insert(key, value);
-                }
-            }
-            self.preferences = serde_json::from_value(serde_json::Value::Object(current))
-                .expect("deserialize preferences");
-        }
+    pub(super) fn apply_edits(&mut self, before: &Self, next: &Self) {
+        self.preferences
+            .apply_edits(&before.preferences, &next.preferences);
         if next.projects != before.projects {
             self.projects
                 .retain(|path| !before.projects.contains(path) || next.projects.contains(path));
-            for path in next.projects {
-                if !before.projects.contains(&path) && !self.projects.contains(&path) {
-                    self.projects.push(path);
+            for path in &next.projects {
+                if !before.projects.contains(path) && !self.projects.contains(path) {
+                    self.projects.push(path.clone());
                 }
             }
         }
-        for (key, archived) in next.archived {
-            if before.archived.get(&key) != Some(&archived) {
-                self.archived.insert(key, archived);
+        for (key, &archived) in &next.archived {
+            if before.archived.get(key) != Some(&archived) {
+                self.archived.insert(key.clone(), archived);
             }
         }
         self.deleted
@@ -518,9 +518,9 @@ mod tests {
             .update(cx, |shell, window, cx| {
                 assert_eq!(shell.workspace.active_vorkspace, side);
                 shell.scale_interface(-15, window, cx);
-                shell.window_active = true;
+                shell.window.active = true;
                 shell.persist(cx);
-                shell.window_layout
+                shell.window.layout
             })
             .unwrap();
 
@@ -596,17 +596,16 @@ mod tests {
 }
 
 #[cfg(test)]
-mod compatibility_tests {
+mod single_window_tests {
     use super::*;
 
     #[test]
-    fn desktop_import_refreshes_shared_defaults_without_replacing_local_layout() {
+    fn single_window_setting_refreshes_shared_defaults_without_replacing_local_layout() {
         let path = std::path::Path::new(":memory:");
-        let store = vorkspace_core::store::Store::open(path).unwrap();
+        let store = vorkspace_core::store::Store::test(path).unwrap();
         let mut local = Workspace {
             project: "/workspace/first".into(),
             projects: vec!["/workspace/first".into()],
-            right_panel_open: true,
             ..Workspace::default()
         };
         local.preferences.ui_scale = 135;
@@ -614,10 +613,10 @@ mod compatibility_tests {
         let layouts = WindowLayouts {
             entries: vec![WindowLayout {
                 id: 1,
-                workspace: serde_json::to_string(&local).unwrap(),
+                workspace: serde_json::to_string(&local).unwrap().into(),
             }],
             focused: Some(1),
-            shared: Some(WindowShared::from_workspace(&local)),
+            shared: Some(Arc::new(WindowShared::from_workspace(&local))),
             ..Default::default()
         };
         let mut updated = local.clone();
@@ -625,8 +624,6 @@ mod compatibility_tests {
             .projects
             .push("/workspace/new-desktop-project".into());
         updated.preferences.default_provider = Some("claude".into());
-        updated.desktop_project_preferences =
-            Some(serde_json::json!({"default_provider":"claude"}));
         updated.preferences.ui_scale = 100;
         store
             .save_settings(&[
@@ -643,11 +640,6 @@ mod compatibility_tests {
         );
         assert_eq!(restored.preferences.ui_scale, 135);
         assert_eq!(restored.project, local.project);
-        assert!(restored.right_panel_open);
-        assert_eq!(
-            restored.desktop_project_preferences,
-            updated.desktop_project_preferences
-        );
         assert_eq!(loaded.imported_projects, ["/workspace/new-desktop-project"]);
     }
 }

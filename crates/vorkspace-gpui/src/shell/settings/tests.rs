@@ -3,12 +3,75 @@ use crate::shell::tests::window;
 use gpui::TestAppContext;
 
 #[gpui::test]
+fn settings_projects_only_the_visible_page_and_reads_saved_checkout_identity(
+    cx: &mut TestAppContext,
+) {
+    let (window, other, saved) = window(cx);
+    window
+        .update(cx, |shell, _, cx| {
+            let project = shell.session_summary(saved, cx).unwrap().cwd.clone();
+            shell.workspace.project = project.clone();
+            let checkout = "/work/archived-checkout";
+            shell.edit_session_record(saved, cx, |row| {
+                row.checkout = Some(Some(checkout.into()));
+                row.summary.archived = true;
+            });
+            // A detached pane can have a different owner from a saved session
+            // lookup. Projection and removal resolve the session directly.
+            shell.workspace.review_owners.insert(saved, other);
+            assert_eq!(
+                shell.saved_session_scope(saved, cx),
+                Some((project.as_str(), checkout))
+            );
+            assert_ne!(shell.pane_working_copy(saved, cx), checkout);
+            shell.workspace.review_owners.remove(&saved);
+
+            let general = shell.settings_context(Section::General, cx);
+            assert!(general.archived.is_empty() && general.session_checkouts.is_empty());
+            let archive = shell.settings_context(Section::Archive, cx);
+            assert_eq!(
+                archive
+                    .archived
+                    .iter()
+                    .map(|session| session.id)
+                    .collect::<Vec<_>>(),
+                [saved]
+            );
+            assert!(archive.session_checkouts.is_empty());
+            let worktrees = shell.settings_context(Section::Worktrees, cx);
+            assert!(worktrees.archived.is_empty());
+            assert!(
+                worktrees
+                    .session_checkouts
+                    .iter()
+                    .any(|path| path == checkout)
+            );
+
+            shell.sessions[&saved].update(cx, |view, _| {
+                view.settings.worktree_cwd = Some("/work/previous-checkout".into());
+            });
+            for (stored, expected) in [
+                (Some(None), project.as_str()),
+                (None, "/work/previous-checkout"),
+                (Some(Some(checkout.to_owned())), checkout),
+            ] {
+                shell.edit_session_record(saved, cx, |row| row.checkout = stored);
+                assert_eq!(
+                    shell.saved_session_scope(saved, cx),
+                    Some((project.as_str(), expected))
+                );
+            }
+        })
+        .unwrap();
+}
+
+#[gpui::test]
 fn project_archive_leaves_the_selected_project_and_refuses_running_work(cx: &mut TestAppContext) {
     let (window, a, _) = window(cx);
     window
         .update(cx, |shell, w, cx| {
             // Running work in a project refuses its archive.
-            shell.sessions[&a].update(cx, |view, _| view.busy = true);
+            shell.sessions[&a].update(cx, |view, _| view.set_running_for_test(true));
             let busy_project = shell.session_metadata(a, cx).summary.cwd.clone();
             shell.archive_project(&busy_project, w, cx);
             assert!(
@@ -21,7 +84,7 @@ fn project_archive_leaves_the_selected_project_and_refuses_running_work(cx: &mut
                 shell.workspace.project_archive.get(&busy_project),
                 Some(&true)
             );
-            shell.sessions[&a].update(cx, |view, _| view.busy = false);
+            shell.sessions[&a].update(cx, |view, _| view.set_running_for_test(false));
             // The selected project can be archived: another one is selected.
             shell.workspace.add_project("/work/archive");
             shell.workspace.project = "/work/archive".into();
@@ -80,7 +143,9 @@ fn settings_skill_form_opens_and_cancels_without_leaving_settings(cx: &mut TestA
     visual.run_until_parked();
     assert!(visual.debug_bounds("settings-skill-form").is_none());
     window
-        .update(visual, |shell, _, _| assert!(shell.settings.is_some()))
+        .update(visual, |shell, _, _| {
+            assert!(shell.pages.settings.is_some())
+        })
         .unwrap();
 }
 
@@ -100,13 +165,17 @@ fn escape_closes_the_inner_settings_dialog_first(cx: &mut TestAppContext) {
     visual.simulate_keystrokes("escape");
     visual.run_until_parked();
     window
-        .update(visual, |shell, _, _| assert!(shell.settings.is_some()))
+        .update(visual, |shell, _, _| {
+            assert!(shell.pages.settings.is_some())
+        })
         .unwrap();
     assert!(visual.debug_bounds("settings-management-dialog").is_none());
     visual.simulate_keystrokes("escape");
     visual.run_until_parked();
     window
-        .update(visual, |shell, _, _| assert!(shell.settings.is_none()))
+        .update(visual, |shell, _, _| {
+            assert!(shell.pages.settings.is_none())
+        })
         .unwrap();
 }
 #[gpui::test]
@@ -147,7 +216,6 @@ fn settings_replace_native_rail_and_tabs_and_return_to_the_same_session(cx: &mut
     assert!(visual.debug_bounds("sidebar-content").is_none());
     let selectors = [
         "settings-nav-general",
-        "settings-nav-connections",
         "settings-nav-appearance",
         "settings-nav-keybindings",
         "settings-nav-chat",
@@ -172,7 +240,10 @@ fn settings_replace_native_rail_and_tabs_and_return_to_the_same_session(cx: &mut
         visual.run_until_parked();
         window
             .update(visual, |shell, _, cx| {
-                assert_eq!(shell.settings.as_ref().unwrap().read(cx).section, section)
+                assert_eq!(
+                    shell.pages.settings.as_ref().unwrap().read(cx).section,
+                    section
+                )
             })
             .unwrap();
         assert!(
@@ -186,7 +257,7 @@ fn settings_replace_native_rail_and_tabs_and_return_to_the_same_session(cx: &mut
     visual.run_until_parked();
     window
         .update(visual, |shell, _, _| {
-            assert!(shell.settings.is_none());
+            assert!(shell.pages.settings.is_none());
             assert_eq!(shell.workspace.active, Some(active));
             assert_eq!(shell.workspace.tabs.len(), 2);
         })
@@ -275,13 +346,15 @@ fn shortcut_recording_rebinds_native_settings_and_reset_restores_it(cx: &mut Tes
     visual.simulate_keystrokes("escape");
     visual.run_until_parked();
     window
-        .update(visual, |shell, _, _| assert!(shell.settings.is_none()))
+        .update(visual, |shell, _, _| {
+            assert!(shell.pages.settings.is_none())
+        })
         .unwrap();
     visual.simulate_keystrokes("cmd-,");
     visual.run_until_parked();
     window
         .update(visual, |shell, _, _| {
-            assert!(shell.settings.is_none(), "old chord is removed")
+            assert!(shell.pages.settings.is_none(), "old chord is removed")
         })
         .unwrap();
     visual.simulate_keystrokes("cmd-alt-y");
@@ -289,7 +362,7 @@ fn shortcut_recording_rebinds_native_settings_and_reset_restores_it(cx: &mut Tes
     window
         .update(visual, |shell, _, _| {
             assert!(
-                shell.settings.is_some(),
+                shell.pages.settings.is_some(),
                 "the newly recorded chord dispatches the native action"
             )
         })
@@ -310,7 +383,7 @@ fn shortcut_recording_rebinds_native_settings_and_reset_restores_it(cx: &mut Tes
     window
         .update(visual, |shell, _, _| {
             assert!(
-                shell.settings.is_some(),
+                shell.pages.settings.is_some(),
                 "reset restores the native default shortcut"
             )
         })
@@ -385,13 +458,13 @@ fn a_peer_terminal_prevents_worktree_removal(cx: &mut TestAppContext) {
     cx.run_until_parked();
     peer.update(cx, |shell, _, cx| {
         let terminal = cx.new(|cx| crate::terminal::Terminal::new(alias.clone(), cx));
-        shell.terminal_tabs.insert(1, terminal);
+        shell.pages.terminal_tabs.insert(1, terminal);
     })
     .unwrap();
     let error = remove(window, project.clone(), format!("{tree}/."), cx).unwrap_err();
     assert!(error.contains("other window"), "{error}");
     assert!(std::path::Path::new(&tree).is_dir());
-    peer.update(cx, |shell, _, _| shell.terminal_tabs.clear())
+    peer.update(cx, |shell, _, _| shell.pages.terminal_tabs.clear())
         .unwrap();
     let archived = window
         .update(cx, |shell, _, _| {
@@ -436,14 +509,14 @@ fn an_alias_cannot_slip_past_a_title_tab_terminal(cx: &mut TestAppContext) {
     window
         .update(cx, |shell, _, cx| {
             let terminal = cx.new(|cx| crate::terminal::Terminal::new(tree.clone(), cx));
-            shell.terminal_tabs.insert(1, terminal);
+            shell.pages.terminal_tabs.insert(1, terminal);
         })
         .unwrap();
     let error = remove(window, project.clone(), format!("{tree}/."), cx).unwrap_err();
     assert!(error.contains("Close the terminals"), "{error}");
     assert!(std::path::Path::new(&tree).exists());
     window
-        .update(cx, |shell, _, _| shell.terminal_tabs.clear())
+        .update(cx, |shell, _, _| shell.pages.terminal_tabs.clear())
         .unwrap();
     remove(window, project, format!("{tree}/."), cx).unwrap();
     assert!(!std::path::Path::new(&tree).exists());
@@ -470,29 +543,78 @@ fn agents_are_refused_while_work_would_be_lost(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn stale_settings_event_preserves_a_newer_remembered_choice(cx: &mut TestAppContext) {
+    let (window, _, _) = window(cx);
+    let store = window
+        .update(cx, |shell, window, cx| {
+            shell.open_settings(Section::General, window, cx);
+            let before = shell.workspace.preferences.clone();
+            let mut after = before.clone();
+            after.autosave = !before.autosave;
+            after.ui_scale = 125;
+            crate::conversation::remember_access(vorkspace_core::agent::AccessMode::FullAccess, cx);
+            shell.pages.settings.as_ref().unwrap().update(cx, |_, cx| {
+                cx.emit(SettingsEvent::Changed {
+                    before: Box::new(before),
+                    after: Box::new(after),
+                });
+            });
+            shell.store.clone()
+        })
+        .unwrap();
+    cx.run_until_parked();
+    window
+        .update(cx, |shell, window, cx| {
+            let preferences = &shell.workspace.preferences;
+            assert_eq!(preferences.default_access.as_deref(), Some("full-access"));
+            assert_eq!(preferences.ui_scale, 125);
+            assert_eq!(window.ui_scale(), 1.25);
+            let published = cx.global::<vorkspace_ui::preferences::Preferences>();
+            assert_eq!(published.default_access, preferences.default_access);
+            assert_eq!(published.autosave, preferences.autosave);
+            assert_eq!(published.ui_scale, 100);
+        })
+        .unwrap();
+    let store = locked(&store).unwrap();
+    let saved: Workspace = serde_json::from_str(&store.ui_state().unwrap().unwrap()).unwrap();
+    assert_eq!(
+        saved.preferences.default_access.as_deref(),
+        Some("full-access")
+    );
+    assert_eq!(saved.preferences.ui_scale, 125);
+}
+
+#[gpui::test]
 fn disabling_notes_retains_its_document_view(cx: &mut TestAppContext) {
     let (window, _, _) = window(cx);
     let (page_id, settings, prefs) = window
         .update(cx, |shell, w, cx| {
             shell.open_notes(w, cx);
-            let page_id = shell.notes.as_ref().unwrap().entity_id();
+            let page_id = shell.page_tabs.notes.as_ref().unwrap().entity_id();
             shell.open_settings(Section::Notes, w, cx);
             (
                 page_id,
-                shell.settings.clone().unwrap(),
+                shell.pages.settings.clone().unwrap(),
                 shell.workspace.preferences.clone(),
             )
         })
         .unwrap();
 
+    let mut before = prefs;
     for enabled in [false, true] {
-        let mut prefs = prefs.clone();
-        prefs.notes = enabled;
-        settings.update(cx, |_, cx| cx.emit(SettingsEvent::Changed(Box::new(prefs))));
+        let mut after = before.clone();
+        after.notes = enabled;
+        settings.update(cx, |_, cx| {
+            cx.emit(SettingsEvent::Changed {
+                before: Box::new(before.clone()),
+                after: Box::new(after.clone()),
+            });
+        });
+        before = after;
         window
             .update(cx, |shell, _, _| {
                 assert_eq!(shell.workspace.preferences.notes, enabled);
-                assert_eq!(shell.notes.as_ref().unwrap().entity_id(), page_id);
+                assert_eq!(shell.page_tabs.notes.as_ref().unwrap().entity_id(), page_id);
             })
             .unwrap();
     }
@@ -500,8 +622,8 @@ fn disabling_notes_retains_its_document_view(cx: &mut TestAppContext) {
     window
         .update(cx, |shell, w, cx| {
             shell.open_notes(w, cx);
-            assert_eq!(shell.active_app_view, Some(AppView::Notes));
-            assert_eq!(shell.notes.as_ref().unwrap().entity_id(), page_id);
+            assert_eq!(shell.pages.active_app_view, Some(AppView::Notes));
+            assert_eq!(shell.page_tabs.notes.as_ref().unwrap().entity_id(), page_id);
         })
         .unwrap();
 }

@@ -50,7 +50,6 @@ const SHOTS: &[(&str, Option<usize>, (f32, f32))] = &[
     ("settings-keybindings", None, (1390., 890.)),
     ("settings-providers", None, (1390., 890.)),
     ("settings-chat", None, (1390., 890.)),
-    ("settings-connections", None, (1390., 890.)),
     ("settings-mcp", None, (1390., 890.)),
     ("settings-skills", None, (1390., 890.)),
     ("settings-bots", None, (1390., 890.)),
@@ -154,7 +153,7 @@ fn fluid_capture() {
     seed_project(&project_path);
     let project = project_path.to_str().unwrap();
     let fixture_db = scratch.path().join("fixtures.sqlite");
-    let store = Arc::new(Mutex::new(Store::open(&fixture_db).unwrap()));
+    let store = Arc::new(Mutex::new(Store::test(&fixture_db).unwrap()));
     {
         // A populated board, so To-dos shows its columns in use.
         use vorkspace_core::todos::{TodoBoard, TodoStatus};
@@ -364,7 +363,7 @@ fn fluid_capture() {
             if !first_run {
                 std::fs::copy(&fixture_db, &scene_db).unwrap();
             }
-            let store = Arc::new(Mutex::new(Store::open(&scene_db).unwrap()));
+            let store = Arc::new(Mutex::new(Store::test(&scene_db).unwrap()));
             let summaries = if first_run {
                 Vec::new()
             } else {
@@ -469,7 +468,7 @@ fn fluid_capture() {
                     "settings-keybindings" => Section::Keybindings,
                     "settings-providers" => Section::Providers,
                     "settings-chat" => Section::Chat,
-                    "settings-connections" => Section::Connections,
+
                     "settings-mcp" => Section::Mcp,
                     "settings-skills" => Section::Skills,
                     "settings-bots" => Section::Bots,
@@ -524,7 +523,7 @@ fn fluid_capture() {
                         shell.workspace.add_project_to_vorkspace(&side, project);
                         shell.open_menu(
                             MenuTarget::Vorkspace,
-                            Anchor::Slot(shell.vorkspace_anchor.clone()),
+                            Anchor::Slot(shell.rail.vorkspace_anchor.clone()),
                             window,
                             cx,
                         )
@@ -588,7 +587,7 @@ fn fluid_capture() {
                     }
                     "automation-editor" => {
                         shell.open_automations(window, cx);
-                        if let Some(view) = shell.automations.clone() {
+                        if let Some(view) = shell.pages.automations.clone() {
                             view.update(cx, |view, cx| view.begin_first_template(cx));
                         }
                     }
@@ -606,13 +605,13 @@ fn fluid_capture() {
                     "compact-rail" => shell.toggle_project_rail(cx),
                     "session-filter" => shell.open_menu(
                         MenuTarget::SessionFilter,
-                        Anchor::Slot(shell.filter_anchor.clone()),
+                        Anchor::Slot(shell.sidebar.filter_anchor.clone()),
                         window,
                         cx,
                     ),
                     "project-picker" => shell.open_menu(
                         MenuTarget::Header,
-                        Anchor::Slot(shell.project_anchor.clone()),
+                        Anchor::Slot(shell.sidebar.project_anchor.clone()),
                         window,
                         cx,
                     ),
@@ -645,7 +644,7 @@ fn fluid_capture() {
                 // The board loads its items first.
                 window
                     .update(&mut cx, |shell, _, cx| {
-                        if let Some(page) = shell.todos_page.clone() {
+                        if let Some(page) = shell.page_tabs.todos_page.clone() {
                             let board = page.read(cx).board_for_capture();
                             board.update(cx, |board, cx| board.open_first_details(cx));
                         }
@@ -657,7 +656,6 @@ fn fluid_capture() {
                 let new = *name == "bot-new";
                 window
                     .update(&mut cx, |shell, w, cx| {
-                        shell.workspace.right_panel_open = true;
                         let manager = shell.bot_manager();
                         manager.update(cx, |manager, cx| {
                             if new {
@@ -769,7 +767,6 @@ fn fluid_capture() {
                                 label: "Run a command".into(),
                                 detail: "cargo nextest run -p vorkspace-gpui".into(),
                             }],
-                            inbox_ask: false,
                             orchestration_worker: false,
                             conversation_focused: false,
                         }];

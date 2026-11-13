@@ -99,17 +99,36 @@ fn cards_screenshot_two_starts_and_explicit_links_survive_stream_settle_patch_an
     let temporary = tempfile::tempdir().unwrap();
     let path = temporary.path().join("history.db");
     let id = {
-        let mut store = vorkspace_core::store::Store::open(&path).unwrap();
+        let mut store = vorkspace_core::store::Store::test(&path).unwrap();
         let session = store.create("codex", "/repo").unwrap();
         store.write_rows(session.id, 0, &source).unwrap();
         session.id
     };
-    let store = vorkspace_core::store::Store::open(&path).unwrap();
+    let store = vorkspace_core::store::Store::test(&path).unwrap();
     let saved = store.load(id).unwrap().rows;
-    assert_eq!(
-        saved, source,
-        "both durable representations and unknown fields remain intact"
-    );
+    assert_eq!(saved.len(), source.len());
+    for (saved, source) in saved.iter().zip(&source) {
+        assert_eq!(saved.role, source.role);
+        assert_eq!(saved.first, source.first);
+        assert_eq!(saved.sent_at, source.sent_at);
+        match saved.role.as_str() {
+            "tool" => {
+                let mut call: ToolCall = serde_json::from_str(&saved.text).unwrap();
+                // The block projection adds display metadata to the saved
+                // call while retaining its identity, arguments and output.
+                assert!(call.display.is_some());
+                call.display = None;
+                let original: ToolCall = serde_json::from_str(&source.text).unwrap();
+                assert_eq!(call, original);
+            }
+            "bot-card" => assert_eq!(
+                serde_json::from_str::<Value>(&saved.text).unwrap(),
+                serde_json::from_str::<Value>(&source.text).unwrap(),
+                "card identities and unknown fields remain intact"
+            ),
+            _ => assert_eq!(saved.text, source.text),
+        }
+    }
     let reopened = fixture(cx, true);
     reopened.update(cx, |view, cx| {
         view.install_prepared_history(PreparedHistory::new(saved.clone(), true), cx)
@@ -118,10 +137,7 @@ fn cards_screenshot_two_starts_and_explicit_links_survive_stream_settle_patch_an
         reopened.read_with(cx, |view, _| visible(view)),
         view.read_with(cx, |view, _| visible(view))
     );
-    assert_eq!(
-        reopened.read_with(cx, |view, _| view.source.clone()),
-        source
-    );
+    assert_eq!(reopened.read_with(cx, |view, _| view.source.clone()), saved);
 }
 
 #[gpui::test]
@@ -209,7 +225,7 @@ fn cards_reverse_order_replay_group_scope_and_invalid_identity(cx: &mut TestAppC
         assert_eq!(visible(view).len(), 1);
         assert_eq!(visible(view)[0].1["sessionId"], handle);
     });
-    // A numeric-looking desktop ID is still an external ID, not native 7.
+    // A numeric-looking string ID is still an external ID, not native 7.
     let view = fixture(cx, true);
     let desktop = json!("7");
     let handle = vorkspace_core::bot::work::session_handle(&desktop).unwrap();

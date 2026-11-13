@@ -145,7 +145,7 @@ impl Geometry {
         (self.notch_width + WING_WIDTH * 2.).min(self.screen_width)
     }
 
-    pub fn frame(self, width: f32, height: f32) -> NSRect {
+    pub(crate) fn frame(self, width: f32, height: f32) -> NSRect {
         NSRect::new(
             NSPoint::new(
                 self.x + (self.screen_width - width) as f64 / 2.,

@@ -1,6 +1,7 @@
 //! Composer tokens and turn preparation, independent of the UI.
 use crate::{files::ProjectFile, skills::DiscoveredSkill};
 use std::{
+    borrow::Cow,
     io::Read,
     ops::Range,
     path::{Path, PathBuf},
@@ -9,7 +10,7 @@ use std::{
 pub const MAX_ATTACHMENTS: usize = 20;
 pub const MAX_EMBED_BYTES: u64 = 20 * 1024 * 1024;
 
-/// quoteDraft.ts: append selected rendered text without replacing a live draft.
+/// Quote selected rendered text into the draft without replacing what is there.
 pub fn append_selection_quote(draft: &str, text: &str) -> String {
     let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
     let text = normalized.trim();
@@ -87,11 +88,9 @@ pub fn token_at(text: &str, cursor: usize) -> Option<Token> {
     {
         return None;
     }
-    if text[..start]
-        .lines()
-        .last()
-        .is_some_and(|line| line.trim_start().starts_with('>'))
-    {
+    let prefix = &text[..start];
+    let line = prefix.rsplit(['\r', '\n']).next().unwrap_or(prefix);
+    if line.trim_start().starts_with('>') {
         return None;
     }
     let end = text[cursor..]
@@ -114,22 +113,32 @@ pub fn consume_command<'a>(text: &'a str, command: &str) -> Option<&'a str> {
 
 /// Prefer leaf and consecutive matches, then a compact fuzzy subsequence.
 pub fn score(query: &str, value: &str) -> Option<i64> {
-    let query = query.to_lowercase();
-    let value = value.to_lowercase();
+    score_folded(&query.to_lowercase(), value)
+}
+
+fn score_folded(query: &str, value: &str) -> Option<i64> {
     if query.is_empty() {
         return Some(0);
     }
-    if value == query {
+    let value = if value
+        .bytes()
+        .all(|b| b.is_ascii() && !b.is_ascii_uppercase())
+    {
+        Cow::Borrowed(value)
+    } else {
+        Cow::Owned(value.to_lowercase())
+    };
+    if value.as_ref() == query {
         return Some(10_000);
     }
     let leaf = value.rsplit('/').next().unwrap_or(&value);
-    if leaf.starts_with(&query) {
+    if leaf.starts_with(query) {
         return Some(5_000 - value.len() as i64);
     }
-    if let Some(at) = value.find(&query) {
+    if let Some(at) = value.find(query) {
         return Some(3_000 - at as i64 - value.len() as i64);
     }
-    let mut rest = value.as_str();
+    let mut rest = value.as_ref();
     let mut gaps = 0;
     for ch in query.chars() {
         let at = rest.find(ch)?;
@@ -139,12 +148,22 @@ pub fn score(query: &str, value: &str) -> Option<i64> {
     Some(1_000 - gaps as i64 - value.len() as i64)
 }
 pub fn rank_files<'a>(files: &'a [ProjectFile], query: &str, limit: usize) -> Vec<&'a ProjectFile> {
+    if limit == 0 {
+        return Vec::new();
+    }
+    let query = query.to_lowercase();
     let mut matches: Vec<_> = files
         .iter()
-        .filter_map(|f| score(query, &f.relative).map(|s| (s, f)))
+        .filter_map(|f| score_folded(&query, &f.relative).map(|s| (s, f)))
         .collect();
-    matches.sort_unstable_by(|(a, x), (b, y)| b.cmp(a).then_with(|| x.relative.cmp(&y.relative)));
-    matches.truncate(limit);
+    let order = |(a, x): &(i64, &ProjectFile), (b, y): &(i64, &ProjectFile)| {
+        b.cmp(a).then_with(|| x.relative.cmp(&y.relative))
+    };
+    if matches.len() > limit {
+        matches.select_nth_unstable_by(limit, order);
+        matches.truncate(limit);
+    }
+    matches.sort_unstable_by(order);
     matches.into_iter().map(|(_, file)| file).collect()
 }
 pub fn validate_attachments(paths: &[PathBuf]) -> Result<(), String> {
@@ -178,11 +197,8 @@ pub fn image_data(path: &Path) -> Result<String, String> {
     }
     Ok(base64::engine::general_purpose::STANDARD.encode(data))
 }
-/// Decode a saved desktop image attachment off the UI thread.
+/// Decode a saved image attachment off the UI thread.
 pub fn decode_image_data(data: &str) -> Result<Vec<u8>, String> {
-    if crate::remote::attachments::is_attachment_source(data) {
-        return crate::remote::attachments::read_attachment_source(data);
-    }
     use base64::Engine;
     let data = data
         .strip_prefix("data:")
@@ -222,10 +238,12 @@ pub fn prepare_prompt(text: &str, cwd: &str, attachments: &[PathBuf]) -> Result<
     }
     // Mentions use full project-relative paths, including quoted paths with spaces.
     let mentions = mentions(text);
-    for relative in mentions {
-        let path = Path::new(cwd).join(&relative);
-        if let (Ok(root), Ok(path)) = (Path::new(cwd).canonicalize(), path.canonicalize()) {
-            if path.starts_with(&root) && path.is_file() {
+    if let Some(Ok(root)) = (!mentions.is_empty()).then(|| Path::new(cwd).canonicalize()) {
+        for relative in mentions {
+            if let Ok(path) = root.join(relative).canonicalize() {
+                if !path.starts_with(&root) || !path.is_file() {
+                    continue;
+                }
                 blocks.push(format!("Referenced project file: {}", path.display()));
             }
         }
@@ -284,8 +302,14 @@ fn read_text(path: &Path, max: usize) -> Result<String, String> {
     String::from_utf8(data).map_err(|e| e.to_string())
 }
 pub fn mention_text(relative: &str) -> String {
-    if relative.chars().any(char::is_whitespace) {
-        format!("@\"{}\"", relative.replace('"', "\\\""))
+    if relative
+        .chars()
+        .any(|ch| ch.is_whitespace() || matches!(ch, '"' | '\\'))
+    {
+        format!(
+            "@\"{}\"",
+            relative.replace('\\', "\\\\").replace('"', "\\\"")
+        )
     } else {
         format!("@{relative}")
     }
@@ -331,17 +355,25 @@ fn mentions_in_line(text: &str) -> Vec<String> {
                 chars.next();
             }
             let mut path = String::new();
+            let mut complete = !quoted;
             while let Some(&next) = chars.peek() {
-                if (quoted && next == '"') || (!quoted && next.is_whitespace()) {
+                if !quoted && next.is_whitespace() {
                     break;
                 }
-                path.push(next);
                 chars.next();
+                if quoted && next == '"' {
+                    complete = true;
+                    break;
+                }
+                if quoted && next == '\\' && matches!(chars.peek(), Some('"' | '\\')) {
+                    path.push(chars.next().expect("peeked escape"));
+                } else {
+                    path.push(next);
+                }
             }
-            if quoted {
-                chars.next();
+            if complete && !path.is_empty() {
+                result.push(path);
             }
-            result.push(path);
         }
         boundary = c.is_whitespace();
     }
@@ -358,6 +390,11 @@ mod tests {
         assert!(token_at("https://host", 12).is_none());
         assert!(token_at("me@host", 7).is_none());
         assert!(token_at("> /review", 9).is_none());
+        let after_quote = "> quoted text\n@src";
+        assert_eq!(
+            token_at(after_quote, after_quote.len()).unwrap().query,
+            "src"
+        );
         assert!(token_at("/tmp/file", 9).is_none());
         assert_eq!(token_at("@src/ma", 7).unwrap().trigger, Trigger::Mention);
     }
@@ -372,6 +409,12 @@ mod tests {
         assert_eq!(
             mentions("> @quoted.rs\n  > @also-quoted.rs\nUse @actual.rs"),
             vec!["actual.rs"]
+        );
+        let literal = r#"src/a\b\"c"#;
+        assert_eq!(mentions(&mention_text(literal)), vec![literal]);
+        assert_eq!(
+            mentions(r#"@"src/unclosed and @other.rs"#),
+            Vec::<String>::new()
         );
         assert!(score("cpr", "src/composer.rs").is_some());
         assert!(score("xyz", "src/composer.rs").is_none());

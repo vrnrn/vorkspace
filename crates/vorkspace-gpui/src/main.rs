@@ -5,8 +5,10 @@ mod assets;
 mod automations;
 mod avatar;
 mod background_helper;
+mod background_settings;
 mod bot_header;
 mod bots;
+mod card_saves;
 mod codebase;
 mod color_picker;
 mod composer;
@@ -17,11 +19,14 @@ mod diagrams;
 mod file_link;
 mod file_tools;
 mod fixtures;
+#[cfg(test)]
+mod framework_tests;
 mod git_status;
 mod git_tools;
 mod image_lightbox;
 mod inbox;
 mod input;
+mod launch;
 mod markdown;
 mod meetings;
 mod menu_bar;
@@ -33,9 +38,10 @@ mod notifications;
 mod panel_kit;
 mod pickers;
 mod popover;
+mod preference_writes;
 mod project_background;
-mod project_settings;
-mod project_tabs;
+mod project_mark;
+mod render_pixels;
 mod resource_pressure;
 mod response_actions;
 mod right_panel;
@@ -57,36 +63,34 @@ use gpui::{
     App, Bounds, KeyBinding, TitlebarOptions, WindowBackgroundAppearance, WindowBounds,
     WindowOptions, actions, point, prelude::*, px, size,
 };
-use std::time::Instant;
-use std::{
-    path::PathBuf,
-    sync::{Arc, Mutex},
-};
-use vorkspace_core::{store::Store, transcript::Transcript};
 actions!(
     application,
     [Quit, Restart, NewWindow, CloseWindow, NextWindow]
 );
+
+#[derive(Clone, Copy)]
+enum Exit {
+    Quit,
+    Restart,
+}
+impl gpui::Global for Exit {}
+
 fn quit(cx: &mut App) {
-    background_helper::app_quitting(cx);
-    let voice = vox::shutdown(cx);
-    let codebase = codebase::service(cx).ok();
-    cx.spawn(async move |cx| {
-        voice.await;
-        cx.background_executor()
-            .spawn(async move {
-                if let Some(service) = codebase {
-                    service.shutdown();
-                }
-                vorkspace_core::process::shutdown_all();
-            })
-            .await;
-        finish_exit(false, cx).await;
-    })
-    .detach();
+    request_exit(Exit::Quit, cx);
 }
 
 fn restart(cx: &mut App) {
+    request_exit(Exit::Restart, cx);
+}
+
+fn request_exit(exit: Exit, cx: &mut App) {
+    if cx.has_global::<Exit>() {
+        return;
+    }
+    cx.set_global(exit);
+    if matches!(exit, Exit::Quit) {
+        background_helper::app_quitting(cx);
+    }
     let voice = vox::shutdown(cx);
     let codebase = codebase::service(cx).ok();
     cx.spawn(async move |cx| {
@@ -99,18 +103,22 @@ fn restart(cx: &mut App) {
                 vorkspace_core::process::shutdown_all();
             })
             .await;
-        finish_exit(true, cx).await;
+        finish_exit(exit, cx).await;
     })
     .detach();
 }
 
-async fn finish_exit(relaunch: bool, cx: &mut gpui::AsyncApp) {
+async fn finish_exit(exit: Exit, cx: &mut gpui::AsyncApp) {
     loop {
         let waiting = cx.update(|cx| {
-            let barriers = shell::bot_write_barriers(cx);
+            let mut barriers = shell::bot_write_barriers(cx);
+            barriers.extend(shell::reminder_write_barriers(cx));
             if barriers.is_empty() {
-                if relaunch && let Err(error) = vorkspace_macos::restart::relaunch_self() {
+                if matches!(exit, Exit::Restart)
+                    && let Err(error) = vorkspace_macos::restart::relaunch_self()
+                {
                     eprintln!("Could not schedule restart: {error}");
+                    cx.remove_global::<Exit>();
                 } else {
                     cx.quit();
                 }
@@ -126,35 +134,6 @@ async fn finish_exit(relaunch: bool, cx: &mut gpui::AsyncApp) {
     }
 }
 
-fn data_dir() -> PathBuf {
-    if let Some(path) = std::env::var_os("VORKSPACE_NATIVE_DATA_DIR") {
-        return path.into();
-    }
-    let base = PathBuf::from(std::env::var_os("HOME").unwrap_or_default())
-        .join("Library/Application Support");
-    base.join("vorkspace Native Development")
-}
-// The packaged app runs this binary directly: a launcher that execs it changes the
-// process's pid version, and macOS then refuses its menu bar item. The bundle
-// records its data mode in Info.plist instead of passing a flag.
-fn bundle_uses_vorkspace_data() -> Option<bool> {
-    let exe = std::env::current_exe().ok()?;
-    let plist = std::fs::read_to_string(exe.parent()?.parent()?.join("Info.plist")).ok()?;
-    plist_data_mode(&plist)
-}
-fn plist_data_mode(plist: &str) -> Option<bool> {
-    let rest = plist.split("<key>VorkspaceDataMode</key>").nth(1)?;
-    let mode = rest
-        .trim_start()
-        .strip_prefix("<string>")?
-        .split('<')
-        .next()?;
-    match mode {
-        "vorkspace-data" => Some(true),
-        "dev-data" => Some(false),
-        _ => None,
-    }
-}
 /// Use the final frame before the launch window is shown. AppKit's zoom path
 /// animates after creation, which exposes a small window before maximization.
 fn launch_bounds(cx: &App) -> WindowBounds {
@@ -175,8 +154,8 @@ pub(crate) struct WorkspaceWindowStart {
 
 pub(crate) fn open_workspace_window(
     db: vorkspace_runtime::runtime::Database,
-    sessions: Vec<vorkspace_core::store::Session>,
-    metadata: vorkspace_core::store::SessionSidebarMetadata,
+    sessions: &[vorkspace_core::store::Session],
+    metadata: &vorkspace_core::store::SessionSidebarMetadata,
     start: WorkspaceWindowStart,
     cx: &mut App,
 ) -> gpui::Result<gpui::WindowHandle<shell::Shell>> {
@@ -237,6 +216,10 @@ fn restore_workspace_windows(
     explicit_cwd: bool,
     cx: &mut App,
 ) -> gpui::Result<()> {
+    let core = shell::AppCore::get(&db, cx);
+    core.update(cx, |core, cx| {
+        core.reconcile_session_directory(&sessions, &metadata, cx);
+    });
     // Open the last focused layout last so it comes to the front.
     layouts
         .entries
@@ -257,11 +240,11 @@ fn restore_workspace_windows(
         };
         match open_workspace_window(
             db.clone(),
-            sessions.clone(),
-            metadata.clone(),
+            &sessions,
+            &metadata,
             WorkspaceWindowStart {
                 cwd,
-                saved: Some(entry.workspace),
+                saved: Some(entry.workspace.to_string()),
                 layout: Some(entry.id),
                 bounds,
             },
@@ -272,7 +255,7 @@ fn restore_workspace_windows(
         }
     }
     if !restored {
-        open_workspace_window(db, sessions, metadata, fallback, cx)?;
+        open_workspace_window(db, &sessions, &metadata, fallback, cx)?;
     }
     Ok(())
 }
@@ -283,238 +266,19 @@ fn main() {
         vox::preview::run();
         return;
     }
-    if let Some(code) = vorkspace_core::remote::ssh_askpass::maybe_run() {
-        std::process::exit(code);
-    }
-    let cli_args: Vec<_> = std::env::args().skip(1).collect();
-    if cli_args.first().is_some_and(|a| a == "visual-mcp") {
-        if let Err(error) = vorkspace_core::visual_bridge::mcp_stdio() {
-            eprintln!("{error}");
-            std::process::exit(1);
-        }
+    let Some(launch::Startup {
+        db,
+        sessions,
+        metadata,
+        core,
+        saved,
+        cwd,
+        explicit_cwd,
+        diagnostics_path,
+    }) = launch::prepare()
+    else {
         return;
-    }
-    if cli_args.first().is_some_and(|a| a == "visual") {
-        match vorkspace_core::visual_bridge::client(&cli_args[1..]) {
-            Ok(value) => {
-                println!("{value}");
-                if value.get("ok") == Some(&serde_json::Value::Bool(false)) {
-                    std::process::exit(1);
-                }
-            }
-            Err(error) => {
-                println!("{}", serde_json::json!({"ok":false,"error":error}));
-                std::process::exit(1);
-            }
-        }
-        return;
-    }
-    if cli_args.first().is_some_and(|a| a == "app") {
-        match vorkspace_core::bot::bridge::client(&cli_args[1..]) {
-            Ok(value) => {
-                println!("{value}");
-                if value.get("ok") == Some(&serde_json::Value::Bool(false)) {
-                    std::process::exit(1);
-                }
-            }
-            Err(error) => {
-                println!("{}", serde_json::json!({"ok":false,"error":error}));
-                std::process::exit(1);
-            }
-        }
-        return;
-    }
-    let mut args = std::env::args().skip(1);
-    let mut fixture = false;
-    let mut chat_fixture = false;
-    let mut visual_fixture = false;
-    // Always use real release data by default so sessions remain persistent across all builds.
-    let mut use_vorkspace = bundle_uses_vorkspace_data().unwrap_or(true);
-    let mut vorkspace_db = vorkspace_core::store::vorkspace_database();
-    let mut check_data = false;
-    let mut explicit_cwd = false;
-    let mut cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    while let Some(arg) = args.next() {
-        match arg.as_str() {
-            "--fixture" => fixture = true,
-            "--chat-fixture" => chat_fixture = true,
-            "--visual-fixture" => visual_fixture = true,
-            "--dev-data" => use_vorkspace = false,
-            "--vorkspace-data" => use_vorkspace = true,
-            "--vorkspace-db" => {
-                use_vorkspace = true;
-                vorkspace_db = PathBuf::from(args.next().expect("--vorkspace-db needs a path"));
-            }
-            "--check-data" => check_data = true,
-            "--cwd" => {
-                explicit_cwd = true;
-                cwd = PathBuf::from(args.next().expect("--cwd needs a path"));
-            }
-            "--help" | "-h" => {
-                println!(
-                    "vorkspace-gpui [--cwd PATH] [--dev-data | --vorkspace-data | --vorkspace-db PATH]\nAll build profiles use the existing desktop database by default.\n--dev-data opens an isolated development database using vorkspace's existing schema.\n--vorkspace-data opens the existing desktop vorkspace.db directly.\n--vorkspace-db PATH opens a specific desktop database.\n--fixture, --chat-fixture and --visual-fixture add local samples to isolated development data only.\nvisual docs prints the native visual SDK reference.\nvisual check/show --input FILE validates or publishes native session visuals.\nvisual-mcp runs the session visual tool server over standard input/output.\n--check-data validates and lists the selected store read-only, then exits."
-                );
-                return;
-            }
-            _ => {
-                eprintln!("Unknown option: {arg}");
-                std::process::exit(2);
-            }
-        }
-    }
-    if use_vorkspace && (fixture || chat_fixture || visual_fixture) {
-        eprintln!(
-            "Fixtures require --dev-data; they cannot be written into your vorkspace database."
-        );
-        std::process::exit(2);
-    }
-    let cwd = cwd
-        .canonicalize()
-        .unwrap_or(cwd)
-        .to_string_lossy()
-        .to_string();
-    let database = if use_vorkspace {
-        vorkspace_db
-    } else {
-        data_dir().join("vorkspace.db")
     };
-    if !use_vorkspace
-        && database
-            .canonicalize()
-            .ok()
-            .zip(
-                vorkspace_core::store::vorkspace_database()
-                    .canonicalize()
-                    .ok(),
-            )
-            .is_some_and(|(development, desktop)| development == desktop)
-    {
-        eprintln!(
-            "The isolated development directory points at the desktop database. Choose a separate VORKSPACE_NATIVE_DATA_DIR."
-        );
-        std::process::exit(2);
-    }
-    let mut db = if check_data {
-        Store::read_vorkspace(&database)
-    } else {
-        Store::open_vorkspace(&database)
-    }
-    .unwrap_or_else(|error| {
-        eprintln!("Cannot open {}: {error}", database.display());
-        std::process::exit(1);
-    });
-    if check_data {
-        match db.sessions() {
-            Ok(sessions) => eprintln!(
-                "Database: {}\n{} saved sessions; existing vorkspace schema; no import or migration.",
-                database.display(),
-                sessions.len()
-            ),
-            Err(error) => {
-                eprintln!("{error}");
-                std::process::exit(1);
-            }
-        }
-        return;
-    }
-    db.start_attachment_cache().unwrap_or_else(|error| {
-        eprintln!("Cannot prepare attachment storage: {error}");
-        std::process::exit(1);
-    });
-    db.recover_local_submissions().unwrap_or_else(|error| {
-        eprintln!("Cannot recover pending submissions: {error}");
-        std::process::exit(1);
-    });
-    vorkspace_core::checkpoint::init(
-        database
-            .parent()
-            .unwrap_or(std::path::Path::new("."))
-            .join("checkpoints"),
-    );
-    let layouts = shell::WindowLayouts::load(&db);
-    let saved = db.ui_state().unwrap_or_else(|e| {
-        eprintln!("Cannot read workspace settings: {e}");
-        None
-    });
-    let existing_project = if use_vorkspace {
-        saved
-            .as_deref()
-            .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
-            .and_then(|state| {
-                state["project"]
-                    .as_str()
-                    // A saved empty vorkspace deliberately has no launch cwd.
-                    .filter(|s| {
-                        !s.is_empty()
-                            || state["active_vorkspace"]
-                                .as_str()
-                                .is_some_and(|id| !id.is_empty())
-                    })
-                    .map(str::to_owned)
-            })
-            .or_else(|| {
-                db.sessions()
-                    .ok()
-                    .and_then(|sessions| sessions.into_iter().find(|s| !s.archived).map(|s| s.cwd))
-            })
-    } else {
-        None
-    };
-    // Opened from the Dock or Finder, macOS starts the app in `/`. Resume the
-    // saved project instead of deriving a project from an internal chat path.
-    let cwd = if let Some(project) = existing_project.filter(|_| !explicit_cwd) {
-        project
-    } else if explicit_cwd || std::path::Path::new(&cwd).parent().is_some() {
-        cwd
-    } else {
-        db.sessions()
-            .ok()
-            .and_then(|sessions| sessions.into_iter().map(|s| s.cwd).find(|c| c != &cwd))
-            .unwrap_or_else(|| std::env::var("HOME").unwrap_or(cwd))
-    };
-    if fixture {
-        let s = db.create("codex", &cwd).expect("create fixture");
-        db.title(s.id, "Scroll lab · 10,000 messages").unwrap();
-        let mut t = Transcript::default();
-        let started = Instant::now();
-        for i in 0..10_000 {
-            t.begin(if i % 2 == 0 { "user" } else { "assistant" });
-            t.append(&format!("Message {i:05} · Native transcript stress fixture.\nUnicode stays intact: 🙂 漢字 café. Scroll up while another session streams.\nThis message is local fixture data; sending resumes a new real provider conversation."));
-        }
-        db.write_rows(s.id, 0, &t.rows).unwrap();
-        eprintln!("Seeded {} rows in {:?}", t.rows.len(), started.elapsed());
-    }
-    if chat_fixture {
-        let s = db.create("codex", &cwd).expect("create chat fixture");
-        db.title(s.id, "Native chat · Markdown and tools").unwrap();
-        db.write_rows(s.id, 0, &fixtures::chat().rows).unwrap();
-    }
-    if visual_fixture {
-        let s = db.create("codex", &cwd).expect("create visual fixture");
-        db.title(s.id, "Native visuals · Controls, charts and 3D")
-            .unwrap();
-        db.write_rows(s.id, 0, &fixtures::visuals().rows).unwrap();
-    }
-    let mut sessions = db.sessions().expect("read native sessions");
-    if sessions.is_empty() {
-        sessions.push(db.create("codex", &cwd).expect("create initial session"));
-    }
-    // Gather compact sidebar state before entering the platform event loop.
-    // The shell does not query thousands of saved agents on the UI thread.
-    let metadata = sessions
-        .iter()
-        .map(|s| (s.id, s.cwd.clone()))
-        .collect::<Vec<_>>();
-    let workspace = workspace::Workspace::restore(saved.as_deref(), &metadata, &cwd);
-    let mut projects = workspace.projects;
-    if !workspace.project.is_empty() && !projects.contains(&workspace.project) {
-        projects.push(workspace.project);
-    }
-    let sidebar_metadata = db.session_sidebar_metadata(&projects);
-    let db = Arc::new(Mutex::new(db));
-    let diagnostics_path = std::path::absolute(&database)
-        .ok()
-        .and_then(|path| path.parent().map(|root| root.join("diagnostics")));
     let application =
         gpui::Application::with_platform(std::rc::Rc::new(gpui_macos::MacPlatform::new(false)))
             .with_assets(assets::Assets);
@@ -550,11 +314,13 @@ fn main() {
             }
         })
         .detach();
+        let layouts = core.layouts.clone();
+        shell::AppCore::install(&db, core, cx);
         let bounds = launch_bounds(cx);
         restore_workspace_windows(
             db,
             sessions,
-            sidebar_metadata,
+            metadata,
             layouts,
             WorkspaceWindowStart {
                 cwd,
@@ -576,7 +342,7 @@ mod native_tests {
     use crate::{input, transcript::TranscriptView};
     use gpui::{Context, Entity, Render, StyleRefinement, Window, div};
     use gpui::{EntityInputHandler, ListOffset, TestAppContext, point};
-    use vorkspace_core::transcript::Row;
+    use vorkspace_core::transcript::{Row, Transcript};
     struct Surface {
         transcript: Entity<TranscriptView>,
         input: Entity<input::Input>,
@@ -610,16 +376,6 @@ mod native_tests {
                 WindowBounds::Windowed(cx.primary_display().unwrap().visible_bounds())
             );
         });
-    }
-    #[test]
-    fn bundle_plist_selects_the_data_mode() {
-        let plist = |mode: &str| {
-            format!("<dict>\n<key>VorkspaceDataMode</key><string>{mode}</string>\n</dict>")
-        };
-        assert_eq!(plist_data_mode(&plist("vorkspace-data")), Some(true));
-        assert_eq!(plist_data_mode(&plist("dev-data")), Some(false));
-        assert_eq!(plist_data_mode(&plist("other")), None);
-        assert_eq!(plist_data_mode("<dict></dict>"), None);
     }
     #[gpui::test]
     fn long_history_virtualizes_and_typing_does_not_rebuild_it(cx: &mut TestAppContext) {

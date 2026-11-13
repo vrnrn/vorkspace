@@ -1,4 +1,4 @@
-//! FileTree.tsx: the Explorer header, project root row and lazily listed
+//! The Explorer: its header, project root row and lazily listed
 //! tree with Git colours, inline create/rename, clipboard, context menu,
 //! dropped files and VS Code-style keyboard navigation. Directory reads and
 //! every file operation run off the UI thread.
@@ -356,16 +356,12 @@ impl Explorer {
         }
     }
     fn git_changed(&mut self, cx: &mut Context<Self>) {
-        if self.enabled {
-            if !self.sync_project(cx) {
-                self.refresh_loaded(cx);
-            }
-        } else if self.git.read(cx).root != self.cwd {
-            // Keep the hidden tree intact; rebuild it when Files is shown.
+        if self.enabled && !self.sync_project(cx) {
+            self.refresh_loaded(cx);
         }
     }
     fn sync_project(&mut self, cx: &mut Context<Self>) -> bool {
-        let root = self.git.read(cx).root.clone();
+        let root = self.git.read(cx).project().to_owned();
         if root == self.cwd {
             return false;
         }
@@ -1222,7 +1218,6 @@ impl Explorer {
         id: &'static str,
         label: SharedString,
         path: &'static str,
-        enabled: bool,
     ) -> gpui::Stateful<gpui::Div> {
         div()
             .id(id)
@@ -1237,17 +1232,16 @@ impl Explorer {
             .items_center()
             .justify_center()
             .rounded(px(radius::CONTROL))
-            .when(!enabled, |d| d.opacity(0.4))
-            .when(enabled, |d| {
-                d.hover(|s| s.bg(vorkspace_ui::fluid::hover(0.05)))
-            })
-            .child(icon(path, 14.).text_color(content(0.5)).when(enabled, |i| {
-                i.group_hover(id, |s| s.text_color(content(1.)))
-            }))
+            .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.05)))
+            .child(
+                icon(path, 14.)
+                    .text_color(content(0.5))
+                    .group_hover(id, |s| s.text_color(content(1.))),
+            )
     }
 
     fn line(&self, ix: usize, focused: bool, cx: &mut Context<Self>) -> AnyElement {
-        let statuses = &self.git.read(cx).statuses;
+        let statuses = self.git.read(cx).statuses();
         let pad = |depth: usize| px(28. + depth as f32 * 12.);
         match self.lines[ix].clone() {
             Line::Note { depth, text } => div()
@@ -1336,11 +1330,13 @@ impl Explorer {
                     .as_ref()
                     .is_some_and(|c| c.cut && c.path == entry.path);
                 let over = self.drag_over.as_deref() == Some(entry.path.as_str());
-                let status = if entry.is_dir {
-                    statuses.dirs.get(&entry.path)
-                } else {
-                    statuses.files.get(&entry.path)
-                };
+                let status = statuses.and_then(|statuses| {
+                    if entry.is_dir {
+                        statuses.dirs.get(&entry.path)
+                    } else {
+                        statuses.files.get(&entry.path)
+                    }
+                });
                 let git_color: Option<Hsla> = status.and_then(|s| match s.as_str() {
                     "modified" | "added" | "untracked" | "deleted" => {
                         Some(crate::git_status::status_color(s))
@@ -1614,28 +1610,22 @@ impl Render for Explorer {
                     .gap_1()
                     .on_mouse_down(MouseButton::Right, |_, _, cx| cx.stop_propagation())
                     .child(
-                        Self::header_icon("explorer-new-file", "New File".into(), "file-add", true)
+                        Self::header_icon("explorer-new-file", "New File".into(), "file-add")
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.start_create(false, None, window, cx)
                             })),
                     )
                     .child(
-                        Self::header_icon(
-                            "explorer-new-folder",
-                            "New Folder".into(),
-                            "folder-add",
-                            true,
-                        )
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.start_create(true, None, window, cx)
-                        })),
+                        Self::header_icon("explorer-new-folder", "New Folder".into(), "folder-add")
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.start_create(true, None, window, cx)
+                            })),
                     )
                     .child(
                         Self::header_icon(
                             "explorer-collapse",
                             "Collapse All".into(),
                             "fold-vertical",
-                            true,
                         )
                         .on_click(cx.listener(|this, _, _, cx| this.collapse_all(cx))),
                     )
@@ -1644,7 +1634,6 @@ impl Render for Explorer {
                             "explorer-search",
                             format!("Search in files ({MOD}Shift+F)").into(),
                             "search",
-                            true,
                         )
                         .on_click(cx.listener(|this, _, window, cx| this.open_search(window, cx))),
                     ),

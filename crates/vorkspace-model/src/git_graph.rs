@@ -1,22 +1,20 @@
-//! Port of src/features/source-control/model/gitGraph.ts, itself derived from
+//! Commit graph lanes, derived from
 //! Visual Studio Code's `scmHistory.ts` (MIT, Copyright (c) Microsoft
-//! Corporation). Previous row `output` lanes become the next row's `input`;
-//! curves are SVG arcs, not cubics.
-use gpui::{Hsla, PathBuilder, Pixels, Point, Window, point, px};
+//! Corporation). Previous row `output` lanes become the next row's `input`.
 use std::collections::HashMap;
 
-pub const SWIMLANE_HEIGHT: f32 = 22.;
+pub(crate) const SWIMLANE_HEIGHT: f32 = 22.;
 pub const SWIMLANE_WIDTH: f32 = 11.;
 const SWIMLANE_CURVE_RADIUS: f32 = 5.;
 const CIRCLE_RADIUS: f32 = 4.;
 const CIRCLE_STROKE_WIDTH: f32 = 2.;
 
 /// Lane colors, cycled as new branches appear.
-pub const COLOR_REGISTRY: [u32; 5] = [0xFFB000, 0xDC267F, 0x994F00, 0x40B0A6, 0xB66DFF];
+pub(crate) const COLOR_REGISTRY: [u32; 5] = [0xFFB000, 0xDC267F, 0x994F00, 0x40B0A6, 0xB66DFF];
 /// Current branch.
-pub const HISTORY_ITEM_REF_COLOR: u32 = 0x75BEFF;
+pub(crate) const HISTORY_ITEM_REF_COLOR: u32 = 0x75BEFF;
 /// Upstream of the current branch.
-pub const HISTORY_ITEM_REMOTE_REF_COLOR: u32 = 0xB180D7;
+pub(crate) const HISTORY_ITEM_REMOTE_REF_COLOR: u32 = 0xB180D7;
 const FALLBACK: u32 = HISTORY_ITEM_REF_COLOR;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -54,9 +52,19 @@ pub struct Row {
 }
 #[derive(Clone, Debug, PartialEq)]
 pub struct GraphPath {
-    pub d: String,
+    pub commands: Vec<PathCommand>,
     pub color: u32,
-    pub stroke_width: f32,
+}
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum PathCommand {
+    Move(f32, f32),
+    Line(f32, f32),
+    Arc {
+        x: f32,
+        y: f32,
+        radius: f32,
+        sweep: bool,
+    },
 }
 #[derive(Clone, Debug, PartialEq)]
 pub struct Circle {
@@ -72,7 +80,6 @@ pub struct RowGraph {
     pub height: f32,
     pub paths: Vec<GraphPath>,
     pub circles: Vec<Circle>,
-    pub kind: NodeKind,
 }
 
 fn ref_id(name: &str, kind: &str) -> String {
@@ -225,6 +232,7 @@ pub fn layout(commits: &[GraphCommit]) -> Vec<Row> {
 /// One row of graph paths and circles. Taller rows extend lanes above and
 /// below the node while keeping the circles and curve radii at their size.
 pub fn row_graph(row: &Row, row_height: f32) -> RowGraph {
+    use PathCommand::{Arc, Line, Move};
     const W: f32 = SWIMLANE_WIDTH;
     const R: f32 = SWIMLANE_CURVE_RADIUS;
     let center = row_height / 2.;
@@ -236,48 +244,44 @@ pub fn row_graph(row: &Row, row_height: f32) -> RowGraph {
         .get(circle_index)
         .or_else(|| input.get(circle_index))
         .map_or(FALLBACK, |lane| lane.color);
+    let cx = W * (circle_index as f32 + 1.);
     let mut paths = Vec::new();
-    let mut push = |d: String, color: u32| {
-        paths.push(GraphPath {
-            d,
-            color,
-            stroke_width: 1.,
-        })
+    let mut push = |commands, color| paths.push(GraphPath { commands, color });
+    let arc = |x, y, radius, sweep| Arc {
+        x,
+        y,
+        radius,
+        sweep,
     };
-    let n = |v: f32| fmt(v);
     let mut out_ix = 0;
     for (index, lane) in input.iter().enumerate() {
-        let i = index as f32;
+        let x = W * (index as f32 + 1.);
         if lane.id == row.sha {
             if index != circle_index {
-                let mut d = vec![format!("M {} 0", n(W * (i + 1.)))];
+                let mut commands = vec![Move(x, 0.)];
                 if pad > 0. {
-                    d.push(format!("V {}", n(pad)));
+                    commands.push(Line(x, pad));
                 }
-                d.push(format!("A {W} {W} 0 0 1 {} {}", n(W * i), n(center)));
-                d.push(format!("H {}", n(W * (circle_index as f32 + 1.))));
-                push(d.join(" "), lane.color);
+                commands.push(arc(x - W, center, W, true));
+                commands.push(Line(cx, center));
+                push(commands, lane.color);
             } else {
                 out_ix += 1;
             }
         } else if out_ix < output.len() && lane.id == output[out_ix].id {
-            let o = out_ix as f32;
             if index == out_ix {
-                push(
-                    format!("M {} 0 V {}", n(W * (i + 1.)), n(row_height)),
-                    lane.color,
-                );
+                push(vec![Move(x, 0.), Line(x, row_height)], lane.color);
             } else {
+                let out_x = W * (out_ix as f32 + 1.);
                 push(
-                    [
-                        format!("M {} 0", n(W * (i + 1.))),
-                        format!("V {}", n(center - R)),
-                        format!("A {R} {R} 0 0 1 {} {}", n(W * (i + 1.) - R), n(center)),
-                        format!("H {}", n(W * (o + 1.) + R)),
-                        format!("A {R} {R} 0 0 0 {} {}", n(W * (o + 1.)), n(center + R)),
-                        format!("V {}", n(row_height)),
-                    ]
-                    .join(" "),
+                    vec![
+                        Move(x, 0.),
+                        Line(x, center - R),
+                        arc(x - R, center, R, true),
+                        Line(out_x + R, center),
+                        arc(out_x, center + R, R, false),
+                        Line(out_x, row_height),
+                    ],
                     lane.color,
                 );
             }
@@ -288,27 +292,20 @@ pub fn row_graph(row: &Row, row_height: f32) -> RowGraph {
         let Some(ix) = output.iter().rposition(|lane| &lane.id == parent) else {
             continue;
         };
-        let p = ix as f32;
-        let mut d = vec![
-            format!("M {} {}", n(W * p), n(center)),
-            format!("A {W} {W} 0 0 1 {} {}", n(W * (p + 1.)), n(center + W)),
-        ];
+        let x = W * ix as f32;
+        let mut commands = vec![Move(x, center), arc(x + W, center + W, W, true)];
         if pad > 0. {
-            d.push(format!("V {}", n(row_height)));
+            commands.push(Line(x + W, row_height));
         }
-        d.push(format!("M {} {}", n(W * p), n(center)));
-        d.push(format!("H {} ", n(W * (circle_index as f32 + 1.))));
-        push(d.join(" "), output[ix].color);
+        commands.push(Move(x, center));
+        commands.push(Line(cx, center));
+        push(commands, output[ix].color);
     }
-    let cx = W * (circle_index as f32 + 1.);
     if let Some(ix) = input_index {
-        push(format!("M {} 0 V {}", n(cx), n(center)), input[ix].color);
+        push(vec![Move(cx, 0.), Line(cx, center)], input[ix].color);
     }
     if !row.parent_ids.is_empty() {
-        push(
-            format!("M {} {} V {}", n(cx), n(center), n(row_height)),
-            circle_color,
-        );
+        push(vec![Move(cx, center), Line(cx, row_height)], circle_color);
     }
     let circle = |r: f32, stroke_width: f32, fill: Option<u32>| Circle {
         cx,
@@ -339,56 +336,7 @@ pub fn row_graph(row: &Row, row_height: f32) -> RowGraph {
         height: row_height,
         paths,
         circles,
-        kind: row.kind,
     }
 }
-/// JavaScript's number formatting for the coordinates used here.
-fn fmt(v: f32) -> String {
-    if v.fract() == 0. {
-        format!("{}", v as i64)
-    } else {
-        format!("{v}")
-    }
-}
-
-/// Strokes the `M`/`V`/`H`/`A` subset `row_graph` emits, relative to `origin`.
-pub fn stroke_path(d: &str, origin: Point<Pixels>, width: f32, color: Hsla, window: &mut Window) {
-    let mut builder = PathBuilder::stroke(px(width));
-    let mut tokens = d.split_whitespace();
-    let mut at = point(0f32, 0f32);
-    let to = |p: Point<f32>| origin + point(px(p.x), px(p.y));
-    let num = |t: &mut std::str::SplitWhitespace| -> f32 {
-        t.next().and_then(|v| v.parse().ok()).unwrap_or(0.)
-    };
-    while let Some(command) = tokens.next() {
-        match command {
-            "M" => {
-                at = point(num(&mut tokens), num(&mut tokens));
-                builder.move_to(to(at));
-            }
-            "V" => {
-                at.y = num(&mut tokens);
-                builder.line_to(to(at));
-            }
-            "H" => {
-                at.x = num(&mut tokens);
-                builder.line_to(to(at));
-            }
-            "A" => {
-                let (rx, ry) = (num(&mut tokens), num(&mut tokens));
-                let rotation = num(&mut tokens);
-                let large = num(&mut tokens) != 0.;
-                let sweep = num(&mut tokens) != 0.;
-                at = point(num(&mut tokens), num(&mut tokens));
-                builder.arc_to(point(px(rx), px(ry)), px(rotation), large, sweep, to(at));
-            }
-            _ => {}
-        }
-    }
-    if let Ok(path) = builder.build() {
-        window.paint_path(path, color);
-    }
-}
-
 #[cfg(test)]
 mod tests;

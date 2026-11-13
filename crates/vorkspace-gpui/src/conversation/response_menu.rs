@@ -7,7 +7,7 @@ use vorkspace_core::{
     response::{Target, TransferKind},
 };
 
-type Catalogs = Vec<(Kind, Option<Result<Vec<Model>, String>>)>;
+type Catalogs = Vec<(Kind, Option<Result<ModelRows, String>>)>;
 
 pub(super) struct ResponseMenu {
     pub(super) menu: Entity<Menu>,
@@ -30,36 +30,19 @@ impl Conversation {
         cx: &mut Context<Self>,
     ) {
         self.make_response_menu(turn, kind, anchor.clone(), None, window, cx);
-        let remote = self.is_remote().then(|| self.summary.cwd.clone());
         let hidden = cx
             .try_global::<vorkspace_ui::preferences::Preferences>()
             .map(|prefs| prefs.hidden_providers.clone())
             .unwrap_or_default();
         let work = cx.background_executor().spawn(async move {
-            if let Some(project) = remote {
-                return catalog::remote_catalog(&project).map(|mut catalog| {
-                    catalog
-                        .providers
-                        .into_iter()
-                        .map(|provider| {
-                            let rows = if let Some(error) = catalog.errors.remove(&provider) {
-                                Err(error)
-                            } else {
-                                Ok(catalog.models.remove(&provider).unwrap_or_default())
-                            };
-                            (provider, Some(rows))
-                        })
-                        .collect()
-                });
-            }
             // Discover executables only. Starting every CLI here made one slow
             // provider delay the entire picker, including cached catalogs.
-            Ok(Kind::ALL
+            Kind::ALL
                 .into_iter()
                 .filter(|provider| !hidden.iter().any(|id| id == provider.id()))
                 .filter(|provider| vorkspace_core::provider::resolve(*provider).is_some())
                 .map(|provider| (provider, None))
-                .collect::<Catalogs>())
+                .collect::<Catalogs>()
         });
         cx.spawn_in(window, async move |this, cx| {
             let result = work.await;
@@ -67,18 +50,7 @@ impl Conversation {
                 if this.response_request != Some((turn, kind, token)) {
                     return;
                 }
-                match result {
-                    Ok(catalogs) => {
-                        this.make_response_menu(turn, kind, anchor, Some(catalogs), window, cx)
-                    }
-                    Err(error) => {
-                        if let Some(menu) = &this.response_menu {
-                            menu.menu.update(cx, |menu, cx| {
-                                menu.set_items(vec![MenuItem::Note(error.into())], cx)
-                            });
-                        }
-                    }
-                }
+                this.make_response_menu(turn, kind, anchor, Some(result), window, cx);
                 cx.notify();
             });
         })
@@ -130,12 +102,7 @@ impl Conversation {
             if initial.is_some() {
                 requested.insert(provider);
             }
-            let cached = initial.or_else(|| {
-                (!self.is_remote())
-                    .then(|| catalog::cached_models_for(provider, &profile))
-                    .flatten()
-                    .map(Ok)
-            });
+            let cached = initial.or_else(|| catalog::cached_models_for(provider, &profile).map(Ok));
             let options = cached
                 .map(|result| self.response_model_items(turn, kind, provider, result, cx))
                 .unwrap_or_else(|| vec![MenuItem::Note("Loading models…".into())]);
@@ -243,7 +210,7 @@ impl Conversation {
         request: Option<(usize, TransferKind, Instant)>,
         provider: Kind,
         menu: &Entity<Menu>,
-        result: Result<Vec<Model>, String>,
+        result: Result<ModelRows, String>,
         cx: &mut Context<Self>,
     ) {
         // A closed/reopened picker must not receive an older request.
@@ -273,7 +240,7 @@ impl Conversation {
         turn: usize,
         kind: TransferKind,
         provider: Kind,
-        result: Result<Vec<Model>, String>,
+        result: Result<ModelRows, String>,
         cx: &App,
     ) -> Vec<MenuItem> {
         let models = match result {
@@ -288,7 +255,7 @@ impl Conversation {
         let transcript = self.transcript.read(cx);
         let source = transcript.turns.get(&turn);
         let mut options = Vec::new();
-        for model in models {
+        for model in models.iter() {
             if cx
                 .try_global::<vorkspace_ui::preferences::Preferences>()
                 .is_some_and(|prefs| prefs.model_hidden(provider.id(), &model.id))

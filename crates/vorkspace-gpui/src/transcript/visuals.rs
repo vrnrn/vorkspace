@@ -105,10 +105,6 @@ mod tests {
         rows.push(row("assistant", "The results are ready.".into()));
         view.update(cx, |view, cx| {
             view.patch(0, rows.clone(), cx);
-            for reveal in view.reveals.values_mut() {
-                reveal.settle(Instant::now());
-            }
-            view.rebuild(0, cx);
             assert!(view.rows.iter().any(|row| {
                 matches!(&row.body, Body::Visual(value) if value.id == doc.id) && !row.work
             }));

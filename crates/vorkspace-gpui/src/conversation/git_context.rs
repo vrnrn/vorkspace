@@ -1,5 +1,25 @@
 //! The session's checkout: worktrees, tool paths and Git state.
 use super::*;
+use vorkspace_core::git::CheckoutHead;
+
+#[derive(Default, PartialEq, Eq)]
+pub(super) struct Head {
+    pub(super) detached: bool,
+    pub(super) linked: bool,
+}
+
+impl Head {
+    pub(super) fn split(snapshot: Option<CheckoutHead>) -> (Option<String>, Option<Self>) {
+        match snapshot {
+            Some(CheckoutHead {
+                current,
+                detached,
+                linked,
+            }) => (current, Some(Self { detached, linked })),
+            None => (None, None),
+        }
+    }
+}
 
 impl Conversation {
     pub(crate) fn worktree_deleted(
@@ -9,14 +29,14 @@ impl Conversation {
         cx: &mut Context<Self>,
     ) {
         self.summary = summary;
-        self.settings = settings;
+        self.replace_settings(settings, cx);
         self.context = None;
         self.status = "Worktree deleted".into();
         self.refresh_git(cx);
-        cx.emit(SessionChanged);
+        cx.emit(SessionChanged::Checkout);
         cx.notify();
     }
-    pub(super) fn execution_cwd(&self) -> &str {
+    pub(crate) fn execution_cwd(&self) -> &str {
         if self.settings.worktree_removed {
             return &self.summary.cwd;
         }
@@ -37,7 +57,7 @@ impl Conversation {
     /// The review card follows the checkout and rereads its recorded turn.
     pub(crate) fn sync_review(&mut self, cx: &mut Context<Self>) {
         self.sync_tool_paths(cx);
-        if self.settings.bot.is_some() || self.is_remote() {
+        if self.settings.bot.is_some() {
             return;
         }
         let cwd = self.execution_cwd().to_owned();
@@ -52,21 +72,73 @@ impl Conversation {
     pub(super) fn refresh_git(&mut self, cx: &mut Context<Self>) {
         self.sync_review(cx);
         let cwd = self.execution_cwd().to_owned();
+        if self.git_cwd != cwd {
+            self.seed_git();
+        }
+        let revision = self.git_head_revision;
         let work_cwd = cwd.clone();
         let work = cx
             .background_executor()
-            .spawn(async move { vorkspace_model::git_cache::load(Path::new(&work_cwd)).ok() });
-        cx.spawn(async move |this, cx| {
+            .spawn(async move { vorkspace_core::git::head(Path::new(&work_cwd)).ok() });
+        self.git_refresh = Some(cx.spawn(async move |this, cx| {
             let git = work.await;
             let _ = this.update(cx, |this, cx| {
-                if this.execution_cwd() == cwd {
-                    this.branch = git.as_ref().and_then(|s| s.current.clone());
-                    this.git = git;
+                if this.execution_cwd() != cwd {
+                    return;
+                }
+                let (branch, head) = Head::split(git);
+                if this.git_head_revision == revision {
+                    this.set_git_head(branch, head, cx);
+                } else if let (Some(observed), Some(loaded)) = (&mut this.git, head)
+                    && observed.linked != loaded.linked
+                {
+                    observed.linked = loaded.linked;
                     cx.notify();
                 }
             });
-        })
-        .detach();
+        }));
+    }
+    pub(super) fn seed_git(&mut self) {
+        self.git_refresh = None;
+        self.git_cwd = self.execution_cwd().to_owned();
+        (self.branch, self.git) =
+            Head::split(vorkspace_model::git_cache::get(&self.git_cwd).map(Into::into));
+    }
+
+    pub(crate) fn observe_git_head(
+        &mut self,
+        event: &crate::git_status::GitHeadChanged,
+        cx: &mut Context<Self>,
+    ) {
+        use vorkspace_core::{files::path_key, scm::LocalHead};
+        if path_key(self.execution_cwd()) != path_key(&event.cwd)
+            || (!self.loaded && self.summary.has_messages)
+        {
+            return;
+        }
+        if self.git_cwd != self.execution_cwd() {
+            self.seed_git();
+        }
+        self.git_head_revision = self.git_head_revision.wrapping_add(1);
+        let linked = self.git.as_ref().is_some_and(|head| head.linked)
+            || (!self.settings.worktree_removed && self.settings.worktree_cwd.is_some());
+        let (branch, detached) = match &event.head {
+            LocalHead::Missing => {
+                self.set_git_head(None, None, cx);
+                return;
+            }
+            LocalHead::Attached(branch) => (Some(branch.clone()), false),
+            LocalHead::Detached(abbreviation) => (abbreviation.clone(), true),
+        };
+        self.set_git_head(branch, Some(Head { detached, linked }), cx);
+    }
+
+    fn set_git_head(&mut self, branch: Option<String>, head: Option<Head>, cx: &mut Context<Self>) {
+        if self.branch != branch || self.git != head {
+            self.branch = branch;
+            self.git = head;
+            cx.notify();
+        }
     }
     pub(super) fn prepare_worktree(&mut self, cx: &mut Context<Self>) {
         self.preparing_worktree = true;
@@ -113,7 +185,7 @@ impl Conversation {
         cx.notify();
     }
     pub(super) fn open_git(&mut self, mode: GitMode, window: &mut Window, cx: &mut Context<Self>) {
-        if self.busy || self.preparing_worktree {
+        if self.responding() || self.preparing_worktree {
             return;
         }
         if self.git_picker.take().is_some() {
@@ -141,6 +213,7 @@ impl Conversation {
                                 this.save_settings(cx);
                             }
                             this.refresh_git(cx);
+                            cx.emit(SessionChanged::Checkout);
                         }
                         GitPicked::Base(base) => {
                             this.settings.worktree_base = Some(base.clone());

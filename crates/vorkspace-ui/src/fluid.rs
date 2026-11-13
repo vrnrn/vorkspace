@@ -13,7 +13,7 @@ pub use fluidither::generated::{GLIDE, QUICK};
 pub use fluidither::spring::{LONGEST_STEP, Spring};
 
 /// Pattern cells, in logical points. fluidither's own fine cell.
-pub const CELL: f32 = fluidither::generated::DITHER_HOVER_CELL;
+pub(crate) const CELL: f32 = fluidither::generated::DITHER_HOVER_CELL;
 
 /// A hover wash: a flat tint of content ink. Hover stays quiet and solid; the
 /// printed look belongs to surfaces that carry meaning (tracks, charts, empty
@@ -67,7 +67,7 @@ pub fn bar(color: gpui::Hsla) -> Background {
 /// The printed ground under an empty state's icon: a quarter-tone dot grid
 /// right beneath it that fades to paper, like a shadow cast on newsprint. It
 /// never passes quarter tone, where the dots would join into a checker.
-pub fn plate() -> Background {
+pub(crate) fn plate() -> Background {
     gpui::vertical_dither(content(0.8), 0.25, 0., CELL)
 }
 
@@ -346,8 +346,8 @@ pub fn slider_parts(fraction: f32) -> [gpui::Div; 3] {
     ]
 }
 
-pub const THUMB_WIDTH: f32 = 8.;
-pub const THUMB_HEIGHT: f32 = 16.;
+pub(crate) const THUMB_WIDTH: f32 = 8.;
+pub(crate) const THUMB_HEIGHT: f32 = 16.;
 
 /// A switch's knob: white, as a knob reads on the solid accent and on the
 /// flat off track; black only on an accent pale enough to lose it.
@@ -428,61 +428,9 @@ pub fn rule() -> gpui::Div {
         .bg(gpui::dither(content(0.7), 0.25, 1.))
 }
 
-/// A whole number that rolls to each new value, as fluidither's `Count`.
-/// It shows its first value at once; later changes count up or down on the
-/// `QUICK` spring.
-#[derive(gpui::IntoElement)]
-pub struct Count {
-    id: gpui::ElementId,
-    value: i64,
-    format: fn(i64) -> String,
-}
-
-impl Count {
-    pub fn new(id: impl Into<gpui::ElementId>, value: i64, format: fn(i64) -> String) -> Self {
-        Self {
-            id: id.into(),
-            value,
-            format,
-        }
-    }
-}
-
-struct Rolling {
-    spring: Spring,
-    last: crate::clock::Instant,
-}
-
-impl gpui::RenderOnce for Count {
-    fn render(self, window: &mut gpui::Window, cx: &mut App) -> impl gpui::IntoElement {
-        use gpui::ParentElement;
-        let value = self.value;
-        let reduce_motion = cx.reduce_motion();
-        let state = window.use_keyed_state(self.id, cx, |_, _| Rolling {
-            spring: Spring::new(QUICK, value as f64),
-            last: crate::clock::Instant::now(),
-        });
-        let (shown, landed) = state.update(cx, |rolling, _| {
-            if reduce_motion {
-                rolling.spring = Spring::new(QUICK, value as f64);
-                return (value, true);
-            }
-            if rolling.spring.target != value as f64 {
-                rolling.spring.target = value as f64;
-            }
-            let landed = step(&mut rolling.spring, &mut rolling.last);
-            (rolling.spring.position.round() as i64, landed)
-        });
-        if !landed {
-            window.request_animation_frame();
-        }
-        gpui::div().child((self.format)(if landed { value } else { shown }))
-    }
-}
-
 /// Code, keyboard hints and numeric readouts. Prose and controls stay on the
 /// system font; the terminal and editor keep the user's fixed font.
-pub const MONO: &str = fluidither::generated::FONT_MONO;
+pub(crate) const MONO: &str = fluidither::generated::FONT_MONO;
 
 struct Loaded;
 impl Global for Loaded {}
@@ -508,18 +456,6 @@ pub fn init(cx: &mut App) {
         modal: None,
     });
     cx.set_global(Loaded);
-}
-
-/// Steps a spring by the time since `last`, which it then resets. Returns
-/// whether it has landed, so the caller knows to request another frame.
-pub fn step(spring: &mut Spring, last: &mut crate::clock::Instant) -> bool {
-    let now = crate::clock::Instant::now();
-    let dt = now
-        .saturating_duration_since(*last)
-        .as_secs_f64()
-        .min(LONGEST_STEP);
-    *last = now;
-    spring.step(dt)
 }
 
 #[cfg(test)]

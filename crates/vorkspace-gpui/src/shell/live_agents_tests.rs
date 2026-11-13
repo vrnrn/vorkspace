@@ -9,8 +9,8 @@ fn busy(window: WindowHandle<Shell>, id: i64, running: bool, cx: &mut TestAppCon
     window
         .update(cx, |shell, _, cx| {
             shell.sessions[&id].update(cx, |view, cx| {
-                view.busy = running;
-                cx.emit(SessionChanged);
+                view.set_running_for_test(running);
+                cx.emit(SessionChanged::Loaded);
                 cx.notify();
             });
         })
@@ -21,6 +21,7 @@ fn snapshot(window: WindowHandle<Shell>, cx: &mut TestAppContext) -> Vec<(i64, S
     window
         .update(cx, |shell, _, cx| {
             shell
+                .sidebar
                 .live_agents
                 .read(cx)
                 .agents
@@ -101,7 +102,7 @@ fn compact_activity_is_one_animated_control_for_working_sessions_and_expands(
     assert!(bounds(visual, format!("live-agent-{a}")).is_none());
     assert!(bounds(visual, format!("live-agent-{b}")).is_none());
     let activity = window
-        .update(visual, |shell, _, _| shell.live_agents.clone())
+        .update(visual, |shell, _, _| shell.sidebar.live_agents.clone())
         .unwrap();
     assert_eq!(
         activity.read_with(visual, |card, _| card.working_count()),
@@ -143,8 +144,8 @@ fn fast_completion_archive_and_cancellation_follow_semantic_notifications(cx: &m
         .update(cx, |shell, _, cx| {
             // Publish both changes before painting another frame.
             shell.sessions[&a].update(cx, |view, cx| {
-                view.busy = true;
-                cx.emit(SessionChanged);
+                view.set_running_for_test(true);
+                cx.emit(SessionChanged::Loaded);
             });
         })
         .unwrap();
@@ -152,8 +153,8 @@ fn fast_completion_archive_and_cancellation_follow_semantic_notifications(cx: &m
     window
         .update(cx, |shell, _, cx| {
             shell.sessions[&a].update(cx, |view, cx| {
-                view.busy = false;
-                cx.emit(SessionChanged);
+                view.set_running_for_test(false);
+                cx.emit(SessionChanged::Loaded);
             });
         })
         .unwrap();
@@ -163,7 +164,7 @@ fn fast_completion_archive_and_cancellation_follow_semantic_notifications(cx: &m
         .update(cx, |shell, _, cx| {
             shell.sessions[&a].update(cx, |view, cx| {
                 view.summary.archived = true;
-                cx.emit(SessionChanged);
+                cx.emit(SessionChanged::Loaded);
             });
         })
         .unwrap();
@@ -186,51 +187,6 @@ fn fast_completion_archive_and_cancellation_follow_semantic_notifications(cx: &m
         .unwrap();
 }
 
-#[gpui::test]
-fn metadata_only_remote_running_and_waiting_sessions_do_not_load_history(cx: &mut TestAppContext) {
-    let (window, _, _) = fixture(cx);
-    let remote = window
-        .update(cx, |shell, _, cx| {
-            let store = locked(&shell.store).unwrap();
-            let project = store
-                .remember_remote_project(
-                    "fixture",
-                    &serde_json::json!({"id":"project", "cwd":"/host/repo"}),
-                )
-                .unwrap();
-            let mut summary = store.create("codex", &project.key).unwrap();
-            drop(store);
-            summary.has_messages = true;
-            let id = summary.id;
-            shell.order.push(id);
-            shell.session_summaries.insert(id, summary);
-            shell.remote_marks.insert(id, (true, false));
-            shell.invalidate_chrome(cx);
-            id
-        })
-        .unwrap();
-    cx.run_until_parked();
-    assert_eq!(snapshot(window, cx), vec![(remote, Status::Working)]);
-    window
-        .update(cx, |shell, _, cx| {
-            assert!(!shell.sessions.contains_key(&remote));
-            shell.remote_marks.insert(remote, (true, true));
-            shell.invalidate_chrome(cx);
-        })
-        .unwrap();
-    cx.run_until_parked();
-    assert_eq!(snapshot(window, cx), vec![(remote, Status::Approval)]);
-    window
-        .update(cx, |shell, _, cx| {
-            assert!(!shell.sessions.contains_key(&remote));
-            shell.remote_marks.insert(remote, (false, false));
-            shell.invalidate_chrome(cx);
-        })
-        .unwrap();
-    cx.run_until_parked();
-    assert!(snapshot(window, cx).is_empty());
-}
-
 #[test]
 #[ignore = "Requires Metal and VOKKY_ACTIVITY_CAPTURE_DIR; separate offscreen fixture only"]
 fn native_activity_capture() {
@@ -238,7 +194,7 @@ fn native_activity_capture() {
     let output = std::path::PathBuf::from(std::env::var_os("VOKKY_ACTIVITY_CAPTURE_DIR").unwrap());
     assert!(output.is_absolute() && output.is_dir());
     let directory = tempfile::tempdir().unwrap();
-    let store = Store::open(&directory.path().join("native.sqlite")).unwrap();
+    let store = Store::test(&directory.path().join("native.sqlite")).unwrap();
     let summaries: Vec<_> = (0..6)
         .map(|i| {
             let mut summary = store
@@ -276,18 +232,15 @@ fn native_activity_capture() {
     );
     cx.update(|cx| vorkspace_ui::clock::use_test_clock(cx));
     for theme in ["dark", "light", "harbor"] {
-        for (name, compact, expanded, height, single) in [
-            ("expanded", false, false, 800., false),
-            ("compact", true, false, 800., false),
-            ("all", false, true, 800., false),
-            ("bottom", false, true, 800., false),
-            ("short", false, true, 520., false),
-            ("compact-all", true, true, 800., false),
-            ("compact-short", true, true, 520., false),
-            ("single", false, false, 800., true),
-            ("plain", false, false, 800., true),
-            ("done", false, false, 800., true),
-            ("motion", false, false, 800., true),
+        for (name, compact, height, single) in [
+            ("expanded", false, 800., false),
+            ("compact", true, 800., false),
+            ("short", false, 520., false),
+            ("compact-short", true, 520., false),
+            ("single", false, 800., true),
+            ("plain", false, 800., true),
+            ("done", false, 800., true),
+            ("motion", false, 800., true),
         ] {
             if theme != "dark" && !matches!(name, "expanded" | "compact" | "plain" | "done") {
                 continue;
@@ -313,20 +266,8 @@ fn native_activity_capture() {
                     for (ix, id) in shell.order.clone().into_iter().enumerate() {
                         let view = shell.ensure_session(id, cx).unwrap();
                         view.update(cx, |view, cx| {
-                            view.busy = !single || ix == 2;
-                            view.activity = if matches!(name, "plain" | "done" | "motion") {
-                                None
-                            } else {
-                                Some(
-                                    if view.summary.provider == "codex" {
-                                        "Run cargo test"
-                                    } else {
-                                        "Read src/main.rs"
-                                    }
-                                    .into(),
-                                )
-                            };
-                            cx.emit(SessionChanged);
+                            view.set_running_for_test(!single || ix == 2);
+                            cx.emit(SessionChanged::Loaded);
                         });
                     }
                     shell
@@ -343,15 +284,15 @@ fn native_activity_capture() {
                             .update(cx, |view, cx| view.sidebar_test_approval(true, cx));
                         let id = shell.order[1];
                         shell.sessions[&id].update(cx, |view, cx| {
-                            view.busy = false;
-                            cx.emit(SessionChanged);
+                            view.set_running_for_test(false);
+                            cx.emit(SessionChanged::Loaded);
                         });
                     }
                     if name == "done" {
                         let id = shell.order[2];
                         shell.sessions[&id].update(cx, |view, cx| {
-                            view.busy = false;
-                            cx.emit(SessionChanged);
+                            view.set_running_for_test(false);
+                            cx.emit(SessionChanged::Loaded);
                         });
                     }
                     shell.workspace.preferences.theme =
@@ -363,27 +304,11 @@ fn native_activity_capture() {
                     }
                     .into();
                     shell.workspace.project_rail_open = !compact;
-                    shell.live_agents.update(cx, |activity, cx| {
-                        if activity.expanded != expanded {
-                            activity.toggle_expanded(cx);
-                        }
-                    });
                     shell.invalidate_chrome(cx);
                     cx.notify();
                 })
                 .unwrap();
             cx.run_until_parked();
-            if name == "bottom" {
-                window
-                    .update(&mut cx, |shell, _, cx| {
-                        shell.live_agents.update(cx, |activity, cx| {
-                            activity.scroll.scroll_to_end();
-                            cx.notify();
-                        })
-                    })
-                    .unwrap();
-                cx.run_until_parked();
-            }
             if name == "motion" {
                 window
                     .update(&mut cx, |shell, _, cx| {
@@ -416,22 +341,6 @@ fn native_activity_capture() {
     }
 }
 
-#[test]
-fn historical_elapsed_format_handles_rounding_and_whole_units() {
-    for (ms, label) in [
-        (0, "1s"),
-        (499, "1s"),
-        (1499, "1s"),
-        (1500, "2s"),
-        (60_000, "1m"),
-        (61_000, "1m 1s"),
-        (3_600_000, "1h"),
-        (3_660_000, "1h 1m"),
-    ] {
-        assert_eq!(live_elapsed(Duration::from_millis(ms)), label);
-    }
-}
-
 #[gpui::test]
 fn tool_notifications_update_only_the_receipt_preserving_focus_draft_and_run_clock(
     cx: &mut TestAppContext,
@@ -454,24 +363,17 @@ fn tool_notifications_update_only_the_receipt_preserving_focus_draft_and_run_clo
     let focus = visual.update(|w, cx| w.focused(cx));
     let (snapshots, started) = window
         .update(visual, |shell, _, cx| {
-            let activity = shell.live_agents.read(cx);
+            let activity = shell.sidebar.live_agents.read(cx);
             (activity.snapshots, activity.runs[&a].started)
         })
         .unwrap();
-    for label in [
-        Some("Run cargo check"),
-        Some("Read src/main.rs"),
-        Some("Read src/main.rs"),
-        None,
-    ] {
-        tx.try_send(sidebar_tool_update(label)).unwrap();
+    for _ in 0..4 {
+        tx.try_send(sidebar_tool_update()).unwrap();
         visual.executor().advance_clock(Duration::from_millis(1));
         visual.run_until_parked();
         window
             .update(visual, |shell, _, cx| {
-                assert_eq!(shell.sessions[&a].read(cx).activity.as_deref(), label);
-                let activity = shell.live_agents.read(cx);
-                assert_eq!(activity.activity_label(&activity.agents[0]), label);
+                let activity = shell.sidebar.live_agents.read(cx);
                 assert_eq!(
                     activity.snapshots, snapshots,
                     "tool and output receipts must not resnapshot the registry"
@@ -493,422 +395,10 @@ fn tool_notifications_update_only_the_receipt_preserving_focus_draft_and_run_clo
             shell.sessions[&a].update(cx, |view, cx| view.sidebar_test_receiver(cx))
         })
         .unwrap();
-    tx.try_send(sidebar_tool_update(Some("Run stale command")))
-        .unwrap();
-    successor
-        .try_send(sidebar_tool_update(Some("Run current command")))
-        .unwrap();
+    tx.try_send(sidebar_tool_update()).unwrap();
+    successor.try_send(sidebar_tool_update()).unwrap();
     visual.executor().advance_clock(Duration::from_millis(1));
     visual.run_until_parked();
-    window
-        .update(visual, |shell, _, cx| {
-            let activity = shell.live_agents.read(cx);
-            assert_eq!(
-                activity.activity_label(&activity.agents[0]),
-                Some("Run current command")
-            );
-        })
-        .unwrap();
-}
-
-fn sample_agent(id: i64, status: Status, activity: Option<&str>) -> Agent {
-    Agent {
-        id,
-        title: format!("Session {id}"),
-        project: "vorkspace".into(),
-        cwd: "/work/vorkspace".into(),
-        appearance: Default::default(),
-        activity: activity.map(str::to_owned),
-        provider: "codex".into(),
-        status,
-        selected: false,
-        updated_at: id as u64,
-    }
-}
-
-struct MotionHost {
-    card: Entity<LiveAgents>,
-    renders: usize,
-}
-impl Render for MotionHost {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        self.renders += 1;
-        div().size_full().flex().flex_col().child(self.card.clone())
-    }
-}
-fn motion_fixture(cx: &mut TestAppContext, count: usize) -> WindowHandle<MotionHost> {
-    vorkspace_ui::clock::use_test_clock(cx);
-    cx.add_window(|_, cx| {
-        let card = cx.new(|cx| {
-            let mut card = LiveAgents::new(gpui::WeakEntity::new_invalid(), cx);
-            card.publish(
-                (0..count)
-                    .map(|id| sample_agent(id as i64, Status::Working, None))
-                    .collect(),
-                cx,
-            );
-            card.present(false, cx);
-            card
-        });
-        MotionHost { card, renders: 0 }
-    })
-}
-
-#[gpui::test]
-fn metadata_status_precedes_provider_without_placeholder_lines_and_keeps_accessible_state(
-    cx: &mut TestAppContext,
-) {
-    let window = motion_fixture(cx, 1);
-    let visual = &mut VisualTestContext::from_window(window.into(), cx);
-    visual.run_until_parked();
-    for (status, activity, label, height) in [
-        (Status::Working, None, None, 48.),
-        (Status::Working, Some("Working"), None, 48.),
-        (Status::Working, Some("Done"), None, 48.),
-        (Status::Working, Some("  "), None, 48.),
-        (
-            Status::Working,
-            Some("Run cargo test"),
-            Some("Run cargo test"),
-            66.,
-        ),
-        (
-            Status::Approval,
-            Some("Run cargo test"),
-            Some("Need approval"),
-            66.,
-        ),
-        (Status::Done, Some("Run cargo test"), None, 48.),
-    ] {
-        window
-            .update(visual, |host, _, cx| {
-                host.card.update(cx, |card, cx| {
-                    card.publish(vec![sample_agent(0, status, activity)], cx)
-                })
-            })
-            .unwrap();
-        visual.run_until_parked();
-        let row = visual.debug_bounds("live-agent-0").unwrap();
-        let title = visual.debug_bounds("live-agent-0-title").unwrap();
-        let provider = visual.debug_bounds("live-agent-0-provider").unwrap();
-        let mark = bounds(visual, format!("live-agent-0-{status:?}").to_lowercase()).unwrap();
-        assert_eq!(row.size.height, px(height));
-        assert_eq!(mark.center().y, provider.center().y);
-        assert_eq!(provider.left() - mark.right(), px(6.));
-        assert!(title.bottom() < mark.top());
-        assert_eq!(
-            visual.debug_bounds("live-agent-0-activity").is_some(),
-            label.is_some()
-        );
-        window
-            .update(visual, |host, _, cx| {
-                let card = host.card.read(cx);
-                assert_eq!(card.activity_label(&card.agents[0]), label);
-                // Exercise the actual row element's AccessKit properties. The
-                // test platform has no active screen reader/adapter tree.
-                use gpui::Element;
-                let row = card.row(&card.agents[0]);
-                let mut node = gpui::accesskit::Node::new(row.a11y_role().unwrap());
-                row.write_a11y_info(&mut node);
-                assert_eq!(node.role(), Role::Button);
-                assert!(
-                    node.label()
-                        .unwrap()
-                        .starts_with(&format!("Session 0, vorkspace, {}", status.label()))
-                );
-                if let Some(label) = label {
-                    assert!(node.label().unwrap().contains(label));
-                }
-            })
-            .unwrap();
-    }
-}
-
-#[gpui::test]
-fn shared_frames_are_bounded_and_visibility_completion_and_disposal_cancel_timers(
-    cx: &mut TestAppContext,
-) {
-    for count in [1, 100] {
-        let window = motion_fixture(cx, count);
-        let visual = &mut VisualTestContext::from_window(window.into(), cx);
-        visual.run_until_parked();
-        let (card, renders) = window
-            .update(visual, |host, _, _| (host.card.clone(), host.renders))
-            .unwrap();
-        let (frames, snapshots, started, offset) = card.read_with(visual, |card, _| {
-            assert!(card.animation.is_some());
-            (
-                card.frames,
-                card.snapshots,
-                card.runs[&0].started,
-                card.scroll.logical_scroll_top(),
-            )
-        });
-        let mut phases = Vec::new();
-        for _ in 0..30 {
-            visual.executor().advance_clock(FRAME_TICK);
-            visual.run_until_parked();
-            phases.push(card.read_with(visual, |card, _| card.frame_ms() % 1200));
-        }
-        card.read_with(visual, |card, _| {
-            assert_eq!(
-                card.frames - frames,
-                30,
-                "one shared tick regardless of row count"
-            );
-            assert_eq!(
-                card.snapshots, snapshots,
-                "frames cannot rebuild session discovery"
-            );
-            assert_eq!(card.runs[&0].started, started);
-            assert_eq!(card.scroll.logical_scroll_top().item_ix, offset.item_ix);
-            assert_eq!(
-                card.scroll.logical_scroll_top().offset_in_item,
-                offset.offset_in_item
-            );
-        });
-        assert!(phases.windows(2).all(|pair| pair[0] != pair[1]));
-        let redraws = window
-            .update(visual, |host, _, _| host.renders - renders)
-            .unwrap();
-        assert_eq!(
-            redraws, 30,
-            "GPUI redraws the ancestor once per shared frame"
-        );
-        eprintln!(
-            "working motion: rows={count}, frames=30, ancestor redraws={redraws}, discovery publications=0"
-        );
-        for mode in ["hidden-window", "approval", "done", "hidden-card"] {
-            visual.simulate_visibility_change(if mode == "hidden-window" {
-                gpui::WindowVisibility::Hidden
-            } else {
-                gpui::WindowVisibility::Visible
-            });
-            window
-                .update(visual, |host, _, cx| {
-                    host.card.update(cx, |card, cx| {
-                        card.publish(
-                            vec![sample_agent(
-                                0,
-                                if mode == "approval" {
-                                    Status::Approval
-                                } else if mode == "done" {
-                                    Status::Done
-                                } else {
-                                    Status::Working
-                                },
-                                None,
-                            )],
-                            cx,
-                        );
-                        card.present(mode == "compact", cx);
-                        if mode == "hidden-card" {
-                            card.hide();
-                        }
-                    })
-                })
-                .unwrap();
-            visual.run_until_parked();
-            let before = card.read_with(visual, |card, _| {
-                assert!(card.animation.is_none(), "{mode}");
-                card.frames
-            });
-            visual.executor().advance_clock(FRAME_TICK * 3);
-            visual.run_until_parked();
-            assert_eq!(
-                card.read_with(visual, |card, _| card.frames),
-                before,
-                "{mode}"
-            );
-        }
-        card.update(visual, |card, cx| {
-            card.present(false, cx);
-        });
-        visual.run_until_parked();
-        card.read_with(visual, |card, _| assert!(card.animation.is_some()));
-        let weak = card.downgrade();
-        drop(card);
-        window.update(visual, |_, w, _| w.remove_window()).unwrap();
-        visual.run_until_parked();
-        assert!(
-            weak.upgrade().is_none(),
-            "a task must not retain its unmounted owner"
-        );
-    }
-}
-
-#[gpui::test]
-fn scrolling_to_done_only_viewport_parks_shared_motion_and_resumes_on_return(
-    cx: &mut TestAppContext,
-) {
-    let window = motion_fixture(cx, 100);
-    let visual = &mut VisualTestContext::from_window(window.into(), cx);
-    visual.run_until_parked();
-    let card = window
-        .update(visual, |host, _, cx| {
-            host.card.update(cx, |card, cx| {
-                card.publish(
-                    (0..100)
-                        .map(|id| {
-                            sample_agent(
-                                id,
-                                if id < 10 {
-                                    Status::Working
-                                } else {
-                                    Status::Done
-                                },
-                                None,
-                            )
-                        })
-                        .collect(),
-                    cx,
-                );
-                card.toggle_expanded(cx);
-            });
-            host.card.clone()
-        })
-        .unwrap();
-    visual.run_until_parked();
-    card.update(visual, |card, cx| {
-        card.scroll.scroll_to_end();
-        cx.notify();
-    });
-    visual.run_until_parked();
-    card.read_with(visual, |card, _| {
-        assert!(card.animation.is_none());
-        assert!(card.tick.is_none());
-    });
-    card.update(visual, |card, cx| {
-        card.scroll.scroll_to(ListOffset::default());
-        cx.notify();
-    });
-    visual.run_until_parked();
-    card.read_with(visual, |card, _| assert!(card.animation.is_some()));
-}
-
-#[gpui::test]
-fn mixed_height_activity_updates_and_reordering_keep_the_semantic_scroll_anchor(
-    cx: &mut TestAppContext,
-) {
-    let window = motion_fixture(cx, 100);
-    let visual = &mut VisualTestContext::from_window(window.into(), cx);
-    visual.simulate_resize(gpui::size(px(1300.), px(300.)));
-    visual.run_until_parked();
-    let card = window
-        .update(visual, |host, _, cx| {
-            host.card.update(cx, |card, cx| {
-                card.scroll.scroll_to(ListOffset {
-                    item_ix: 1,
-                    offset_in_item: px(7.),
-                });
-                cx.notify();
-            });
-            host.card.clone()
-        })
-        .unwrap();
-    visual.run_until_parked();
-    card.update(visual, |card, cx| card.toggle_expanded(cx));
-    visual.run_until_parked();
-    card.read_with(visual, |card, _| {
-        let top = card.scroll.logical_scroll_top();
-        assert_eq!(
-            card.agents[top.item_ix].id, 1,
-            "expansion keeps the scrolled session"
-        );
-        assert_eq!(top.offset_in_item, px(7.));
-    });
-    card.update(visual, |card, cx| {
-        card.scroll.scroll_to(ListOffset {
-            item_ix: 20,
-            offset_in_item: px(7.),
-        });
-        cx.notify();
-    });
-    visual.run_until_parked();
-    for label in [Some("Run cargo test"), None, Some("Read src/main.rs")] {
-        card.update(visual, |card, cx| {
-            card.set_activity(20, label.map(str::to_owned), cx)
-        });
-        visual.run_until_parked();
-        card.read_with(visual, |card, _| {
-            let top = card.scroll.logical_scroll_top();
-            assert_eq!(card.agents[top.item_ix].id, 20);
-            assert_eq!(top.offset_in_item, px(7.));
-        });
-    }
-    card.update(visual, |card, cx| {
-        let mut agents = card.agents.clone();
-        agents[0].status = Status::Done;
-        card.publish(agents, cx);
-    });
-    visual.run_until_parked();
-    card.read_with(visual, |card, _| {
-        let top = card.scroll.logical_scroll_top();
-        assert_eq!(card.agents[top.item_ix].id, 20);
-        assert_eq!(top.offset_in_item, px(7.));
-        assert!(card.expanded);
-    });
-}
-
-#[gpui::test]
-fn removing_the_scrolled_session_keeps_the_nearest_surviving_session(cx: &mut TestAppContext) {
-    for (removed, expected) in [
-        (vec![20], 21),
-        (vec![20, 21], 19),
-        (vec![0, 1, 2, 3, 4, 20], 21),
-        (vec![18, 19, 20, 21], 22),
-    ] {
-        let window = motion_fixture(cx, 40);
-        let visual = &mut VisualTestContext::from_window(window.into(), cx);
-        visual.run_until_parked();
-        let card = window
-            .update(visual, |host, _, cx| {
-                host.card.update(cx, |card, cx| {
-                    // Done entries disappear when they are opened and marked
-                    // seen; archiving any session uses the same publication.
-                    card.publish(
-                        (0..40)
-                            .map(|id| sample_agent(id, Status::Done, None))
-                            .collect(),
-                        cx,
-                    );
-                    card.toggle_expanded(cx);
-                    card.scroll.scroll_to(ListOffset {
-                        item_ix: 20,
-                        offset_in_item: px(7.),
-                    });
-                    cx.notify();
-                });
-                host.card.clone()
-            })
-            .unwrap();
-        visual.run_until_parked();
-        card.update(visual, |card, cx| {
-            let agents = card
-                .agents
-                .iter()
-                .filter(|agent| !removed.contains(&agent.id))
-                .cloned()
-                .collect();
-            card.publish(agents, cx);
-        });
-        visual.run_until_parked();
-        card.read_with(visual, |card, _| {
-            let top = card.scroll.logical_scroll_top();
-            assert_eq!(card.agents[top.item_ix].id, expected, "removed={removed:?}");
-            assert_eq!(top.offset_in_item, px(7.));
-            assert!(card.expanded);
-        });
-        // An empty list has no surviving anchor and must reset disclosure.
-        card.update(visual, |card, cx| card.publish(Vec::new(), cx));
-        visual.run_until_parked();
-        card.read_with(visual, |card, _| {
-            assert!(!card.expanded);
-            let top = card.scroll.logical_scroll_top();
-            assert_eq!(top.item_ix, 0);
-            assert_eq!(top.offset_in_item, px(0.));
-        });
-    }
 }
 
 #[gpui::test]

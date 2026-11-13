@@ -20,11 +20,6 @@ use parking_lot::RwLock;
 use slotmap::SlotMap;
 
 pub use async_context::*;
-#[cfg(feature = "bench-support")]
-pub use bench_context::{
-    BenchAppContext, BenchMeasurement, BenchReport, BenchWindowContext, CountingAllocator,
-    MetricReport, bench_platform,
-};
 use collections::{FxHashMap, FxHashSet, HashMap, TypeIdHashMap, TypeIdHashSet, VecDeque};
 pub use context::*;
 pub use entity_map::*;
@@ -55,14 +50,10 @@ use crate::{
     SharedString, SubscriberSet, Subscription, SvgRenderer, SystemNotification,
     SystemNotificationResponse, Task, TextRenderingMode, TextSystem, ThermalState, Window,
     WindowAppearance, WindowButtonLayout, WindowHandle, WindowId, WindowInvalidator,
-    WindowingRequest,
-    colors::{Colors, GlobalColors},
-    hash, init_app_menus,
+    WindowingRequest, hash, init_app_menus,
 };
 
 mod async_context;
-#[cfg(feature = "bench-support")]
-mod bench_context;
 mod context;
 mod entity_map;
 #[cfg(any(test, feature = "test-support"))]
@@ -3121,13 +3112,6 @@ impl App {
         F: 'static + FnMut(crate::InspectorElementId, &T, &mut Window, &mut App) -> R,
     {
         self.inspector_element_registry.register(factory);
-    }
-
-    /// Initializes gpui's default colors for the application.
-    ///
-    /// These colors can be accessed through `cx.default_colors()`.
-    pub fn init_colors(&mut self) {
-        self.set_global(GlobalColors(Arc::new(Colors::default())));
     }
 
     #[inline(never)]

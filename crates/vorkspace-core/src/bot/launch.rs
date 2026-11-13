@@ -26,9 +26,8 @@ pub struct CreatedWorktree {
 }
 impl CreatedWorktree {
     pub(crate) fn capture(project: &str, path: &str) -> Result<Self, String> {
-        let snapshot = crate::git::snapshot(Path::new(project))?;
-        let tree = snapshot
-            .worktrees
+        let worktrees = crate::git::worktrees(Path::new(project))?;
+        let tree = worktrees
             .iter()
             .find(|tree| crate::files::path_key(&tree.path) == crate::files::path_key(path))
             .ok_or(
@@ -47,15 +46,9 @@ impl CreatedWorktree {
     pub fn rollback(self) -> Result<(), String> {
         let preserved =
             |error: String| format!("Created worktree {} was preserved: {error}", self.path);
-        if crate::files::remote::is_remote(Path::new(&self.project)) {
-            return Err(preserved(
-                "the host has no safe removal operation; inspect it before requesting a new launch"
-                    .into(),
-            ));
-        }
-        let snapshot = crate::git::snapshot(Path::new(&self.project)).map_err(preserved)?;
-        let tree = snapshot
-            .worktrees
+
+        let worktrees = crate::git::worktrees(Path::new(&self.project)).map_err(preserved)?;
+        let tree = worktrees
             .iter()
             .find(|tree| crate::files::path_key(&tree.path) == crate::files::path_key(&self.path))
             .ok_or_else(|| preserved("its ownership is unavailable".into()))?;
@@ -94,46 +87,17 @@ impl Launch {
         source_provider: &str,
         source_project: &str,
         project: &str,
-        mut settings: Settings,
+        settings: Settings,
         default_reveal: bool,
     ) -> Result<Self, String> {
         super::api::validate("sessions.start", input)?;
         let prompt = text(input, "prompt", 65536)?.ok_or("Provide prompt")?;
         let provider = text(input, "harness", 64)?.unwrap_or_else(|| source_provider.into());
         let provider = Kind::parse(&provider).ok_or("Unknown provider")?;
-        let same = provider.id() == source_provider;
-        if !same {
-            settings.account = Default::default();
-            settings.model = None;
-            settings.effort = None;
-            settings.model_settings.clear();
-            settings.fast = false;
-            settings.service_tier = None;
-            settings.thinking = None;
-        }
-        settings.bot = None;
-        settings.bot_message_id = None;
-        settings.bot_sent_at = None;
-        settings.internal_message = false;
-        settings.environment.clear();
-        settings.attachments.clear();
-        settings.turns.clear();
-        settings.handoff = None;
-        settings.pending_provider_switch = None;
-        settings.prepared_prompt = None;
-        settings.turn_model = None;
-        settings.remote_action = None;
-        settings.usage_limit = None;
-        settings.operator = false;
-        settings.orchestrator = false;
-        settings.plan = false;
-        settings.new_worktree = false;
-        settings.worktree_base = None;
-        settings.worktree_removed = false;
-        settings.revision = 0;
-        if crate::files::path_key(project) != crate::files::path_key(source_project) {
-            settings.worktree_cwd = None;
-        }
+        let mut settings = settings.for_child_launch(
+            provider.id() == source_provider,
+            crate::files::path_key(project) == crate::files::path_key(source_project),
+        );
         if let Some(model) = text(input, "model", 512)? {
             if model
                 .split_once(':')
@@ -232,7 +196,7 @@ impl Launch {
             workspace,
         })
     }
-    pub fn validate_workspace(&mut self, project: &str) -> Result<(), String> {
+    pub(crate) fn validate_workspace(&mut self, project: &str) -> Result<(), String> {
         match &self.workspace {
             Workspace::Current => {
                 if let Some(cwd) = self.settings.worktree_cwd.clone() {
@@ -241,22 +205,15 @@ impl Launch {
             }
             Workspace::Existing(cwd) => self.settings.worktree_cwd = Some(existing(project, cwd)?),
             Workspace::New(base) => {
-                let snapshot = crate::git::snapshot(Path::new(project))?;
-                if crate::files::remote::is_remote(Path::new(project)) {
-                    if base != "HEAD" && !snapshot.branches.iter().any(|b| b.name == *base) {
-                        return Err("Choose HEAD or a listed branch for a remote worktree".into());
-                    }
-                } else {
-                    crate::git::git(
-                        Path::new(project),
-                        &[
-                            "rev-parse",
-                            "--verify",
-                            "--end-of-options",
-                            &format!("{base}^{{commit}}"),
-                        ],
-                    )?;
-                }
+                crate::git::git(
+                    Path::new(project),
+                    &[
+                        "rev-parse",
+                        "--verify",
+                        "--end-of-options",
+                        &format!("{base}^{{commit}}"),
+                    ],
+                )?;
                 self.settings.worktree_cwd = None;
             }
         }
@@ -274,17 +231,14 @@ impl Launch {
     }
 }
 fn existing(project: &str, cwd: &str) -> Result<String, String> {
-    let snapshot = crate::git::snapshot(Path::new(project))?;
-    let tree = snapshot
-        .worktrees
+    let worktrees = crate::git::worktrees(Path::new(project))?;
+    let tree = worktrees
         .iter()
         .find(|tree| {
             !tree.missing && crate::files::path_key(&tree.path) == crate::files::path_key(cwd)
         })
         .ok_or("Choose an existing worktree of the selected project")?;
-    if !crate::files::remote::is_remote(Path::new(&tree.path))
-        && !PathBuf::from(&tree.path).is_dir()
-    {
+    if !PathBuf::from(&tree.path).is_dir() {
         return Err("The selected worktree is unavailable".into());
     }
     Ok(tree.path.clone())

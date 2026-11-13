@@ -16,7 +16,7 @@ impl Render for Surface {
 fn fixture(width: f32, cx: &mut Context<Page>) -> Page {
     let mut page = Page::new("/work/platform".into(), "/work/platform".into(), cx);
     let store = Arc::new(Mutex::new(
-        Store::open(std::path::Path::new(":memory:")).unwrap(),
+        Store::test(std::path::Path::new(":memory:")).unwrap(),
     ));
     page.service = Ok(
         Service::new(store, PathBuf::from("/unused-codebase-fixture"))
@@ -126,7 +126,6 @@ fn native_codebase_capture() {
                     ..Default::default()
                 },
                 false,
-                true,
             )
         });
         for width in [1200., 420.] {

@@ -4,9 +4,9 @@ use std::sync::Mutex;
 use vorkspace_core::store::Store;
 
 fn conversation(cx: &mut TestAppContext) -> WindowHandle<Conversation> {
-    let store = Store::open(Path::new(":memory:")).unwrap();
+    let store = Store::test(Path::new(":memory:")).unwrap();
     let summary = store.create("codex", "/tmp").unwrap();
-    cx.update(|cx| {
+    let window = cx.update(|cx| {
         input::bind(cx);
         cx.set_global(vorkspace_ui::preferences::Preferences {
             follow_up: "queue".into(),
@@ -20,7 +20,9 @@ fn conversation(cx: &mut TestAppContext) -> WindowHandle<Conversation> {
             })
         })
         .unwrap()
-    })
+    });
+    cx.run_until_parked();
+    window
 }
 
 #[gpui::test]
@@ -34,7 +36,7 @@ fn queue_entrances_slide_above_a_stationary_composer_for_the_first_and_later_mes
     window
         .update(cx, |view, _, cx| {
             view.summary.has_messages = true;
-            view.busy = true;
+            view.set_running_for_test(true);
             view.follow_ups.state.paused = true;
             cx.notify();
         })
@@ -60,7 +62,7 @@ fn queue_entrances_slide_above_a_stationary_composer_for_the_first_and_later_mes
     {
         window
             .update(visual, |view, _, cx| {
-                view.enqueue_follow_up(text.into(), None, cx);
+                view.enqueue_follow_up(text.into(), Vec::new(), None, cx);
             })
             .unwrap();
         let (starting, composer) = bounds(visual);
@@ -96,7 +98,7 @@ fn submitted_modes_clear_after_queueing_and_do_not_leak_into_the_next_message(
         cx.run_until_parked();
         window
             .update(cx, |view, _, cx| {
-                view.busy = true;
+                view.set_running_for_test(true);
                 view.follow_ups.state.paused = true;
                 view.toggle_mode(mode, cx);
                 let selected = view.input.read(cx).content.clone();
@@ -138,6 +140,46 @@ fn submitted_modes_clear_after_queueing_and_do_not_leak_into_the_next_message(
 }
 
 #[gpui::test]
+fn rejected_queue_and_draft_saves_preserve_the_editor(cx: &mut TestAppContext) {
+    for draft in [false, true] {
+        let window = conversation(cx);
+        cx.run_until_parked();
+        window
+            .update(cx, |view, _, cx| {
+                let original = "An important message";
+                view.set_running_for_test(!draft);
+                view.follow_ups.draft_selected = draft;
+                view.input
+                    .update(cx, |input, cx| input.set_text(original.into(), cx));
+                locked(&view.store)
+                    .unwrap()
+                    .save_follow_ups(
+                        view.summary.id,
+                        &State {
+                            revision: 8,
+                            ..State::default()
+                        },
+                    )
+                    .unwrap();
+                view.send(cx);
+                assert_eq!(view.input.read(cx).content.as_ref(), original);
+                assert_eq!(view.follow_ups.draft_selected, draft);
+                assert!(view.follow_ups.admission_error.is_some());
+                assert!(view.follow_ups.state.messages.is_empty());
+                assert!(view.follow_ups.state.draft.is_none());
+                let saved = locked(&view.store)
+                    .unwrap()
+                    .composer_draft(view.summary.id)
+                    .unwrap()
+                    .unwrap();
+                assert!(!saved.deleted);
+                assert_eq!(saved.payload["text"], original);
+            })
+            .unwrap();
+    }
+}
+
+#[gpui::test]
 fn voice_send_is_durable_before_acceptance_and_never_consumes_drafts(cx: &mut TestAppContext) {
     let window = conversation(cx);
     cx.run_until_parked();
@@ -150,7 +192,7 @@ fn voice_send_is_durable_before_acceptance_and_never_consumes_drafts(cx: &mut Te
     });
     window
         .update(cx, |view, _, cx| {
-            view.busy = true;
+            view.set_running_for_test(true);
             view.input
                 .update(cx, |i, cx| i.set_text("typed draft".into(), cx));
             assert!(view.voice_send("voice message".into(), cx).is_err());
@@ -174,15 +216,27 @@ fn voice_send_is_durable_before_acceptance_and_never_consumes_drafts(cx: &mut Te
 #[gpui::test]
 fn busy_sends_keep_their_order_attachments_and_edits_until_accepted(cx: &mut TestAppContext) {
     let window = conversation(cx);
+    let directory = tempfile::tempdir().unwrap();
+    let attachment = directory.path().join("fixture.png");
+    std::fs::write(&attachment, b"queue attachment").unwrap();
     let (controls, received) = std::sync::mpsc::channel();
     window
         .update(cx, |view, _, cx| {
-            view.busy = true;
+            view.set_running_for_test(true);
             view.controls = Some(controls);
             view.input
                 .update(cx, |i, cx| i.set_text("first".into(), cx));
-            view.attachments.push("/tmp/image.png".into());
+            view.attachments.push(attachment.clone());
             view.send(cx);
+            assert_eq!(view.input.read(cx).content, "first");
+            assert!(view.follow_ups.state.messages.is_empty());
+        })
+        .unwrap();
+    cx.run_until_parked();
+    window
+        .update(cx, |view, _, cx| {
+            assert!(view.input.read(cx).content.is_empty());
+            assert!(view.attachments.is_empty());
             view.input
                 .update(cx, |i, cx| i.set_text("second".into(), cx));
             view.send(cx);
@@ -226,10 +280,16 @@ fn busy_sends_keep_their_order_attachments_and_edits_until_accepted(cx: &mut Tes
         panic!("expected steering");
     };
     assert_eq!(message.text, "edited 🙂\nwith detail");
-    assert_eq!(
-        message.attachments,
-        [std::path::PathBuf::from("/tmp/image.png")]
-    );
+    let saved = window
+        .update(cx, |view, _, _| {
+            view.follow_ups.state.messages[0].attachments.clone()
+        })
+        .unwrap();
+    assert_eq!(message.attachments, saved);
+    assert_eq!(saved.len(), 1);
+    assert_eq!(saved[0].file_name(), attachment.file_name());
+    assert_eq!(std::fs::read(&saved[0]).unwrap(), b"queue attachment");
+    assert_eq!(std::fs::read(&attachment).unwrap(), b"queue attachment");
     window
         .update(cx, |view, _, cx| {
             assert_eq!(
@@ -250,13 +310,13 @@ fn stop_pauses_the_queue_and_retires_its_controls(cx: &mut TestAppContext) {
     let (controls, received) = std::sync::mpsc::channel();
     window
         .update(cx, |view, _, cx| {
-            view.busy = true;
+            view.set_running_for_test(true);
             view.controls = Some(controls);
             view.input
                 .update(cx, |input, cx| input.set_text("keep this".into(), cx));
             view.send(cx);
             view.stop(cx);
-            assert!(view.stopping);
+            assert!(view.is_stopping());
             assert!(view.follow_ups.state.paused);
             assert!(!view.follow_ups.ready);
             assert!(view.controls.is_none());
@@ -281,7 +341,7 @@ fn a_rejected_steer_keeps_its_text_for_retry(cx: &mut TestAppContext) {
     let (controls, received) = std::sync::mpsc::channel();
     window
         .update(cx, |view, _, cx| {
-            view.busy = true;
+            view.set_running_for_test(true);
             view.controls = Some(controls);
             view.follow_ups.ready = true;
             view.input
@@ -319,7 +379,7 @@ fn working_sessions_and_bots_can_save_a_draft_without_sending_it(cx: &mut TestAp
                         cx,
                     );
                 }
-                view.busy = true;
+                view.set_running_for_test(true);
                 view.summary.has_messages = true;
                 view.follow_ups.ready = true;
                 view.controls = Some(controls);
@@ -352,7 +412,7 @@ fn working_sessions_and_bots_can_save_a_draft_without_sending_it(cx: &mut TestAp
         visual.run_until_parked();
         window
             .update(visual, |view, _, cx| {
-                assert!(view.busy, "saving must not stop the running agent");
+                assert!(view.responding(), "saving must not stop the running agent");
                 assert_eq!(
                     view.follow_ups.state.draft.as_ref().unwrap().text,
                     "Save this for later"
@@ -387,14 +447,25 @@ fn draft_commands_save_without_starting_an_agent_and_remove_restores_a_blank(
     cx: &mut TestAppContext,
 ) {
     let window = conversation(cx);
+    let directory = tempfile::tempdir().unwrap();
+    let attachment = directory.path().join("note.txt");
+    std::fs::write(&attachment, b"saved draft attachment").unwrap();
     window
         .update(cx, |view, _, cx| {
             view.input.update(cx, |i, cx| {
                 i.set_text(" /DRAFT Explore this later".into(), cx)
             });
-            view.attachments.push("/tmp/note.txt".into());
+            view.attachments.push(attachment.clone());
             view.send(cx);
-            assert!(!view.busy);
+            assert!(!view.responding());
+            assert!(view.follow_ups.state.draft.is_none());
+            assert_eq!(view.input.read(cx).content, " /DRAFT Explore this later");
+        })
+        .unwrap();
+    cx.run_until_parked();
+    window
+        .update(cx, |view, _, cx| {
+            assert!(!view.responding());
             assert!(view.summary.has_messages);
             assert!(
                 view.transcript.read(cx).source_rows().is_empty(),
@@ -414,9 +485,14 @@ fn draft_commands_save_without_starting_an_agent_and_remove_restores_a_blank(
                 .unwrap()
                 .follow_ups(view.summary.id)
                 .unwrap();
+            let paths = saved.draft.unwrap().attachments;
+            assert_eq!(paths.len(), 1);
+            assert_eq!(paths[0].file_name(), attachment.file_name());
+            assert!(paths[0].starts_with(locked(&view.store).unwrap().data_dir().unwrap()));
+            assert_eq!(std::fs::read(&paths[0]).unwrap(), b"saved draft attachment");
             assert_eq!(
-                saved.draft.unwrap().attachments,
-                [std::path::PathBuf::from("/tmp/note.txt")]
+                std::fs::read(&attachment).unwrap(),
+                b"saved draft attachment"
             );
             view.input
                 .update(cx, |i, cx| i.set_text("my next message".into(), cx));
@@ -447,7 +523,7 @@ fn sending_a_saved_draft_preserves_the_new_composer(cx: &mut TestAppContext) {
             view.input
                 .update(cx, |i, cx| i.set_text("/draft send later".into(), cx));
             view.send(cx);
-            view.busy = true;
+            view.set_running_for_test(true);
             view.follow_ups.ready = true;
             view.controls = Some(controls);
             view.input

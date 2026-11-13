@@ -1,4 +1,4 @@
-//! Native port of wordFade.tsx: 90 cps floor, 220ms catch-up, 150ms
+//! Streaming word fade: 90 cps floor, 220ms catch-up, 150ms
 //! partial-word hold, 30ms commits and a 320ms opacity fade per word.
 use crate::clock::Instant;
 use gpui::{
@@ -83,25 +83,23 @@ impl Element for Disclosure {
     }
 }
 
-pub const WORD_FADE: Duration = Duration::from_millis(320);
+pub(crate) const WORD_FADE: Duration = Duration::from_millis(320);
 pub struct PacedText {
     target: String,
     shown: usize,
     position: f64,
     last: Instant,
     burst: Instant,
-    animate: bool,
     pub births: Vec<Instant>,
 }
 impl PacedText {
-    pub fn new(text: &str, animate: bool, now: Instant) -> Self {
+    pub fn new(text: &str, now: Instant) -> Self {
         Self {
             target: text.into(),
-            shown: if animate { 0 } else { text.len() },
-            position: if animate { 0. } else { text.len() as f64 },
+            shown: 0,
+            position: 0.,
             last: now,
             burst: now,
-            animate,
             births: Vec::new(),
         }
     }
@@ -116,10 +114,6 @@ impl PacedText {
         }
         self.target = text.into();
         self.burst = now;
-        if !self.animate {
-            self.shown = text.len();
-            self.position = text.len() as f64;
-        }
     }
     pub fn text(&self) -> &str {
         &self.target[..self.shown]
@@ -162,8 +156,7 @@ impl PacedText {
         false
     }
     pub fn words(&mut self, count: usize, now: Instant) {
-        let born = if self.animate { now } else { now - WORD_FADE };
-        self.births.resize(count, born);
+        self.births.resize(count, now);
     }
     pub fn active(&self, now: Instant) -> bool {
         self.behind()
@@ -171,11 +164,6 @@ impl PacedText {
                 .births
                 .last()
                 .is_some_and(|born| now.duration_since(*born) < WORD_FADE)
-    }
-    pub fn settle(&mut self, now: Instant) {
-        self.shown = self.target.len();
-        self.position = self.shown as f64;
-        self.births.fill(now - WORD_FADE);
     }
 }
 pub fn word_opacity(born: Option<&Instant>, now: Instant) -> f32 {

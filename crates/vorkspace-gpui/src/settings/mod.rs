@@ -44,8 +44,6 @@ pub(crate) struct ArchivedSession {
 /// What Settings shows about the workspace around it.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct SettingsContext {
-    /// The desktop's shared remote connection and SSH setup service.
-    pub remote: Option<std::sync::Arc<vorkspace_core::remote::Connections>>,
     pub bots: Vec<BotSetting>,
     pub vox_error: Option<String>,
     pub vox_devices: Vec<(String, String)>,
@@ -56,9 +54,8 @@ pub(crate) struct SettingsContext {
     pub archived_projects: Vec<String>,
     /// Projects the Worktrees, Providers and Inbox pages offer.
     pub projects: Vec<(String, String)>,
-    pub sessions: Vec<(i64, String, bool)>,
+    pub session_checkouts: Vec<String>,
     pub quick_error: Option<String>,
-    pub catalogs: HashMap<String, Vec<(String, String)>>,
     pub inbox_connections: HashMap<String, (bool, String)>,
     pub inbox_connection_revision: u64,
     pub inbox_connectors: vorkspace_core::inbox::Connectors,
@@ -70,11 +67,6 @@ pub(crate) struct SettingsContext {
 }
 impl PartialEq for SettingsContext {
     fn eq(&self, other: &Self) -> bool {
-        match (&self.remote, &other.remote) {
-            (Some(a), Some(b)) if !std::sync::Arc::ptr_eq(a, b) => return false,
-            (None, Some(_)) | (Some(_), None) => return false,
-            _ => {}
-        }
         self.vox_error == other.vox_error
             && self.vox_devices == other.vox_devices
             && self.bots == other.bots
@@ -83,9 +75,8 @@ impl PartialEq for SettingsContext {
             && self.archived == other.archived
             && self.archived_projects == other.archived_projects
             && self.projects == other.projects
-            && self.sessions == other.sessions
+            && self.session_checkouts == other.session_checkouts
             && self.quick_error == other.quick_error
-            && self.catalogs == other.catalogs
             && self.inbox_connections == other.inbox_connections
             && self.inbox_connection_revision == other.inbox_connection_revision
             && self.inbox_connectors == other.inbox_connectors
@@ -112,13 +103,17 @@ pub(crate) enum SettingsEvent {
     VoxReset,
     VoxMemory,
     CheckHarnessUpdates,
+    NotificationPermission(crate::notifications::delivery::Permission),
     ManageInboxProvider(String),
     InboxConnectorEnabled(String, bool),
     JiraFilter(vorkspace_core::inbox::JiraFilter),
     JiraProject(String, bool),
     InboxBot(String, String),
     RefreshInbox,
-    Changed(Box<Preferences>),
+    Changed {
+        before: Box<Preferences>,
+        after: Box<Preferences>,
+    },
     Section(Section),
     OpenSession(i64),
     Archive(i64, bool),
@@ -201,6 +196,12 @@ impl SliderKind {
     }
 }
 
+#[derive(Clone)]
+struct SliderTrack {
+    bounds: AnchorSlot,
+    focus: FocusHandle,
+}
+
 pub(crate) struct SettingsView {
     pub(crate) section: Section,
     prefs: Preferences,
@@ -213,22 +214,22 @@ pub(crate) struct SettingsView {
     pending_scroll: bool,
     _reveal: Option<Task<()>>,
     targets: RefCell<HashMap<&'static str, AnchorSlot>>,
-    slider_tracks: RefCell<HashMap<SliderKind, AnchorSlot>>,
+    slider_tracks: RefCell<HashMap<SliderKind, SliderTrack>>,
     slider_drag: Option<SliderKind>,
     select_open: Option<&'static str>,
     select_active: usize,
     select_scroll: ScrollHandle,
     select_focus: FocusHandle,
     select_anchors: RefCell<HashMap<&'static str, AnchorSlot>>,
-    /// Provider catalogs loaded for this page, so a provider without an open
-    /// conversation still lists its models.
+    /// The current account's last displayed rows, including catalogs too large
+    /// for the shared cache.
     discovered_catalogs: HashMap<
         (
             vorkspace_core::provider::Kind,
             vorkspace_core::accounts::Profile,
             u64,
         ),
-        Vec<vorkspace_core::catalog::Model>,
+        vorkspace_core::catalog::ModelRows,
     >,
     catalogs_loading: Vec<(
         vorkspace_core::provider::Kind,
@@ -238,6 +239,8 @@ pub(crate) struct SettingsView {
     models_open: Option<vorkspace_core::provider::Kind>,
     model_menu_anchors: RefCell<HashMap<vorkspace_core::provider::Kind, AnchorSlot>>,
     model_filter: Entity<Input>,
+    model_active: Option<String>,
+    model_scroll: ScrollHandle,
     search: Entity<Input>,
     search_query: String,
     search_active: usize,
@@ -259,6 +262,7 @@ pub(crate) struct SettingsView {
     mcp_busy: bool,
     mcp_health: Option<Task<()>>,
     discovery: data::Discovery,
+    discovery_scope: Option<(data::DiscoveryPage, String)>,
     discovery_loading: bool,
     discovery_task: Option<Task<()>>,
     worktree_sizes: HashMap<String, u64>,
@@ -266,11 +270,9 @@ pub(crate) struct SettingsView {
     worktree_sizes_task: Option<Task<()>>,
     selected_project: String,
     mcp_filter: String,
-    fields: HashMap<&'static str, Entity<Input>>,
     inbox: pages::InboxState,
     meeting_editor: Option<pages::connectors::MeetingEditor>,
     meeting_toggle_error: Option<String>,
-    connections: pages::ConnectionsState,
     skill_preview: Option<std::path::PathBuf>,
     skill_preview_text: Option<Result<std::sync::Arc<skill_document::DocumentData>, String>>,
     skill_preview_generation: u64,
@@ -293,18 +295,19 @@ impl Focusable for SettingsView {
     }
 }
 
-impl SettingsView {
-    pub(crate) fn new(
-        section: Section,
-        prefs: Preferences,
-        ctx: SettingsContext,
-        cx: &mut Context<Self>,
-    ) -> Self {
-        if let Some(center) = crate::accounts::get(cx) {
-            center.update(cx, |center, _| center.hide_emails());
-        }
-        let helper = crate::background_helper::ensure(cx);
-        cx.observe(&helper, |_, _, cx| cx.notify()).detach();
+struct SettingsInputs {
+    dictation_words_input: Entity<Input>,
+    search: Entity<Input>,
+    keybinding_filter: Entity<Input>,
+    accent_custom: Entity<Input>,
+    bedrock_url: Entity<Input>,
+    chat_background_preview: Entity<ProjectBackground>,
+    model_filter: Entity<Input>,
+    skill_filter: Entity<Input>,
+}
+
+impl SettingsInputs {
+    fn create(prefs: &Preferences, cx: &mut Context<SettingsView>) -> Self {
         let dictation_words_input = cx.new(|cx| {
             let mut input = Input::memory_fact("Custom words", cx);
             input.set_text(prefs.dictation_words.clone(), cx);
@@ -347,38 +350,64 @@ impl SettingsView {
             input.set_font_size(12.);
             input
         });
+        Self {
+            dictation_words_input,
+            search,
+            keybinding_filter,
+            accent_custom,
+            bedrock_url,
+            chat_background_preview,
+            model_filter,
+            skill_filter,
+        }
+    }
+    fn subscribe(&self, cx: &mut Context<SettingsView>) -> Vec<Subscription> {
+        let Self {
+            dictation_words_input,
+            search,
+            keybinding_filter,
+            accent_custom,
+            bedrock_url,
+            model_filter,
+            skill_filter,
+            ..
+        } = self;
         let mut subscriptions = vec![
-            cx.subscribe(&dictation_words_input, |this, _, _: &input::Changed, cx| {
+            cx.subscribe(dictation_words_input, |this, _, _: &input::Changed, cx| {
                 this.dictation_words_error = None;
                 cx.notify();
             }),
-            cx.subscribe(&model_filter, |_, _, _: &input::Changed, cx| cx.notify()),
-            cx.subscribe(&skill_filter, |this, input, _: &input::Changed, cx| {
+            cx.subscribe(model_filter, |this, _, _: &input::Changed, cx| {
+                this.model_active = None;
+                this.model_scroll.set_offset(gpui::point(px(0.), px(0.)));
+                cx.notify();
+            }),
+            cx.subscribe(skill_filter, |this, input, _: &input::Changed, cx| {
                 this.skill_query = input.read(cx).content.to_string();
                 cx.notify();
             }),
-            cx.subscribe(&search, |this, input, _: &input::Changed, cx| {
+            cx.subscribe(search, |this, input, _: &input::Changed, cx| {
                 this.search_query = input.read(cx).content.to_string();
                 this.search_active = 0;
                 cx.notify();
             }),
-            cx.subscribe(&search, |this, _, _: &input::Submitted, cx| {
+            cx.subscribe(search, |this, _, _: &input::Submitted, cx| {
                 let results = this.search_results();
                 if let Some(result) = results.get(this.search_active).cloned() {
                     this.go(result, cx);
                 }
             }),
-            cx.subscribe(&keybinding_filter, |this, input, _: &input::Changed, cx| {
+            cx.subscribe(keybinding_filter, |this, input, _: &input::Changed, cx| {
                 this.keybinding_query = input.read(cx).content.to_string();
                 cx.notify();
             }),
-            cx.subscribe(&bedrock_url, |this, input, _: &input::Changed, cx| {
+            cx.subscribe(bedrock_url, |this, input, _: &input::Changed, cx| {
                 let text = input.read(cx).content.trim().to_owned();
                 if this.prefs.bedrock_cost_url != text {
                     this.update(cx, |p| p.bedrock_cost_url = text);
                 }
             }),
-            cx.subscribe(&accent_custom, |this, input, _: &input::Changed, cx| {
+            cx.subscribe(accent_custom, |this, input, _: &input::Changed, cx| {
                 let text = input.read(cx).content.trim().to_owned();
                 if pages::parse_hex(&text).is_some() {
                     this.update(cx, |p| p.accent_color = Some(text.to_lowercase()));
@@ -404,6 +433,34 @@ impl SettingsView {
                 }
             });
         }));
+        subscriptions
+    }
+}
+
+impl SettingsView {
+    pub(crate) fn new(
+        section: Section,
+        prefs: Preferences,
+        ctx: SettingsContext,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        if let Some(center) = crate::accounts::get(cx) {
+            center.update(cx, |center, _| center.hide_emails());
+        }
+        let helper = crate::background_helper::ensure(cx);
+        cx.observe(&helper, |_, _, cx| cx.notify()).detach();
+        let inputs = SettingsInputs::create(&prefs, cx);
+        let subscriptions = inputs.subscribe(cx);
+        let SettingsInputs {
+            dictation_words_input,
+            search,
+            keybinding_filter,
+            accent_custom,
+            bedrock_url,
+            chat_background_preview,
+            model_filter,
+            skill_filter,
+        } = inputs;
         let selected_project = ctx.cwd.clone();
         let mut this = Self {
             section,
@@ -428,6 +485,8 @@ impl SettingsView {
             models_open: None,
             model_menu_anchors: Default::default(),
             model_filter,
+            model_active: None,
+            model_scroll: ScrollHandle::new(),
             search,
             search_query: String::new(),
             search_active: 0,
@@ -448,6 +507,7 @@ impl SettingsView {
             mcp_busy: false,
             mcp_health: None,
             discovery: data::Discovery::default(),
+            discovery_scope: None,
             discovery_loading: false,
             discovery_task: None,
             worktree_sizes: HashMap::new(),
@@ -455,11 +515,9 @@ impl SettingsView {
             worktree_sizes_task: None,
             selected_project,
             mcp_filter: "all".into(),
-            fields: HashMap::new(),
             inbox: pages::InboxState::default(),
             meeting_editor: None,
             meeting_toggle_error: None,
-            connections: pages::ConnectionsState::default(),
             skill_preview: None,
             skill_preview_text: None,
             skill_preview_generation: 0,
@@ -475,17 +533,46 @@ impl SettingsView {
             chat_background_preview,
             _subscriptions: subscriptions,
         };
-        this.select_section(this.section, cx);
-        this.watch_connections(cx);
-        if this.prefs.notifications {
-            this.probe_notification_permission(false, cx);
-        }
-        this.notification_deadline(cx);
-        this.refresh(cx);
+        this.initialize_section(section, cx);
         this
     }
+
+    fn initialize_section(&mut self, section: Section, cx: &mut Context<Self>) {
+        self.select_section(self.section, cx);
+        if self.prefs.notifications {
+            self.probe_notification_permission(false, cx);
+        }
+        self.notification_deadline(cx);
+        if self.section == section {
+            self.refresh(cx);
+        }
+    }
+
+    fn discovery_page(section: Section) -> Option<data::DiscoveryPage> {
+        use data::DiscoveryPage;
+        match section {
+            Section::Providers | Section::Notes => Some(DiscoveryPage::Providers),
+            Section::Skills => Some(DiscoveryPage::Skills),
+            Section::Mcp => Some(DiscoveryPage::Mcp),
+            Section::Worktrees => Some(DiscoveryPage::Worktrees),
+            _ => None,
+        }
+    }
+
     pub(super) fn refresh(&mut self, cx: &mut Context<Self>) {
-        if matches!(self.section, Section::Providers | Section::Notes)
+        self.discovery_task = None;
+        self.mcp_health = None;
+        let scope =
+            Self::discovery_page(self.section).map(|page| (page, self.selected_project.clone()));
+        if self.discovery_scope != scope {
+            self.discovery = data::Discovery::default();
+            self.discovery_scope = scope.clone();
+        }
+        let Some((page, cwd)) = scope else {
+            self.discovery_loading = false;
+            return;
+        };
+        if page == data::DiscoveryPage::Providers
             && let Some(center) = crate::accounts::get(cx)
         {
             center.update(cx, |center, cx| {
@@ -494,23 +581,29 @@ impl SettingsView {
                 }
             });
         }
-        let cwd = self.selected_project.clone();
+        if page == data::DiscoveryPage::Worktrees {
+            self.worktree_sizes_task = None;
+            self.worktree_sizes_project.clear();
+            self.worktree_sizes.clear();
+        }
+        let expected = (page, cwd.clone());
         self.discovery_loading = true;
         let work = cx
             .background_executor()
-            .spawn(async move { data::discover(&cwd) });
+            .spawn(async move { data::discover(page, &cwd) });
         self.discovery_task = Some(cx.spawn(async move |this, cx| {
             let data = work.await;
             let _ = this.update(cx, |this, cx| {
-                this.skill_documents.clear();
+                if this.discovery_scope.as_ref() != Some(&expected) {
+                    return;
+                }
                 this.discovery = data;
                 this.discovery_loading = false;
-                this.worktree_sizes_project.clear();
-                if matches!(this.section, Section::Providers | Section::Notes) {
-                    this.load_catalogs(true, cx);
-                }
-                if this.section == Section::Mcp {
-                    this.refresh_mcp_health(cx);
+                match page {
+                    data::DiscoveryPage::Providers => this.load_catalogs(true, cx),
+                    data::DiscoveryPage::Mcp => this.refresh_mcp_health(cx),
+                    data::DiscoveryPage::Skills => this.skill_documents.clear(),
+                    data::DiscoveryPage::Worktrees => {}
                 }
                 cx.notify();
             });
@@ -530,10 +623,15 @@ impl SettingsView {
         &self,
         kind: vorkspace_core::provider::Kind,
         cx: &App,
-    ) -> Option<&Vec<vorkspace_core::catalog::Model>> {
+    ) -> Option<vorkspace_core::catalog::ModelRows> {
+        use vorkspace_core::catalog;
         let profile = self.catalog_profile(kind, cx);
-        let generation = vorkspace_core::catalog::generation(kind, &profile);
-        self.discovered_catalogs.get(&(kind, profile, generation))
+        let generation = catalog::generation(kind, &profile);
+        catalog::cached_models_for(kind, &profile).or_else(|| {
+            self.discovered_catalogs
+                .get(&(kind, profile, generation))
+                .cloned()
+        })
     }
     /// Load every installed provider's model list off the render path.
     fn load_catalogs(&mut self, force: bool, cx: &mut Context<Self>) {
@@ -541,14 +639,14 @@ impl SettingsView {
             let profile = self.catalog_profile(kind, cx);
             let generation = vorkspace_core::catalog::generation(kind, &profile);
             let key = (kind, profile.clone(), generation);
+            self.discovered_catalogs
+                .retain(|old, _| old.0 != kind || old == &key);
             if path.is_none()
                 || self.catalogs_loading.contains(&key)
                 || (!force && self.discovered_catalogs.contains_key(&key))
             {
                 continue;
             }
-            self.discovered_catalogs
-                .retain(|(k, p, g), _| *k != kind || *p != profile || *g == generation);
             self.catalogs_loading.push(key.clone());
             let work = cx
                 .background_executor()
@@ -558,6 +656,7 @@ impl SettingsView {
                 let _ = this.update(cx, |this, cx| {
                     this.catalogs_loading.retain(|loading| *loading != key);
                     if let Ok(models) = result
+                        && this.catalog_profile(key.0, cx) == key.1
                         && vorkspace_core::catalog::generation(key.0, &key.1) == key.2
                     {
                         this.discovered_catalogs.insert(key, models);
@@ -570,28 +669,27 @@ impl SettingsView {
     }
     pub(crate) fn set_context(&mut self, ctx: SettingsContext, cx: &mut Context<Self>) {
         if self.ctx != ctx {
+            let navigation_changed = ["github", "gitlab", "jira"].into_iter().any(|provider| {
+                self.ctx.inbox_connectors.enabled(provider)
+                    != ctx.inbox_connectors.enabled(provider)
+            });
             if self.ctx.inbox_connection_revision != ctx.inbox_connection_revision
                 || self.ctx.inbox_connectors != ctx.inbox_connectors
             {
                 self.inbox.revision += 1;
             }
-            let remote_changed = match (&self.ctx.remote, &ctx.remote) {
-                (Some(a), Some(b)) => !std::sync::Arc::ptr_eq(a, b),
-                (None, None) => false,
-                _ => true,
-            };
             self.ctx = ctx;
-            self.select_section(self.section, cx);
-            self.search_active = 0;
-            if remote_changed {
-                self.leave_connections(cx);
-                self.watch_connections(cx);
+            if navigation_changed {
+                self.select_section(self.section, cx);
+                self.search_active = 0;
             }
             cx.notify();
         }
     }
     pub(crate) fn set_preferences(&mut self, prefs: &Preferences, cx: &mut Context<Self>) {
         if &self.prefs != prefs {
+            let navigation_changed =
+                self.prefs.notes != prefs.notes || self.prefs.todos != prefs.todos;
             if self.dictation_words_input.read(cx).content.as_ref() == self.prefs.dictation_words
                 && self.prefs.dictation_words != prefs.dictation_words
             {
@@ -600,8 +698,10 @@ impl SettingsView {
                 });
             }
             self.prefs = prefs.clone();
-            self.select_section(self.section, cx);
-            self.search_active = 0;
+            if navigation_changed {
+                self.select_section(self.section, cx);
+                self.search_active = 0;
+            }
             self.notification_deadline(cx);
             cx.notify();
         }
@@ -628,6 +728,10 @@ impl SettingsView {
             .filter(|result| self.section_available(result.section))
             .collect()
     }
+    pub(crate) fn section(&self) -> Section {
+        self.section
+    }
+
     pub(crate) fn select_section(&mut self, section: Section, cx: &mut Context<Self>) {
         let section = if self.section_available(section) {
             section
@@ -635,19 +739,17 @@ impl SettingsView {
             Section::Connectors
         };
         if self.section != section {
+            let previous_discovery = Self::discovery_page(self.section);
             if let Some(center) = crate::accounts::get(cx) {
                 center.update(cx, |center, _| center.hide_emails());
             }
             self.management = None;
             self.management_generation += 1;
-            self.leave_connections(cx);
             self.section = section;
-            self.watch_connections(cx);
-            if matches!(section, Section::Providers | Section::Notes) {
+            if Self::discovery_page(section) != previous_discovery {
+                self.refresh(cx);
+            } else if matches!(section, Section::Providers | Section::Notes) {
                 self.load_catalogs(false, cx);
-            }
-            if section == Section::Mcp {
-                self.refresh_mcp_health(cx);
             }
             self.select_open = None;
             self.models_open = None;
@@ -663,9 +765,6 @@ impl SettingsView {
         cx: &mut Context<Self>,
     ) -> bool {
         if self.dismiss_notification_transient(window, cx) {
-            return true;
-        }
-        if self.dismiss_connections(cx) {
             return true;
         }
         if self.recording.take().is_some() {
@@ -696,12 +795,7 @@ impl SettingsView {
             self.close_management(window, cx);
             return true;
         }
-        if self.skill_preview.take().is_some() {
-            window.focus(&self.skill_filter.read(cx).focus_handle(cx), cx);
-            cx.notify();
-            return true;
-        }
-        false
+        self.dismiss_skill_preview(window, cx)
     }
     /// Change preferences and tell the shell to keep them.
     /// `du` over a large build folder takes seconds, so it never holds up the page.
@@ -736,11 +830,17 @@ impl SettingsView {
         }));
     }
     fn update(&mut self, cx: &mut Context<Self>, change: impl FnOnce(&mut Preferences)) {
+        let before = self.prefs.clone();
         change(&mut self.prefs);
         self.select_section(self.section, cx);
         self.search_active = 0;
         self.notification_deadline(cx);
-        cx.emit(SettingsEvent::Changed(Box::new(self.prefs.clone())));
+        if before != self.prefs {
+            cx.emit(SettingsEvent::Changed {
+                before: Box::new(before),
+                after: Box::new(self.prefs.clone()),
+            });
+        }
         cx.notify();
     }
     fn restore_defaults(&mut self, cx: &mut Context<Self>) {
@@ -793,7 +893,7 @@ impl SettingsView {
     }
 
     /// The breadcrumb, Restore defaults action, and settings search.
-    pub(crate) fn header(&mut self, in_title_bar: bool, cx: &mut Context<Self>) -> AnyElement {
+    pub(crate) fn header(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let results = self.search_results();
         let open = !self.search_query.trim().is_empty();
         let weak = cx.weak_entity();
@@ -813,13 +913,7 @@ impl SettingsView {
                     .items_center()
                     .gap_2()
                     .text_size(px(13.))
-                    .map(|d| {
-                        if in_title_bar {
-                            d.pr_3().pl_1()
-                        } else {
-                            d.px_3()
-                        }
-                    })
+                    .px_3()
                     .child(
                         div()
                             .flex_shrink_0()
@@ -841,210 +935,211 @@ impl SettingsView {
                     .flex()
                     .items_center()
                     .gap(px(6.))
-                    .map(|d| if in_title_bar { d.pr_4() } else { d.pr_2() })
+                    .pr_2()
                     .when(self.section == Section::Appearance, |d| {
-                        d.child(
-                            div()
-                                .id("restore-defaults")
-                                .role(Role::Button)
-                                .map(vorkspace_ui::theme::tab_reachable)
-                                .aria_label("Restore defaults")
-                                .flex()
-                                .flex_shrink_0()
-                                .items_center()
-                                .gap(px(6.))
-                                .rounded(px(radius::CONTROL))
-                                .px_2()
-                                .py_1()
-                                .text_size(px(12.))
-                                .line_height(px(16.))
-                                .text_color(content(0.5))
-                                .cursor_pointer()
-                                .hover(|s| {
-                                    s.bg(vorkspace_ui::fluid::hover(0.1))
-                                        .text_color(content(1.))
-                                })
-                                .child(
-                                    icon("rotate-ccw", 14.)
-                                        .text_color(gpui::transparent_black())
-                                        .map(|i| i.text_color(content(0.5))),
-                                )
-                                .child("Restore defaults")
-                                .on_click(cx.listener(|this, _, _, cx| this.restore_defaults(cx))),
-                        )
+                        d.child(self.settings_restore_button(cx))
                     })
-                    .child(
-                        div()
-                            .id("settings-search")
-                            .relative()
-                            .flex_shrink_0()
-                            .child(self.search_anchor.probe())
-                            .child(
-                                crate::controls::page::search_frame(&self.search.focus_handle(cx))
-                                    .w(px(192.))
-                                    .child(icon("search-01", 14.).text_color(content(0.45)))
-                                    .child(div().min_w_0().flex_1().child(self.search.clone()))
-                                    .when(!self.search_query.is_empty(), |d| {
-                                        d.child(
-                                            div()
-                                                .id("clear-settings-search")
-                                                .role(Role::Button)
-                                                .map(vorkspace_ui::theme::tab_reachable)
-                                                .aria_label("Clear settings search")
-                                                .size_4()
-                                                .flex_shrink_0()
-                                                .flex()
-                                                .items_center()
-                                                .justify_center()
-                                                .rounded(px(radius::SMALL))
-                                                .cursor_pointer()
-                                                .child(icon("x", 12.).text_color(content(0.45)))
-                                                .on_click(cx.listener(|this, _, window, cx| {
-                                                    this.search.update(cx, |i, cx| {
-                                                        i.set_text(String::new(), cx)
-                                                    });
-                                                    this.search_query.clear();
-                                                    window.focus(&this.search.focus_handle(cx), cx);
-                                                    cx.notify();
-                                                })),
-                                        )
-                                    }),
-                            )
-                            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
-                                if this.search_query.trim().is_empty() {
-                                    return;
-                                }
-                                let count = this.search_results().len();
-                                match event.keystroke.key.as_str() {
-                                    "down" => {
-                                        this.search_active =
-                                            (this.search_active + 1).min(count.saturating_sub(1))
-                                    }
-                                    "up" => {
-                                        this.search_active = this.search_active.saturating_sub(1)
-                                    }
-                                    "escape" => {
-                                        this.search_query.clear();
-                                        this.search
-                                            .update(cx, |i, cx| i.set_text(String::new(), cx));
-                                    }
-                                    _ => return,
-                                }
-                                cx.stop_propagation();
-                                cx.notify();
-                            }))
-                            .when(open, |d| {
-                                let active = self.search_active;
-                                d.child(
-                                    popover(
-                                        "settings-search-results",
-                                        Anchor::Slot(self.search_anchor.clone()),
-                                    )
-                                    .side(Side::Bottom)
-                                    .align(Align::End)
-                                    .width(300.)
-                                    .max_height(320.)
-                                    .padding(4.)
-                                    .on_dismiss(move |_, cx| {
-                                        let _ = weak.update(cx, |this, cx| {
-                                            this.search_query.clear();
-                                            this.search
-                                                .update(cx, |i, cx| i.set_text(String::new(), cx));
-                                            cx.notify();
-                                        });
-                                    })
-                                    .child(
-                                        div()
-                                            .id("settings-search-list")
-                                            .role(Role::ListBox)
-                                            .aria_label("Settings search results")
-                                            .flex()
-                                            .flex_col()
-                                            .when(results.is_empty(), |d| {
-                                                d.child(
-                                                    div()
-                                                        .px_2()
-                                                        .py(px(6.))
-                                                        .text_size(px(12.))
-                                                        .line_height(px(16.))
-                                                        .text_color(content(0.45))
-                                                        .child("No matching settings"),
-                                                )
-                                            })
-                                            .children(results.into_iter().enumerate().map(
-                                                |(ix, result)| {
-                                                    let tag = if result.setting.is_some() {
-                                                        result.section.label()
-                                                    } else {
-                                                        "Page"
-                                                    };
-                                                    let label = result.label;
-                                                    div()
-                                                        .id(("settings-result", ix))
-                                                        .debug_selector(move || {
-                                                            format!("settings-result-{ix}")
-                                                        })
-                                                        .role(Role::ListBoxOption)
-                                                        .aria_label(label)
-                                                        .aria_selected(ix == active)
-                                                        .flex()
-                                                        .items_center()
-                                                        .gap_2()
-                                                        .rounded(px(radius::CONTAINER))
-                                                        .px_2()
-                                                        .py(px(6.))
-                                                        .text_size(px(12.))
-                                                        .line_height(px(16.))
-                                                        .text_color(content(1.))
-                                                        .cursor_pointer()
-                                                        .map(|d| {
-                                                            if ix == active {
-                                                                d.bg(content(0.1))
-                                                            } else {
-                                                                d.hover(|s| {
-                                                                    s.bg(
-                                                                        vorkspace_ui::fluid::hover(
-                                                                            0.05,
-                                                                        ),
-                                                                    )
-                                                                })
-                                                            }
-                                                        })
-                                                        .child(
-                                                            div()
-                                                                .min_w_0()
-                                                                .flex_1()
-                                                                .truncate()
-                                                                .child(label),
-                                                        )
-                                                        .child(
-                                                            div()
-                                                                .flex_shrink_0()
-                                                                .text_size(px(11.))
-                                                                .text_color(content(0.4))
-                                                                .child(tag),
-                                                        )
-                                                        .on_mouse_move(cx.listener(
-                                                            move |this, _, _, cx| {
-                                                                if this.search_active != ix {
-                                                                    this.search_active = ix;
-                                                                    cx.notify();
-                                                                }
-                                                            },
-                                                        ))
-                                                        .on_click(cx.listener(
-                                                            move |this, _, _, cx| {
-                                                                this.go(result.clone(), cx)
-                                                            },
-                                                        ))
-                                                },
-                                            )),
-                                    ),
-                                )
-                            }),
-                    ),
+                    .child(self.settings_search_field(results, open, weak, cx)),
             )
             .into_any_element()
+    }
+
+    fn settings_restore_button(&self, cx: &mut Context<Self>) -> gpui::Stateful<gpui::Div> {
+        div()
+            .id("restore-defaults")
+            .role(Role::Button)
+            .map(vorkspace_ui::theme::tab_reachable)
+            .aria_label("Restore defaults")
+            .flex()
+            .flex_shrink_0()
+            .items_center()
+            .gap(px(6.))
+            .rounded(px(radius::CONTROL))
+            .px_2()
+            .py_1()
+            .text_size(px(12.))
+            .line_height(px(16.))
+            .text_color(content(0.5))
+            .cursor_pointer()
+            .hover(|s| {
+                s.bg(vorkspace_ui::fluid::hover(0.1))
+                    .text_color(content(1.))
+            })
+            .child(
+                icon("rotate-ccw", 14.)
+                    .text_color(gpui::transparent_black())
+                    .map(|i| i.text_color(content(0.5))),
+            )
+            .child("Restore defaults")
+            .on_click(cx.listener(|this, _, _, cx| this.restore_defaults(cx)))
+    }
+
+    fn settings_search_field(
+        &self,
+        results: Vec<model::SearchResult>,
+        open: bool,
+        weak: gpui::WeakEntity<Self>,
+        cx: &mut Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        div()
+            .id("settings-search")
+            .relative()
+            .flex_shrink_0()
+            .child(self.search_anchor.probe())
+            .child(
+                crate::controls::page::search_frame(&self.search.focus_handle(cx))
+                    .w(px(192.))
+                    .child(icon("search-01", 14.).text_color(content(0.45)))
+                    .child(div().min_w_0().flex_1().child(self.search.clone()))
+                    .when(!self.search_query.is_empty(), |d| {
+                        d.child(self.settings_search_clear(cx))
+                    }),
+            )
+            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
+                if this.search_query.trim().is_empty() {
+                    return;
+                }
+                let count = this.search_results().len();
+                match event.keystroke.key.as_str() {
+                    "down" => {
+                        this.search_active = (this.search_active + 1).min(count.saturating_sub(1))
+                    }
+                    "up" => this.search_active = this.search_active.saturating_sub(1),
+                    "escape" => {
+                        this.search_query.clear();
+                        this.search
+                            .update(cx, |i, cx| i.set_text(String::new(), cx));
+                    }
+                    _ => return,
+                }
+                cx.stop_propagation();
+                cx.notify();
+            }))
+            .when(open, |d| {
+                let active = self.search_active;
+                d.child(self.settings_search_results(results, active, weak, cx))
+            })
+    }
+
+    fn settings_search_clear(&self, cx: &mut Context<Self>) -> gpui::Stateful<gpui::Div> {
+        div()
+            .id("clear-settings-search")
+            .role(Role::Button)
+            .map(vorkspace_ui::theme::tab_reachable)
+            .aria_label("Clear settings search")
+            .size_4()
+            .flex_shrink_0()
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(radius::SMALL))
+            .cursor_pointer()
+            .child(icon("x", 12.).text_color(content(0.45)))
+            .on_click(cx.listener(|this, _, window, cx| {
+                this.search
+                    .update(cx, |i, cx| i.set_text(String::new(), cx));
+                this.search_query.clear();
+                window.focus(&this.search.focus_handle(cx), cx);
+                cx.notify();
+            }))
+    }
+
+    fn settings_search_results(
+        &self,
+        results: Vec<model::SearchResult>,
+        active: usize,
+        weak: gpui::WeakEntity<Self>,
+        cx: &mut Context<Self>,
+    ) -> crate::popover::Popover {
+        popover(
+            "settings-search-results",
+            Anchor::Slot(self.search_anchor.clone()),
+        )
+        .side(Side::Bottom)
+        .align(Align::End)
+        .width(300.)
+        .max_height(320.)
+        .padding(4.)
+        .on_dismiss(move |_, cx| {
+            let _ = weak.update(cx, |this, cx| {
+                this.search_query.clear();
+                this.search
+                    .update(cx, |i, cx| i.set_text(String::new(), cx));
+                cx.notify();
+            });
+        })
+        .child(self.settings_search_list(results, active, cx))
+    }
+
+    fn settings_search_list(
+        &self,
+        results: Vec<model::SearchResult>,
+        active: usize,
+        cx: &mut Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        div()
+            .id("settings-search-list")
+            .role(Role::ListBox)
+            .aria_label("Settings search results")
+            .flex()
+            .flex_col()
+            .when(results.is_empty(), |d| {
+                d.child(
+                    div()
+                        .px_2()
+                        .py(px(6.))
+                        .text_size(px(12.))
+                        .line_height(px(16.))
+                        .text_color(content(0.45))
+                        .child("No matching settings"),
+                )
+            })
+            .children(results.into_iter().enumerate().map(|(ix, result)| {
+                let tag = if result.setting.is_some() {
+                    result.section.label()
+                } else {
+                    "Page"
+                };
+                let label = result.label;
+                div()
+                    .id(("settings-result", ix))
+                    .debug_selector(move || format!("settings-result-{ix}"))
+                    .role(Role::ListBoxOption)
+                    .aria_label(label)
+                    .aria_selected(ix == active)
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .rounded(px(radius::CONTAINER))
+                    .px_2()
+                    .py(px(6.))
+                    .text_size(px(12.))
+                    .line_height(px(16.))
+                    .text_color(content(1.))
+                    .cursor_pointer()
+                    .map(|d| {
+                        if ix == active {
+                            d.bg(content(0.1))
+                        } else {
+                            d.hover(|s| s.bg(vorkspace_ui::fluid::hover(0.05)))
+                        }
+                    })
+                    .child(div().min_w_0().flex_1().truncate().child(label))
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .text_size(px(11.))
+                            .text_color(content(0.4))
+                            .child(tag),
+                    )
+                    .on_mouse_move(cx.listener(move |this, _, _, cx| {
+                        if this.search_active != ix {
+                            this.search_active = ix;
+                            cx.notify();
+                        }
+                    }))
+                    .on_click(cx.listener(move |this, _, _, cx| this.go(result.clone(), cx)))
+            }))
     }
 }
 
@@ -1055,55 +1150,6 @@ pub(crate) fn nav(
     select: impl Fn(Section, &mut Window, &mut App) + Clone + 'static,
     back: impl Fn(&mut Window, &mut App) + 'static,
 ) -> AnyElement {
-    let row =
-        |id: SharedString, label: &'static str, path: &'static str, active: bool, ready: bool| {
-            div()
-                .id(id.clone())
-                .debug_selector(move || id.to_string())
-                .role(Role::Button)
-                .aria_label(label)
-                .aria_selected(active)
-                .map(vorkspace_ui::theme::tab_reachable)
-                .relative()
-                .w_full()
-                .flex()
-                .items_center()
-                .gap_2()
-                .rounded(px(radius::CONTROL))
-                .px_2()
-                .py(px(6.))
-                .cursor_pointer()
-                .map(|d| {
-                    if active {
-                        // The glide's thumb draws the selection once measured.
-                        d.when(!ready, |d| d.bg(content(0.1)))
-                            .text_color(content(1.))
-                    } else {
-                        d.text_color(content(0.5)).hover(|s| {
-                            s.bg(vorkspace_ui::fluid::hover(0.08))
-                                .text_color(content(1.))
-                        })
-                    }
-                })
-                .child(
-                    gpui::svg()
-                        .path(path)
-                        .size(px(16.))
-                        .flex_shrink_0()
-                        .opacity(0.7)
-                        .text_color(if active { content(1.) } else { content(0.5) }),
-                )
-                .child(
-                    div()
-                        .min_w_0()
-                        .flex_1()
-                        .truncate()
-                        .text_size(px(14.))
-                        .line_height(px(17.5))
-                        .font_weight(gpui::FontWeight::MEDIUM)
-                        .child(label),
-                )
-        };
     div()
         .id("settings-nav")
         .debug_selector(|| "settings-nav".into())
@@ -1112,82 +1158,7 @@ pub(crate) fn nav(
         .size_full()
         .flex()
         .flex_col()
-        .child(
-            div()
-                .id("settings-nav-scroll")
-                .min_h_0()
-                .flex_1()
-                .overflow_y_scroll()
-                .flex()
-                .flex_col()
-                .px_2()
-                .py_3()
-                .child({
-                    let order: Vec<Section> = model::GROUPS
-                        .iter()
-                        .flat_map(|(_, sections)| sections.iter())
-                        .filter(|item| visible.contains(item))
-                        .copied()
-                        .collect();
-                    let selected = order.iter().position(|item| *item == section);
-                    let visible = visible.to_vec();
-                    vorkspace_ui::glide::GlideList::new(
-                        "settings-nav-glide",
-                        selected,
-                        div().flex().flex_col().gap_5(),
-                        content(0.1),
-                        radius::CONTROL,
-                        move |glide| {
-                            let ready = glide.ready();
-                            model::GROUPS
-                                .iter()
-                                .map(|(group, sections)| {
-                                    div()
-                                        .flex()
-                                        .flex_col()
-                                        .gap_px()
-                                        .child(
-                                            div()
-                                                .px_2()
-                                                .pb_1()
-                                                .text_size(px(12.))
-                                                .line_height(px(16.))
-                                                .font_weight(gpui::FontWeight::SEMIBOLD)
-                                                .text_color(content(0.35))
-                                                .child(*group),
-                                        )
-                                        .children(
-                                            sections
-                                                .iter()
-                                                .filter(|item| visible.contains(item))
-                                                .map(|&item| {
-                                                    let select = select.clone();
-                                                    let index = order
-                                                        .iter()
-                                                        .position(|other| *other == item)
-                                                        .unwrap_or(usize::MAX);
-                                                    row(
-                                                        format!("settings-nav-{}", item.id())
-                                                            .into(),
-                                                        item.label(),
-                                                        item.icon(),
-                                                        item == section,
-                                                        ready,
-                                                    )
-                                                    .child(glide.probe(index))
-                                                    .on_click(move |_, window, cx| {
-                                                        select(item, window, cx)
-                                                    })
-                                                }),
-                                        )
-                                        .into_any_element()
-                                })
-                                .collect()
-                        },
-                    )
-                })
-                .into_any_element(),
-        )
+        .child(nav_sections(section, visible, select))
         .child(
             div()
                 .flex_shrink_0()
@@ -1196,7 +1167,7 @@ pub(crate) fn nav(
                 .gap_px()
                 .p_2()
                 .child(
-                    row(
+                    nav_row(
                         "settings-nav-back".into(),
                         "Back",
                         "arrow-left",
@@ -1207,6 +1178,138 @@ pub(crate) fn nav(
                 ),
         )
         .into_any_element()
+}
+
+fn nav_sections(
+    section: Section,
+    visible: &[Section],
+    select: impl Fn(Section, &mut Window, &mut App) + Clone + 'static,
+) -> AnyElement {
+    div()
+        .id("settings-nav-scroll")
+        .min_h_0()
+        .flex_1()
+        .overflow_y_scroll()
+        .flex()
+        .flex_col()
+        .px_2()
+        .py_3()
+        .child({
+            let order: Vec<Section> = model::GROUPS
+                .iter()
+                .flat_map(|(_, sections)| sections.iter())
+                .filter(|item| visible.contains(item))
+                .copied()
+                .collect();
+            let selected = order.iter().position(|item| *item == section);
+            let visible = visible.to_vec();
+            vorkspace_ui::glide::GlideList::new(
+                "settings-nav-glide",
+                selected,
+                div().flex().flex_col().gap_5(),
+                content(0.1),
+                radius::CONTROL,
+                move |glide| {
+                    let ready = glide.ready();
+                    model::GROUPS
+                        .iter()
+                        .map(|(group, sections)| {
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap_px()
+                                .child(
+                                    div()
+                                        .px_2()
+                                        .pb_1()
+                                        .text_size(px(12.))
+                                        .line_height(px(16.))
+                                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                                        .text_color(content(0.35))
+                                        .child(*group),
+                                )
+                                .children(
+                                    sections.iter().filter(|item| visible.contains(item)).map(
+                                        |&item| {
+                                            let select = select.clone();
+                                            let index = order
+                                                .iter()
+                                                .position(|other| *other == item)
+                                                .unwrap_or(usize::MAX);
+                                            nav_row(
+                                                format!("settings-nav-{}", item.id()).into(),
+                                                item.label(),
+                                                item.icon(),
+                                                item == section,
+                                                ready,
+                                            )
+                                            .child(glide.probe(index))
+                                            .on_click(move |_, window, cx| select(item, window, cx))
+                                        },
+                                    ),
+                                )
+                                .into_any_element()
+                        })
+                        .collect()
+                },
+            )
+        })
+        .into_any_element()
+}
+
+fn nav_row(
+    id: SharedString,
+    label: &'static str,
+    path: &'static str,
+    active: bool,
+    ready: bool,
+) -> gpui::Stateful<gpui::Div> {
+    div()
+        .id(id.clone())
+        .debug_selector(move || id.to_string())
+        .role(Role::Button)
+        .aria_label(label)
+        .aria_selected(active)
+        .map(vorkspace_ui::theme::tab_reachable)
+        .relative()
+        .w_full()
+        .flex()
+        .items_center()
+        .gap_2()
+        .rounded(px(radius::CONTROL))
+        .px_2()
+        .py(px(6.))
+        .cursor_pointer()
+        .map(|d| {
+            if active {
+                // The glide's thumb draws the selection once measured.
+                d.when(!ready, |d| d.bg(content(0.1)))
+                    .text_color(content(1.))
+            } else {
+                d.text_color(content(0.5)).hover(|s| {
+                    s.bg(vorkspace_ui::fluid::hover(0.08))
+                        .text_color(content(1.))
+                })
+            }
+        })
+        .child(
+            gpui::svg()
+                .path(path)
+                .size(px(16.))
+                .flex_shrink_0()
+                .opacity(0.7)
+                .text_color(if active { content(1.) } else { content(0.5) }),
+        )
+        .child(
+            div()
+                .min_w_0()
+                .flex_1()
+                .truncate()
+                .text_size(px(14.))
+                .line_height(px(17.5))
+                .font_weight(gpui::FontWeight::MEDIUM)
+                .child(label),
+        )
 }
 
 impl Render for SettingsView {
@@ -1221,7 +1324,6 @@ impl Render for SettingsView {
             });
         }
         self.notification_window_state(window, cx);
-        self.connections_window_state(window, cx);
         let page = self.page(window, cx);
         let narrow = self
             .scroll

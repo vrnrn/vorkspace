@@ -223,7 +223,6 @@ fn switch_geometry_and_focus_feedback_follow_theme_and_state(cx: &mut TestAppCon
                         ..Default::default()
                     },
                     light,
-                    true,
                 );
             });
             for compact in [false, true] {
@@ -301,7 +300,7 @@ fn switch_geometry_and_focus_feedback_follow_theme_and_state(cx: &mut TestAppCon
         }
     }
     visual.update(|_, _| {
-        theme::configure(&Default::default(), false, true);
+        theme::configure(&Default::default(), false);
     });
 }
 
@@ -329,7 +328,6 @@ fn native_control_captures() {
                     ..Default::default()
                 },
                 light,
-                true,
             );
         });
         for compact in [false, true] {
@@ -388,7 +386,7 @@ fn native_control_captures() {
         }
     }
     cx.update(|_| {
-        theme::configure(&Default::default(), false, true);
+        theme::configure(&Default::default(), false);
     });
 }
 

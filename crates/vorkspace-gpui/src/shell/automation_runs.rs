@@ -1,6 +1,12 @@
 //! Runs use the same conversation lifecycle as an ordinary native submission.
 use super::*;
-use vorkspace_core::automations::{self, DueAutomationRun, Service};
+use crate::conversation::composer_features::ManagedAvailability;
+use vorkspace_core::{
+    accounts::Profile,
+    agent::Settings,
+    automations::{self, Automation, AutomationRun, DueAutomationRun, Service},
+    files::path_key,
+};
 
 pub(super) type ServiceHandle = Arc<Mutex<Service>>;
 
@@ -8,6 +14,39 @@ pub(super) struct Running {
     run_id: String,
     submitting: bool,
     generation_before: u64,
+}
+
+struct Launch {
+    due: DueAutomationRun,
+    reveal: bool,
+    navigation: u64,
+}
+
+#[derive(Clone, Copy)]
+struct Candidate {
+    id: i64,
+    entity: gpui::EntityId,
+}
+
+struct WaitingForReuse {
+    launch: Launch,
+    candidate: Candidate,
+    _changes: gpui::Subscription,
+}
+
+struct NewSession {
+    summary: Session,
+    settings: Settings,
+    install: crate::session_install::Install,
+    run: AutomationRun,
+}
+
+struct PreparedRun {
+    summary: Session,
+    settings: Settings,
+    install: Option<crate::session_install::Install>,
+    view: Option<Entity<Conversation>>,
+    reuse: Option<Candidate>,
 }
 
 #[derive(Default)]
@@ -18,10 +57,10 @@ pub(super) struct State {
     polling: bool,
     pending: HashSet<String>,
     running: HashMap<i64, Running>,
-    reserved: HashSet<i64>,
+    pub(super) reserved: HashSet<i64>,
+    waiting_for_reuse: HashMap<i64, WaitingForReuse>,
     writes: Option<gpui::Task<()>>,
     events_polling: bool,
-    pub session_automations: HashMap<i64, String>,
 }
 
 fn now() -> i64 {
@@ -36,7 +75,7 @@ fn service_lock(service: &ServiceHandle) -> Result<std::sync::MutexGuard<'_, Ser
 
 impl Shell {
     pub(super) fn automation_work_in_progress(&self) -> bool {
-        let state = &self.automation_state;
+        let state = &self.pages.automation_state;
         state.polling
             || state.events_polling
             || !state.running.is_empty()
@@ -46,49 +85,56 @@ impl Shell {
     }
 
     pub(super) fn initialize_automations(&mut self, cx: &mut Context<Self>) {
-        if self.automation_state.opening || self.automation_state.service.is_some() {
+        if self.pages.automation_state.opening || self.pages.automation_state.service.is_some() {
             return;
         }
-        self.automation_state.opening = true;
-        let store = self.store.clone();
-        let work = cx.background_executor().spawn(async move {
-            let path = locked(&store)?.database_path().to_path_buf();
-            let service = Service::open(&path).map(|service| Arc::new(Mutex::new(service)))?;
-            let sessions = locked(&store)?.automation_session_ids()?;
-            Ok::<_, String>((service, sessions))
-        });
+        self.pages.automation_state.opening = true;
+        let core = self.app_core.clone().expect("registered workspace window");
+        if let Some(service) = core.update(cx, |core, cx| core.request_automation_service(cx)) {
+            self.automation_service_ready(Ok(service), cx);
+        }
+    }
+
+    pub(super) fn automation_service_ready(
+        &mut self,
+        result: Result<ServiceHandle, String>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.pages.automation_state.service.is_some() {
+            return;
+        }
+        let requested = std::mem::take(&mut self.pages.automation_state.opening);
+        match result {
+            Ok(service) => self.pages.automation_state.service = Some(service),
+            Err(error) => {
+                if requested {
+                    self.error = Some(format!("Could not open automations: {error}"));
+                    cx.notify();
+                }
+                return;
+            }
+        }
         cx.spawn(async move |this, cx| {
-            let result = work.await;
             let _ = this.update_in(cx, |this, window, cx| {
-                this.automation_state.opening = false;
-                match result {
-                    Ok((service, sessions)) => {
-                        this.automation_state.session_automations = sessions;
-                        this.automation_state.service = Some(service);
-                        if !cfg!(test) && this.holds_scheduler(cx) {
-                            this.ensure_background_inbox(window, cx);
-                        }
-                        this.poll_automations(cx);
-                        if this
-                            .automation_state
-                            .open_requested
-                            .take()
-                            .is_some_and(|revision| revision == this.navigation_revision)
-                        {
-                            this.open_automations(window, cx);
-                        } else if this.navigation_revision == 0
-                            && this.active_app_view.is_none()
-                            && this.settings.is_none()
-                        {
-                            let saved = this.workspace.scope_focus.get(&this.tab_scope()).cloned();
-                            if let Some(tab @ TitleTab::App(_)) = saved {
-                                this.open_title_tab(&tab, window, cx);
-                            }
-                        }
-                    }
-                    Err(error) => {
-                        this.error = Some(format!("Could not open automations: {error}"));
-                        cx.notify();
+                if !cfg!(test) && this.holds_scheduler(cx) {
+                    this.ensure_background_inbox(window, cx);
+                }
+                this.poll_automations(cx);
+                if this
+                    .pages
+                    .automation_state
+                    .open_requested
+                    .take()
+                    .is_some_and(|revision| revision == this.navigation_revision)
+                {
+                    this.open_automations(window, cx);
+                } else if this.navigation_revision == 0
+                    && this.pages.active_app_view.is_none()
+                    && this.pages.settings.is_none()
+                {
+                    let saved = this.workspace.scope_focus.get(&this.tab_scope()).cloned();
+                    if let Some(tab @ TitleTab::App(_)) = saved {
+                        this.open_title_tab(&tab, window, cx);
                     }
                 }
             });
@@ -101,51 +147,40 @@ impl Shell {
             return;
         }
         // A rejected or deferred submission still needs a terminal receipt.
-        let sessions: Vec<_> = self.automation_state.running.keys().copied().collect();
+        let sessions: Vec<_> = self
+            .pages
+            .automation_state
+            .running
+            .keys()
+            .copied()
+            .collect();
         for id in sessions {
             self.automation_session_changed(id, cx);
         }
-        let Some(service) = self.automation_state.service.clone() else {
+        let Some(service) = self.pages.automation_state.service.clone() else {
             self.initialize_automations(cx);
             return;
         };
-        if self.automation_state.polling {
+        if self.pages.automation_state.polling {
             return;
         }
-        self.automation_state.polling = true;
-        let core = self.app_core.clone().expect("registered workspace window");
-        let recover = !core.read(cx).automation_recovered;
-        let cutoff = core.read(cx).automation_cutoff;
-        let work = cx.background_executor().spawn(async move {
-            let mut service = service_lock(&service)?;
-            let mut runs = if recover {
-                service.recover(cutoff, now())?
-            } else {
-                Vec::new()
-            };
-            runs.extend(service.claim_due(now())?);
-            let has_events = service.list()?.iter().any(|automation| {
-                automation.enabled
-                    && automation.triggers.as_ref().is_some_and(|triggers| {
-                        triggers.iter().any(|trigger| trigger.kind != "time")
-                    })
-            });
-            Ok::<_, String>((runs, has_events))
-        });
+        self.pages.automation_state.polling = true;
+        let work = cx
+            .background_executor()
+            .spawn(async move { service_lock(&service)?.poll(now()) });
         cx.spawn(async move |this, cx| {
             let result = work.await;
             let _ = this.update_in(cx, |this, window, cx| {
-                this.automation_state.polling = false;
+                this.pages.automation_state.polling = false;
                 match result {
-                    Ok((runs, has_events)) => {
-                        core.update(cx, |core, _| core.automation_recovered = true);
+                    Ok(runs) => {
                         for run in runs {
                             this.launch_automation(run, false, cx);
                         }
-                        if has_events {
+                        if !cfg!(test) && this.pages.inbox.is_none() {
                             this.ensure_background_inbox(window, cx);
                         }
-                        this.inbox_automation_events(Vec::new(), cx);
+                        this.drain_inbox_automation_events(cx);
                     }
                     Err(error) => {
                         this.error = Some(format!("Could not evaluate automations: {error}"));
@@ -157,38 +192,23 @@ impl Shell {
         .detach();
     }
 
-    pub(super) fn inbox_automation_events(
-        &mut self,
-        items: Vec<vorkspace_core::inbox::Item>,
-        cx: &mut Context<Self>,
-    ) {
+    pub(super) fn drain_inbox_automation_events(&mut self, cx: &mut Context<Self>) {
         let core = self.app_core.clone().expect("registered workspace window");
-        let incoming = !items.is_empty();
-        if incoming {
-            core.update(cx, |core, cx| core.queue_automation_events(items, cx));
-        }
         if !self.holds_scheduler(cx) {
-            if incoming && let Some(owner) = self.scheduler_window(cx) {
-                cx.defer(move |cx| {
-                    let _ = owner.update(cx, |shell, cx| {
-                        shell.inbox_automation_events(Vec::new(), cx)
-                    });
-                });
-            }
             return;
         }
-        if self.automation_state.events_polling {
+        if self.pages.automation_state.events_polling {
             return;
         }
         let items = core.read(cx).automation_events();
         if items.is_empty() {
             return;
         }
-        let Some(service) = self.automation_state.service.clone() else {
+        let Some(service) = self.pages.automation_state.service.clone() else {
             self.initialize_automations(cx);
             return;
         };
-        self.automation_state.events_polling = true;
+        self.pages.automation_state.events_polling = true;
         let attempted = items.clone();
         let flush = core.read(cx).flush_pending(cx);
         let work = cx.background_executor().spawn(async move {
@@ -200,7 +220,7 @@ impl Shell {
         cx.spawn(async move |this, cx| {
             let result = work.await;
             let _ = this.update(cx, |this, cx| {
-                this.automation_state.events_polling = false;
+                this.pages.automation_state.events_polling = false;
                 match result {
                     Ok((runs, retry)) => {
                         core.update(cx, |core, cx| {
@@ -227,303 +247,496 @@ impl Shell {
         reveal: bool,
         cx: &mut Context<Self>,
     ) {
-        if self.automation_state.pending.contains(&due.run.id)
-            || self
+        if self
+            .pages
+            .automation_state
+            .running
+            .values()
+            .any(|run| run.run_id == due.run.id)
+            || !self
+                .pages
                 .automation_state
-                .running
-                .values()
-                .any(|run| run.run_id == due.run.id)
+                .pending
+                .insert(due.run.id.clone())
         {
             return;
         }
-        self.automation_state.pending.insert(due.run.id.clone());
-        let automation = &due.automation;
-        let kind = Kind::from_id(&automation.harness);
-        let reuse = automation
-            .reuse_session
-            .then_some(automation.last_session_id.as_deref())
-            .flatten()
-            .and_then(|id| locked(&self.store).ok()?.resolve_existing_session_id(id))
-            .filter(|id| {
-                !self.automation_state.running.contains_key(id)
-                    && !self.automation_state.reserved.contains(id)
-            })
-            .filter(|id| {
-                self.session_summaries.get(id).is_some_and(|summary| {
-                    summary.provider == automation.harness
-                        && !summary.archived
-                        && !self.draft_sessions.contains(id)
-                        && self
-                            .sessions
-                            .get(id)
-                            .is_none_or(|view| view.read(cx).available_for_managed_run(cx))
-                        && match automation.workspace_mode.as_str() {
-                            "current" => {
-                                self.session_worktrees
-                                    .get(id)
-                                    .and_then(Option::as_deref)
-                                    .is_none()
-                                    && vorkspace_core::files::path_key(&summary.cwd)
-                                        == vorkspace_core::files::path_key(&automation.cwd)
-                            }
-                            "existing" => self
-                                .session_worktrees
-                                .get(id)
-                                .and_then(Option::as_deref)
-                                .is_some_and(|cwd| {
-                                    vorkspace_core::files::path_key(cwd)
-                                        == vorkspace_core::files::path_key(&automation.worktree_cwd)
-                                }),
-                            _ => false,
-                        }
-                })
-            })
-            .filter(|id| {
-                self.ensure_session(*id, cx)
-                    .is_some_and(|view| view.read(cx).available_for_managed_run(cx))
-            });
-        let account = crate::accounts::get(cx)
-            .map(|accounts| accounts.read(cx).selected(kind, &automation.cwd))
-            .unwrap_or_default();
-        if let Some(id) = reuse {
-            self.automation_state.reserved.insert(id);
-        }
-        let mut settings = reuse
-            .and_then(|id| {
-                self.sessions
-                    .get(&id)
-                    .map(|view| view.read(cx).settings.clone())
-            })
-            .unwrap_or_default();
-        settings.account = account;
-        settings.model = vorkspace_core::store::native_model(&automation.model, kind.id());
-        settings.model_settings = automation.model_settings.clone();
-        settings.effort = [
-            "effort",
-            "reasoning",
-            "reasoningEffort",
-            "reasoning_effort",
-            "variant",
-        ]
-        .into_iter()
-        .find_map(|key| automation.model_settings.get(key).cloned());
-        settings.fast = automation
-            .model_settings
-            .get("fast")
-            .is_some_and(|value| value == "true");
-        settings.service_tier = automation
-            .model_settings
-            .get("serviceTier")
-            .or_else(|| automation.model_settings.get("service_tier"))
-            .cloned();
-        settings.thinking = automation
-            .model_settings
-            .get("thinking")
-            .and_then(|value| value.parse().ok());
-        settings.access = vorkspace_core::agent::AccessMode::from_id(&automation.runtime_mode);
-        settings.new_worktree = automation.workspace_mode == "worktree";
-        settings.worktree_base = (automation.workspace_mode == "worktree").then(|| "HEAD".into());
-        settings.worktree_cwd =
-            (automation.workspace_mode == "existing").then(|| automation.worktree_cwd.clone());
-        settings.plan = false;
-        settings.operator = false;
-        settings.orchestrator = false;
-        settings.prepared_prompt = None;
-        let store = self.store.clone();
-        let launch = due.clone();
-        let revision = self.navigation_revision;
-        let mut install = self.session_install(cx);
-        let work = cx.background_executor().spawn(async move {
-            if Kind::parse(&launch.automation.harness).is_none() {
-                return Err("The automation's agent is unavailable".into());
-            }
-            if !std::path::Path::new(&launch.automation.cwd).is_dir() {
-                return Err("The automation's project folder is unavailable".into());
-            }
-            if launch.automation.workspace_mode == "existing"
-                && !std::path::Path::new(&launch.automation.worktree_cwd).is_dir()
-            {
-                return Err("The automation's worktree is unavailable".into());
-            }
-            let store = locked(&store)?;
-            let mut settings = settings;
-            let summary = if let Some(id) = reuse {
-                if let Some(previous) = store.agent_settings(id)? {
-                    settings.turns = previous.turns;
-                    settings.revision = previous.revision;
-                }
-                store
-                    .sessions()?
-                    .into_iter()
-                    .find(|session| session.id == id)
-                    .ok_or("The reusable session no longer exists")?
-            } else {
-                let mut summary =
-                    store.create(&launch.automation.harness, &launch.automation.cwd)?;
-                install.track(summary.id);
-                if launch.run.trigger != "event" {
-                    summary.title = launch.automation.name.clone();
-                    store.title(summary.id, &summary.title)?;
-                }
-                summary
-            };
-            if reuse.is_none() {
-                store.save_agent_settings(summary.id, &settings)?;
-            }
-            let persisted = store.persisted_session_id(summary.id)?;
-            Ok::<_, String>((summary, settings, persisted, install))
-        });
+        let Some(service) = self.pages.automation_state.service.clone() else {
+            self.pages.automation_state.pending.remove(&due.run.id);
+            self.initialize_automations(cx);
+            return;
+        };
+        let id = due.run.id;
+        let requested = id.clone();
+        let navigation = self.navigation_revision;
+        let work = cx
+            .background_executor()
+            .spawn(async move { service_lock(&service)?.claim_run(&requested, now()) });
         cx.spawn(async move |this, cx| {
             let result = work.await;
-            let _ = this.update_in(cx, |this, window, cx| {
-                this.automation_state.pending.remove(&due.run.id);
-                if let Some(id) = reuse {
-                    this.automation_state.reserved.remove(&id);
+            let _ = this.update(cx, |this, cx| match result {
+                Ok(Some(due)) => this.prepare_claimed_automation(
+                    Launch {
+                        due,
+                        reveal,
+                        navigation,
+                    },
+                    cx,
+                ),
+                Ok(None) => {
+                    // Another process owns execution, or this exact run was
+                    // already claimed. Its durable queue remains authoritative.
+                    this.pages.automation_state.pending.remove(&id);
                 }
-                match result {
-                    Ok((summary, settings, persisted, mut install)) => {
-                        let id = summary.id;
-                        if reuse.is_some()
-                            && this
-                                .sessions
-                                .get(&id)
-                                .is_none_or(|view| !view.read(cx).available_for_managed_run(cx))
-                        {
-                            let mut retry = due.clone();
-                            retry.automation.reuse_session = false;
-                            this.launch_automation(retry, reveal, cx);
-                            return;
-                        }
-                        let linked = automation_work_item(&due.run);
-                        if let Err(error) =
-                            this.verify_prepared_checkout(id, settings.worktree_cwd.as_deref(), cx)
-                        {
-                            if reuse.is_none() {
-                                let _ = locked(&this.store)
-                                    .and_then(|mut store| install.discard(&mut store, id));
-                            }
-                            this.update_automation_run(
-                                due.run.id.clone(),
-                                "failed",
-                                None,
-                                Some(error.clone()),
-                                cx,
-                            );
-                            if reveal {
-                                this.error = Some(error);
-                                cx.notify();
-                            }
-                            return;
-                        }
-                        // The local lease and composer were both revalidated.
-                        // A run that falls back must not relink the old session.
-                        let linked_result = locked(&this.store).and_then(|store| {
-                            store.set_automation_id(id, &due.automation.id)?;
-                            if let Some(item) = &linked {
-                                store.set_work_item(id, Some(item))?;
-                            }
-                            Ok(())
-                        });
-                        if let Err(error) = linked_result {
-                            this.update_automation_run(
-                                due.run.id.clone(),
-                                "failed",
-                                None,
-                                Some(error.clone()),
-                                cx,
-                            );
-                            if reveal {
-                                this.error = Some(error);
-                                cx.notify();
-                            }
-                            return;
-                        }
-                        let installed = if reuse.is_some() {
-                            this.sessions.get(&id).cloned()
-                        } else {
-                            this.install_prepared(summary, &install, cx)
-                        };
-                        let Some(view) = installed else {
-                            this.update_automation_run(
-                                due.run.id.clone(),
-                                "failed",
-                                None,
-                                Some("Could not install the automation session".into()),
-                                cx,
-                            );
-                            return;
-                        };
-                        if let Some(linked) = linked {
-                            view.update(cx, |view, _| view.summary.work_item = Some(linked));
-                        }
-                        this.automation_state
-                            .session_automations
-                            .insert(id, due.automation.id.clone());
-                        this.automation_state.running.insert(
-                            id,
-                            Running {
-                                run_id: due.run.id.clone(),
-                                submitting: true,
-                                generation_before: view.read(cx).submission_generation,
-                            },
-                        );
-                        this.update_automation_run(
-                            due.run.id.clone(),
-                            "running",
-                            Some(persisted),
-                            None,
-                            cx,
-                        );
-                        if !due.automation.session_folder_id.is_empty() {
-                            this.persist_automation_folder(
-                                &due.automation.cwd,
-                                due.automation.session_folder_id.clone(),
-                                id,
-                                cx,
-                            );
-                        }
-                        // Background runs append a tab without changing the focused project.
-                        if !this.workspace.tabs.contains(&id) {
-                            this.workspace.tabs.push(id);
-                            this.workspace.title_order.push(TitleTab::Workspace(id));
-                        }
-                        let prompt = due
-                            .run
-                            .prompt
-                            .clone()
-                            .unwrap_or_else(|| due.automation.prompt.clone());
-                        view.update(cx, |view, cx| view.quick_submit(prompt, settings, cx));
-                        this.publish_prepared(&view, Some(&mut install), cx);
-                        if let Some(run) = this.automation_state.running.get_mut(&id) {
-                            run.submitting = false;
-                        }
-                        this.automation_session_changed(id, cx);
-                        if reveal && this.navigation_revision == revision {
-                            this.activate_session(id, window, cx);
-                        }
-                        this.persist(cx);
-                    }
-                    Err(error) => {
-                        this.update_automation_run(
-                            due.run.id.clone(),
-                            "failed",
-                            None,
-                            Some(error.clone()),
-                            cx,
-                        );
-                        if reveal {
-                            this.error = Some(error);
-                            cx.notify();
-                        }
-                    }
+                Err(error) => {
+                    this.pages.automation_state.pending.remove(&id);
+                    this.error = Some(format!("Could not claim automation run: {error}"));
+                    cx.notify();
                 }
             });
         })
         .detach();
     }
 
+    fn prepare_claimed_automation(&mut self, launch: Launch, cx: &mut Context<Self>) {
+        let Some(view) = self.automation_reuse_view(&launch.due.automation, cx) else {
+            self.prepare_automation(launch, None, cx);
+            return;
+        };
+        let candidate = Candidate {
+            id: view.read(cx).summary.id,
+            entity: view.entity_id(),
+        };
+        match view.read(cx).managed_availability(cx) {
+            ManagedAvailability::Available => {
+                self.pages.automation_state.reserved.insert(candidate.id);
+                self.prepare_automation(launch, Some(candidate), cx);
+            }
+            ManagedAvailability::Pending => {
+                self.pages.automation_state.reserved.insert(candidate.id);
+                let changes = cx.observe(&view, move |this, _, cx| {
+                    this.resume_automation_reuse(candidate.id, cx);
+                });
+                self.pages.automation_state.waiting_for_reuse.insert(
+                    candidate.id,
+                    WaitingForReuse {
+                        launch,
+                        candidate,
+                        _changes: changes,
+                    },
+                );
+                view.update(cx, |view, cx| view.load_complete(cx));
+            }
+            ManagedAvailability::Unavailable => self.prepare_automation(launch, None, cx),
+        }
+    }
+
+    fn automation_reuse_view(
+        &mut self,
+        automation: &Automation,
+        cx: &mut Context<Self>,
+    ) -> Option<Entity<Conversation>> {
+        if !automation.reuse_session
+            || !matches!(automation.workspace_mode.as_str(), "current" | "existing")
+        {
+            return None;
+        }
+        let original = automation.last_session_id.as_deref()?;
+        let id = locked(&self.store)
+            .ok()?
+            .resolve_existing_session_id(original)?;
+        if self.pages.automation_state.running.contains_key(&id)
+            || self.pages.automation_state.reserved.contains(&id)
+            || !self.session_available_here(id, cx)
+        {
+            return None;
+        }
+        let record = self.session_record(id, cx)?;
+        let summary = &record.summary;
+        if summary.provider != automation.harness
+            || summary.archived
+            || record.draft
+            || path_key(&summary.cwd) != path_key(&automation.cwd)
+            || record.checkout.as_ref().is_some_and(|worktree| {
+                worktree.as_deref().map(path_key) != requested_worktree(automation).map(path_key)
+            })
+        {
+            return None;
+        }
+        self.ensure_session(id, cx)
+    }
+
+    pub(super) fn resume_automation_reuse(&mut self, id: i64, cx: &mut Context<Self>) {
+        let Some(waiting) = self.pages.automation_state.waiting_for_reuse.get(&id) else {
+            return;
+        };
+        let candidate = waiting.candidate;
+        let readiness = self
+            .automation_candidate(candidate, cx)
+            .map_or(ManagedAvailability::Unavailable, |view| {
+                view.read(cx).managed_availability(cx)
+            });
+        if readiness == ManagedAvailability::Pending {
+            return;
+        }
+        let waiting = self
+            .pages
+            .automation_state
+            .waiting_for_reuse
+            .remove(&id)
+            .unwrap();
+        if readiness == ManagedAvailability::Available {
+            self.prepare_automation(waiting.launch, Some(candidate), cx);
+        } else {
+            self.pages.automation_state.reserved.remove(&id);
+            self.prepare_automation(waiting.launch, None, cx);
+        }
+    }
+
+    fn automation_candidate(
+        &self,
+        candidate: Candidate,
+        cx: &Context<Self>,
+    ) -> Option<Entity<Conversation>> {
+        if !self.session_available_here(candidate.id, cx) {
+            return None;
+        }
+        self.sessions
+            .get(&candidate.id)
+            .filter(|view| view.entity_id() == candidate.entity)
+            .cloned()
+    }
+
+    fn prepare_automation(
+        &mut self,
+        launch: Launch,
+        reuse: Option<Candidate>,
+        cx: &mut Context<Self>,
+    ) {
+        let automation = &launch.due.automation;
+        let fresh = reuse.is_none().then(|| {
+            let account = automation_account(automation, cx);
+            (
+                automation_settings(automation, account, Settings::default()),
+                self.session_install(cx),
+            )
+        });
+        let store = self.store.clone();
+        let service = self.pages.automation_state.service.clone();
+        let work = cx.background_executor().spawn(async move {
+            let prepared = (|| {
+                let automation = &launch.due.automation;
+                if Kind::parse(&automation.harness).is_none() {
+                    return Err("The automation's agent is unavailable".into());
+                }
+                if !std::path::Path::new(&automation.cwd).is_dir() {
+                    return Err("The automation's project folder is unavailable".into());
+                }
+                if requested_worktree(automation)
+                    .is_some_and(|path| !std::path::Path::new(path).is_dir())
+                {
+                    return Err("The automation's worktree is unavailable".into());
+                }
+                let Some((settings, mut install)) = fresh else {
+                    return Ok(None);
+                };
+                let service = service.as_ref().ok_or("Automations became unavailable")?;
+                let service = service_lock(service)?;
+                let store = locked(&store)?;
+                let linked = automation_work_item(&launch.due.run);
+                let (summary, run) = store.create_automation_session(
+                    &service,
+                    &launch.due,
+                    &settings,
+                    linked.as_ref(),
+                    now(),
+                )?;
+                install.track(summary.id);
+                Ok::<_, String>(Some(NewSession {
+                    summary,
+                    settings,
+                    install,
+                    run,
+                }))
+            })();
+            (launch, prepared)
+        });
+        cx.spawn(async move |this, cx| {
+            let (launch, prepared) = work.await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                this.finish_automation_preparation(launch, reuse, prepared, window, cx);
+            });
+        })
+        .detach();
+    }
+
+    fn finish_automation_preparation(
+        &mut self,
+        mut launch: Launch,
+        reuse: Option<Candidate>,
+        prepared: Result<Option<NewSession>, String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(candidate) = reuse {
+            self.pages.automation_state.reserved.remove(&candidate.id);
+        }
+        let created = match prepared {
+            Ok(created) => created,
+            Err(error) => {
+                self.automation_launch_failed(launch, error, cx);
+                return;
+            }
+        };
+        let automation = &launch.due.automation;
+        let checkout = requested_worktree(automation);
+        let (summary, settings, install, view) = if let Some(created) = created {
+            launch.due.run = created.run;
+            (
+                created.summary,
+                created.settings,
+                Some(created.install),
+                None,
+            )
+        } else {
+            let account = automation_account(automation, cx);
+            let reusable = reuse.and_then(|candidate| self.automation_candidate(candidate, cx));
+            let Some(view) = reusable.filter(|view| {
+                let chat = view.read(cx);
+                chat.managed_availability(cx) == ManagedAvailability::Available
+                    && chat.settings.account == account
+                    && chat.summary.provider == automation.harness
+                    && path_key(&chat.summary.cwd) == path_key(&automation.cwd)
+                    && chat.settings.worktree_cwd.as_deref().map(path_key) == checkout.map(path_key)
+            }) else {
+                self.prepare_automation(launch, None, cx);
+                return;
+            };
+            let chat = view.read(cx);
+            let settings = automation_settings(automation, account, chat.settings.clone());
+            (chat.summary.clone(), settings, None, Some(view))
+        };
+        let id = summary.id;
+        let linked = automation_work_item(&launch.due.run);
+        let verified = if self.project_is_deleting(&automation.cwd, cx) {
+            Err("The automation's project is being removed.".into())
+        } else {
+            self.verify_prepared_checkout(id, checkout, cx)
+        };
+        if reuse.is_some() && verified.is_err() {
+            self.prepare_automation(launch, None, cx);
+            return;
+        }
+        let linked_result = verified.and_then(|_| {
+            let store = locked(&self.store)?;
+            // A reused conversation keeps its link until submission accepts it.
+            if reuse.is_some() {
+                return store.persisted_session_id(id).map(Some);
+            }
+            store
+                .link_automation_session(
+                    id,
+                    &automation.id,
+                    &automation.harness,
+                    &automation.cwd,
+                    checkout,
+                    linked.as_ref(),
+                )?
+                .then(|| store.persisted_session_id(id))
+                .transpose()
+        });
+        let persisted = match linked_result {
+            Ok(Some(persisted)) => persisted,
+            Ok(None) => {
+                self.automation_launch_failed(
+                    launch,
+                    "The automation session changed before it could start".into(),
+                    cx,
+                );
+                return;
+            }
+            Err(error) => {
+                self.automation_launch_failed(launch, error, cx);
+                return;
+            }
+        };
+        let prepared = PreparedRun {
+            summary,
+            settings,
+            install,
+            view,
+            reuse,
+        };
+        if prepared.install.is_some() {
+            self.submit_prepared_automation(launch, prepared, window, cx);
+            return;
+        }
+        let Some(service) = self.pages.automation_state.service.clone() else {
+            self.automation_launch_failed(
+                launch,
+                "Automations became unavailable before submission".into(),
+                cx,
+            );
+            return;
+        };
+        if let Some(candidate) = reuse {
+            self.pages.automation_state.reserved.insert(candidate.id);
+        }
+        let run_id = launch.due.run.id.clone();
+        let work = cx.background_executor().spawn(async move {
+            service_lock(&service)?.update_run(&run_id, "running", Some(persisted), None, now())
+        });
+        cx.spawn(async move |this, cx| {
+            let result = work.await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                let run = match result {
+                    Ok(run) => run,
+                    Err(error) => {
+                        if let Some(candidate) = prepared.reuse {
+                            this.pages.automation_state.reserved.remove(&candidate.id);
+                        }
+                        this.automation_launch_failed(launch, error, cx);
+                        return;
+                    }
+                };
+                launch.due.run = run;
+                this.submit_prepared_automation(launch, prepared, window, cx);
+            });
+        })
+        .detach();
+    }
+
+    fn submit_prepared_automation(
+        &mut self,
+        launch: Launch,
+        prepared: PreparedRun,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let id = prepared.summary.id;
+        let automation = &launch.due.automation;
+        let checkout = requested_worktree(automation);
+        if let Some(candidate) = prepared.reuse {
+            self.pages.automation_state.reserved.remove(&candidate.id);
+            let current = self.automation_candidate(candidate, cx);
+            if current.is_none_or(|view| {
+                let chat = view.read(cx);
+                chat.managed_availability(cx) != ManagedAvailability::Available
+                    || chat.settings.account != prepared.settings.account
+                    || chat.summary.provider != automation.harness
+                    || path_key(&chat.summary.cwd) != path_key(&automation.cwd)
+                    || chat.settings.worktree_cwd.as_deref().map(path_key) != checkout.map(path_key)
+            }) {
+                self.prepare_automation(launch, None, cx);
+                return;
+            }
+        }
+        let verified = if self.project_is_deleting(&automation.cwd, cx) {
+            Err("The automation's project is being removed.".into())
+        } else {
+            self.verify_prepared_checkout(id, checkout, cx)
+        };
+        if let Err(error) = verified {
+            self.automation_launch_failed(launch, error, cx);
+            return;
+        }
+        if prepared.reuse.is_some() {
+            let linked = automation_work_item(&launch.due.run);
+            let accepted = locked(&self.store).and_then(|store| {
+                store.link_automation_session(
+                    id,
+                    &automation.id,
+                    &automation.harness,
+                    &automation.cwd,
+                    checkout,
+                    linked.as_ref(),
+                )
+            });
+            match accepted {
+                Ok(true) => {}
+                Ok(false) => {
+                    self.prepare_automation(launch, None, cx);
+                    return;
+                }
+                Err(error) => {
+                    self.automation_launch_failed(launch, error, cx);
+                    return;
+                }
+            }
+        }
+        let PreparedRun {
+            summary,
+            settings,
+            mut install,
+            view,
+            ..
+        } = prepared;
+        let installed = if let Some(install) = &install {
+            self.install_prepared(summary, install, cx)
+        } else {
+            view
+        };
+        let Some(view) = installed else {
+            self.automation_launch_failed(
+                launch,
+                "Could not install the automation session".into(),
+                cx,
+            );
+            return;
+        };
+        if let Some(linked) = automation_work_item(&launch.due.run) {
+            view.update(cx, |view, _| view.summary.work_item = Some(linked));
+        }
+        let due = launch.due;
+        self.pages.automation_state.pending.remove(&due.run.id);
+        self.pages.automation_state.running.insert(
+            id,
+            Running {
+                run_id: due.run.id.clone(),
+                submitting: true,
+                generation_before: view.read(cx).submission_generation,
+            },
+        );
+        if !due.automation.session_folder_id.is_empty() {
+            self.persist_automation_folder(
+                &due.automation.cwd,
+                due.automation.session_folder_id,
+                id,
+                cx,
+            );
+        }
+        // Background runs append a tab without changing the focused project.
+        if !self.workspace.tabs.contains(&id) {
+            self.workspace.tabs.push(id);
+            self.workspace.title_order.push(TitleTab::Workspace(id));
+        }
+        let prompt = due.run.prompt.unwrap_or(due.automation.prompt);
+        view.update(cx, |view, cx| view.quick_submit(prompt, settings, cx));
+        self.publish_prepared(&view, install.as_mut(), cx);
+        if let Some(run) = self.pages.automation_state.running.get_mut(&id) {
+            run.submitting = false;
+        }
+        self.automation_session_changed(id, cx);
+        if launch.reveal && self.navigation_revision == launch.navigation {
+            self.activate_session(id, window, cx);
+        }
+        self.persist(cx);
+    }
+
+    fn automation_launch_failed(&mut self, launch: Launch, error: String, cx: &mut Context<Self>) {
+        self.pages
+            .automation_state
+            .pending
+            .remove(&launch.due.run.id);
+        if launch.reveal {
+            self.error = Some(error.clone());
+            cx.notify();
+        }
+        self.update_automation_run(launch.due.run.id, "failed", None, Some(error), cx);
+    }
+
     pub(super) fn automation_session_changed(&mut self, id: i64, cx: &mut Context<Self>) {
-        let Some(run) = self.automation_state.running.get(&id) else {
+        let Some(run) = self.pages.automation_state.running.get(&id) else {
             return;
         };
         if run.submitting {
@@ -549,7 +762,7 @@ impl Shell {
         } else {
             "failed"
         };
-        let run = self.automation_state.running.remove(&id).unwrap();
+        let run = self.pages.automation_state.running.remove(&id).unwrap();
         self.update_automation_run(
             run.run_id,
             status,
@@ -567,12 +780,12 @@ impl Shell {
         error: Option<String>,
         cx: &mut Context<Self>,
     ) {
-        let Some(service) = self.automation_state.service.clone() else {
+        let Some(service) = self.pages.automation_state.service.clone() else {
             return;
         };
-        let previous = self.automation_state.writes.take();
+        let previous = self.pages.automation_state.writes.take();
         let status = status.to_string();
-        self.automation_state.writes = Some(cx.spawn(async move |this, cx| {
+        self.pages.automation_state.writes = Some(cx.spawn(async move |this, cx| {
             if let Some(previous) = previous {
                 previous.await;
             }
@@ -584,7 +797,7 @@ impl Shell {
                 if let Err(error) = result {
                     this.error = Some(format!("Could not save automation result: {error}"));
                 }
-                if let Some(view) = &this.automations {
+                if let Some(view) = &this.pages.automations {
                     view.update(cx, |view, cx| view.refresh(cx));
                 }
                 cx.notify();
@@ -601,8 +814,8 @@ impl Shell {
     ) {
         let cwd = cwd.to_string();
         let store = self.store.clone();
-        let previous = self.group_writes.take();
-        self.group_writes = Some(cx.spawn(async move |this, cx| {
+        let previous = self.sidebar.group_writes.take();
+        self.sidebar.group_writes = Some(cx.spawn(async move |this, cx| {
             if let Some(previous) = previous {
                 previous.await;
             }
@@ -623,6 +836,61 @@ impl Shell {
             });
         }));
     }
+}
+
+fn requested_worktree(automation: &Automation) -> Option<&str> {
+    (automation.workspace_mode == "existing").then_some(automation.worktree_cwd.as_str())
+}
+
+fn automation_account(automation: &Automation, cx: &App) -> Profile {
+    crate::accounts::get(cx)
+        .map(|accounts| {
+            accounts
+                .read(cx)
+                .selected(Kind::from_id(&automation.harness), &automation.cwd)
+        })
+        .unwrap_or_default()
+}
+
+fn automation_settings(
+    automation: &Automation,
+    account: Profile,
+    mut settings: Settings,
+) -> Settings {
+    settings.account = account;
+    settings.model = vorkspace_core::store::native_model(&automation.model, &automation.harness);
+    settings.model_settings = automation.model_settings.clone();
+    settings.effort = [
+        "effort",
+        "reasoning",
+        "reasoningEffort",
+        "reasoning_effort",
+        "variant",
+    ]
+    .into_iter()
+    .find_map(|key| automation.model_settings.get(key).cloned());
+    settings.fast = automation
+        .model_settings
+        .get("fast")
+        .is_some_and(|value| value == "true");
+    settings.service_tier = automation
+        .model_settings
+        .get("serviceTier")
+        .or_else(|| automation.model_settings.get("service_tier"))
+        .cloned();
+    settings.thinking = automation
+        .model_settings
+        .get("thinking")
+        .and_then(|value| value.parse().ok());
+    settings.access = vorkspace_core::agent::AccessMode::from_id(&automation.runtime_mode);
+    settings.new_worktree = automation.workspace_mode == "worktree";
+    settings.worktree_base = settings.new_worktree.then(|| "HEAD".into());
+    settings.worktree_cwd = requested_worktree(automation).map(str::to_owned);
+    settings.plan = false;
+    settings.operator = false;
+    settings.orchestrator = false;
+    settings.prepared_prompt = None;
+    settings
 }
 
 fn automation_work_item(
@@ -649,3 +917,6 @@ fn automation_work_item(
         "https://github.com/{repo}/{kind}/{number}"
     ))
 }
+
+#[cfg(test)]
+mod tests;

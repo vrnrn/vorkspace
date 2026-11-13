@@ -113,7 +113,7 @@ impl QuickComposer {
                 choice.cwd.clone(),
                 cx,
             )
-            .with_store(store)
+            .with_store(store.clone())
         });
         completion.update(cx, |completion, cx| {
             completion.set_provider(choice.kind.id(), cx)

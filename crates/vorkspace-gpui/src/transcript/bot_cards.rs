@@ -66,6 +66,7 @@ pub(crate) fn launch(
     let title = view.map_or("Agent session".to_string(), |v| v.title.clone());
     let (label, glyph, color) = match view.map(|v| v.state) {
         Some("working") => ("Working", "loader-03", content(0.55)),
+        Some("stopping") => ("Stopping", "circle-x", content(0.45)),
         Some("input") => ("Needs input", "clock", vorkspace_ui::theme::warning()),
         Some("draft") => ("Draft", "circle-dashed-hi", content(0.45)),
         Some("failed") => ("Failed", "alert-circle", vorkspace_ui::theme::danger()),
@@ -79,7 +80,7 @@ pub(crate) fn launch(
         None => ("", "chatting", content(0.45)),
     };
     let mark = if glyph == "loader-03" {
-        crate::panel_kit::spinner(("bot-launch-cells", id as usize), "", 16.)
+        crate::panel_kit::spinner(("bot-launch-cells", id as usize), 16.)
     } else {
         icon(glyph, 16.).text_color(color).into_any_element()
     };
@@ -173,7 +174,6 @@ pub(crate) fn render(
         .or_else(|| value["name"].as_str())
         .unwrap_or(match kind {
             "pr" => "Pull request",
-            "session" => "Session",
             "habit" => "Suggested habit",
             _ => "",
         })
@@ -181,7 +181,6 @@ pub(crate) fn render(
     let card = value.clone();
     let glyph = match kind {
         "pr" => "git-pull-request",
-        "session" => "message-square",
         "habit" => "clock",
         _ => "file",
     };
@@ -218,14 +217,6 @@ pub(crate) fn render(
                 )
             },
         )
-        .when(kind == "session", |d| {
-            d.child(
-                div()
-                    .text_size(px(12.))
-                    .text_color(content(0.5))
-                    .child(value["state"].as_str().unwrap_or("Saved").to_string()),
-            )
-        })
         .when(kind == "pr", |d| {
             d.child(
                 div()

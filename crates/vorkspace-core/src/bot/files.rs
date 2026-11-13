@@ -31,7 +31,7 @@ const HABITS_FILE: &str = "habits.json";
 /// Larger than anything that would load: the soul and memory both have far
 /// smaller prompt budgets, this only stops a runaway write.
 const FILE_MAX: usize = 256 * 1024;
-pub const CONFLICT: &str = "conflict";
+pub(crate) const CONFLICT: &str = "conflict";
 
 static FILES_LOCK: Mutex<()> = Mutex::new(());
 
@@ -122,29 +122,11 @@ pub fn content_hash(text: &str) -> String {
 
 /// Write beside the target and rename over it, so a crash mid-write leaves
 /// the old file whole. Owner-only, since memory can hold personal details.
-fn write_atomic(path: &Path, text: &str) -> Result<(), String> {
+pub(super) fn write_atomic(path: &Path, text: &str) -> Result<(), String> {
     use std::io::Write;
 
-    let temp = path.with_extension(format!("{}.tmp", crate::session::new_id()));
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create_new(true);
-    use std::os::unix::fs::OpenOptionsExt;
-    options.mode(0o600);
-    let mut file = options
-        .open(&temp)
-        .map_err(|e| format!("{}: {e}", temp.display()))?;
-    let result = (|| {
-        file.write_all(text.as_bytes())?;
-        file.sync_all()?;
-        drop(file);
-        std::fs::rename(&temp, path)?;
-        std::fs::File::open(path.parent().unwrap_or(Path::new(".")))?.sync_all()?;
-        Ok::<_, std::io::Error>(())
-    })();
-    if result.is_err() {
-        let _ = std::fs::remove_file(&temp);
-    }
-    result.map_err(|e| format!("{}: {e}", path.display()))
+    crate::private_file::replace(path, |file| file.write_all(text.as_bytes()))
+        .map_err(|error| format!("{}: {error}", path.display()))
 }
 
 fn read_optional(path: &Path) -> Result<Option<String>, String> {
@@ -171,26 +153,38 @@ fn valid_id(id: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
 }
 
+/// An owner directory with any file below it, so an empty folder does not
+/// replace a project-indexed owner.
+fn has_owner_records(path: &Path, depth: u8) -> bool {
+    if !std::fs::symlink_metadata(path).is_ok_and(|m| m.is_dir() && !m.file_type().is_symlink()) {
+        return false;
+    }
+    std::fs::read_dir(path).ok().is_some_and(|entries| {
+        entries.flatten().any(|entry| {
+            entry.file_type().map_or(true, |kind| {
+                !kind.is_dir() || depth == 0 || has_owner_records(&entry.path(), depth - 1)
+            })
+        })
+    })
+}
+
 /// The Bot's folder, created with an empty memory on first use. A Bot that
 /// was a project's own keeps that project's indexed folder as its owner.
 fn agent_dir(root: &Path, bot: &str, legacy_project: Option<&str>) -> Result<PathBuf, String> {
     if !valid_id(bot) {
         return Err("Not a Bot id".into());
     }
-    let mut dir = crate::compatibility::bot_owner(root, bot, false);
-    if !crate::compatibility::has_owner_records(&dir, 4) {
+    let mut dir = root.join(bot);
+    if !has_owner_records(&dir, 4) {
         if let Some(project) = legacy_project.filter(|project| !project.trim().is_empty()) {
-            for family in crate::compatibility::bot_families(root, false) {
-                if let Some(owner) = read_index(&family)?.agents.iter().find(|entry| {
-                    valid_id(&entry.id) && entry.projects.iter().any(|key| key == project)
-                }) {
-                    let indexed = family.join(&owner.id);
-                    if std::fs::symlink_metadata(&indexed)
-                        .is_ok_and(|m| m.is_dir() && !m.file_type().is_symlink())
-                    {
-                        dir = indexed;
-                        break;
-                    }
+            if let Some(owner) = read_index(root)?.agents.iter().find(|entry| {
+                valid_id(&entry.id) && entry.projects.iter().any(|key| key == project)
+            }) {
+                let indexed = root.join(&owner.id);
+                if std::fs::symlink_metadata(&indexed)
+                    .is_ok_and(|m| m.is_dir() && !m.file_type().is_symlink())
+                {
+                    dir = indexed;
                 }
             }
         }

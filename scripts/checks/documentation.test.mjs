@@ -17,6 +17,21 @@ async function markdownFiles(directory) {
   return result;
 }
 
+test("documents name npm scripts and crates that exist", async () => {
+  const scripts = JSON.parse(await readFile(join(root, "package.json"), "utf8")).scripts;
+  const crates = new Set(await readdir(join(root, "crates")));
+  const rootDocs = (await readdir(root)).filter(name => name.endsWith(".md")).map(name => join(root, name));
+  for (const document of [...rootDocs, ...await markdownFiles(docs)]) {
+    const source = await readFile(document, "utf8");
+    for (const [, script] of source.matchAll(/npm run ([\w:-]+)/g)) {
+      assert.ok(script in scripts, `${document}: npm run ${script}`);
+    }
+    for (const [, crate] of source.matchAll(/ -p (vorkspace-[\w-]+)/g)) {
+      assert.ok(crates.has(crate), `${document}: -p ${crate}`);
+    }
+  }
+});
+
 test("documentation has paired companions and resolvable local links", async () => {
   const files = await markdownFiles(docs);
   for (const path of files) {
@@ -33,7 +48,8 @@ test("documentation has paired companions and resolvable local links", async () 
     for (const [, link] of source.matchAll(/\]\(([^\s)]+)\)/g)) {
       if (/^[a-z][a-z\d+.-]*:/i.test(link) || link.startsWith("#")) continue;
       const target = resolve(dirname(path), decodeURIComponent(link.split("#")[0]));
-      assert.ok(target.startsWith(root), `Local link leaves repository: ${path}: ${link}`);
+      const local = relative(root, target);
+      assert.ok(local !== ".." && !local.startsWith(`..${sep}`), `Local link leaves repository: ${path}: ${link}`);
       await access(target).catch(error => {
         throw new Error(`Broken documentation link in ${relative(root, path)}: ${link}`, { cause: error });
       });

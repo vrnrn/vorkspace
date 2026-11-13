@@ -1,7 +1,7 @@
 //! Cmd+P's project-file search and `>` command palette.
 use crate::input;
 use gpui::{
-    Context, Entity, EventEmitter, FocusHandle, Focusable, Role, Subscription, Window, div,
+    Context, Entity, EventEmitter, FocusHandle, Focusable, Role, Subscription, Task, Window, div,
     prelude::*, px,
 };
 use std::sync::{
@@ -58,6 +58,8 @@ pub(crate) struct QuickOpen {
     active: Option<usize>,
     scroll: gpui::ScrollHandle,
     loading: bool,
+    ranking: Option<Task<()>>,
+    rank_revision: u64,
     error: Option<String>,
     cancel: Arc<AtomicBool>,
     _changed: Subscription,
@@ -145,6 +147,8 @@ impl QuickOpen {
             active: None,
             scroll: gpui::ScrollHandle::new(),
             loading: cached.is_none(),
+            ranking: None,
+            rank_revision: 0,
             error: None,
             cancel,
             _changed: changed,
@@ -152,14 +156,15 @@ impl QuickOpen {
         this.rank(false, cx);
         this
     }
-    fn rank(&mut self, preserve_selection: bool, cx: &gpui::App) {
-        let selected = self
-            .active
-            .filter(|_| preserve_selection)
-            .and_then(|ix| self.rows.get(ix))
-            .map(|row| row.item.clone());
-        let query = self.search.read(cx).content.trim();
-        self.rows = if let Some(query) = query.strip_prefix('>') {
+    fn rank(&mut self, preserve_selection: bool, cx: &mut Context<Self>) {
+        self.rank_revision += 1;
+        if !preserve_selection {
+            self.rows.clear();
+            self.active = None;
+        }
+        let input = self.search.read(cx).content.clone();
+        let query = input.trim();
+        if let Some(query) = query.strip_prefix('>') {
             let mut commands: Vec<_> = COMMANDS
                 .iter()
                 .filter_map(|(command, label, hint)| {
@@ -176,21 +181,49 @@ impl QuickOpen {
                 })
                 .collect();
             commands.sort_by_key(|(score, _)| std::cmp::Reverse(*score));
-            commands.into_iter().map(|(_, row)| row).collect()
+            self.publish_rows(commands.into_iter().map(|(_, row)| row).collect());
+        } else if self.files.len() <= INLINE_FILE_COUNT {
+            self.publish_rows(file_rows(&self.files, query));
         } else {
-            composer::rank_files(&self.files, query, 80)
-                .into_iter()
-                .map(|file| Row {
-                    label: file.name.clone(),
-                    detail: file.relative.clone(),
-                    item: Picked::File(file.path.clone()),
-                })
-                .collect()
-        };
+            self.start_ranking(cx);
+        }
+    }
+
+    fn start_ranking(&mut self, cx: &mut Context<Self>) {
+        let query = self.search.read(cx).content.trim().to_owned();
+        if self.ranking.is_some() || self.files.len() <= INLINE_FILE_COUNT || query.starts_with('>')
+        {
+            return;
+        }
+        let revision = self.rank_revision;
+        let files = self.files.clone();
+        let work = cx
+            .background_executor()
+            .spawn(async move { file_rows(&files, &query) });
+        self.ranking = Some(cx.spawn(async move |this, cx| {
+            let rows = work.await;
+            let _ = this.update(cx, |this, cx| {
+                this.ranking = None;
+                if revision == this.rank_revision {
+                    this.publish_rows(rows);
+                } else {
+                    this.start_ranking(cx);
+                }
+                cx.notify();
+            });
+        }));
+    }
+
+    fn publish_rows(&mut self, rows: Vec<Row>) {
+        let selected = self
+            .active
+            .and_then(|ix| self.rows.get(ix))
+            .map(|row| &row.item);
         self.active = match selected {
-            Some(item) => self.rows.iter().position(|row| row.item == item),
-            None => (!self.rows.is_empty()).then_some(0),
+            Some(item) => rows.iter().position(|row| &row.item == item),
+            None => (!rows.is_empty()).then_some(0),
         };
+        self.rows = rows;
         if let Some(active) = self.active {
             self.scroll.scroll_to_item(active);
         }
@@ -213,6 +246,22 @@ impl QuickOpen {
         }
     }
 }
+
+// Preserve immediate opening for small cached lists while bounding UI-thread
+// work independently of the project index size.
+const INLINE_FILE_COUNT: usize = 256;
+
+fn file_rows(files: &[ProjectFile], query: &str) -> Vec<Row> {
+    composer::rank_files(files, query, 80)
+        .into_iter()
+        .map(|file| Row {
+            label: file.name.clone(),
+            detail: file.relative.clone(),
+            item: Picked::File(file.path.clone()),
+        })
+        .collect()
+}
+
 impl Render for QuickOpen {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let query = self.search.read(cx).content.trim().to_owned();
@@ -359,6 +408,8 @@ impl Render for QuickOpen {
                                 .text_color(content(0.45))
                                 .child(if self.loading {
                                     "Loading project files…".to_owned()
+                                } else if self.ranking.is_some() && !query.starts_with('>') {
+                                    "Searching project files…".to_owned()
                                 } else {
                                     self.error.clone().unwrap_or_else(|| "No results".into())
                                 }),
@@ -380,6 +431,37 @@ impl Render for QuickOpen {
 mod listing_tests {
     use super::*;
     use gpui::TestAppContext;
+
+    #[gpui::test]
+    fn a_superseded_large_project_query_cannot_publish_its_file_rows(cx: &mut TestAppContext) {
+        let directory = tempfile::tempdir().unwrap();
+        let cwd = directory.path().to_string_lossy().into_owned();
+        for index in 0..=INLINE_FILE_COUNT {
+            std::fs::write(directory.path().join(format!("item-{index}.rs")), "").unwrap();
+        }
+        for file in ["old-choice.rs", "new-choice.rs"] {
+            std::fs::write(directory.path().join(file), "").unwrap();
+        }
+        let picker = cx.update(|cx| cx.new(|cx| QuickOpen::new(cwd, false, cx)));
+        cx.run_until_parked();
+        picker.update(cx, |picker, cx| {
+            picker
+                .search
+                .update(cx, |field, cx| field.set_text("old-choice".into(), cx));
+        });
+        picker.update(cx, |picker, cx| {
+            assert!(picker.ranking.is_some());
+            picker
+                .search
+                .update(cx, |field, cx| field.set_text("new-choice".into(), cx));
+        });
+        cx.run_until_parked();
+        picker.read_with(cx, |picker, _| {
+            assert_eq!(picker.rows.len(), 1);
+            assert_eq!(picker.rows[0].label, "new-choice.rs");
+            assert_eq!(picker.active, Some(0));
+        });
+    }
 
     #[gpui::test]
     fn reopening_shows_the_last_listing_at_once_and_refreshes_it(cx: &mut TestAppContext) {

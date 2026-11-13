@@ -268,7 +268,7 @@ pub(crate) fn summary(tools: &[ToolCall], live: bool) -> (String, &'static str) 
         })
         .collect::<Vec<String>>()
         .join(" · ");
-    // React breaks equal call counts towards edit, run, agent, then research.
+    // Equal call counts break towards edit, run, agent, then research.
     let mut dominant = "terminal";
     let mut most = 0;
     for (count, icon) in [
@@ -523,7 +523,7 @@ mod shimmer_frames {
             },
         );
         vorkspace_ui::clock::use_test_clock(&cx);
-        vorkspace_ui::theme::configure(&Default::default(), true, true);
+        vorkspace_ui::theme::configure(&Default::default(), true);
         let window = cx
             .open_window(gpui::size(px(420.), px(440.)), |_, cx| cx.new(|_| Frames))
             .unwrap();

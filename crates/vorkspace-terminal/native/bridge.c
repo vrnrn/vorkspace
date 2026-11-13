@@ -310,10 +310,6 @@ void vorkspace_vt_clear_selection(Vt *v) {
   ghostty_tracked_grid_ref_free(v->anchor); ghostty_tracked_grid_ref_free(v->anchor_end);
   v->anchor = NULL; v->anchor_end = NULL;
 }
-int vorkspace_vt_has_selection(Vt *v) {
-  GhosttySelection s;
-  return ghostty_terminal_get(v->terminal, GHOSTTY_TERMINAL_DATA_SELECTION, &s) == GHOSTTY_SUCCESS;
-}
 static int selection_at(Vt *v, GhosttyGridRef ref, uint32_t kind, GhosttySelection *out) {
   if (kind == 1) {
     GhosttyTerminalSelectWordOptions o = GHOSTTY_INIT_SIZED(GhosttyTerminalSelectWordOptions); o.ref = ref;

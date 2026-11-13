@@ -4,14 +4,15 @@ use super::*;
 impl Shell {
     /// A session doing an orchestrator's task belongs to that run and is not listed alone.
     pub(super) fn orchestration_worker(&self, id: i64) -> bool {
-        self.orchestration_summaries
+        self.sidebar
+            .orchestration_summaries
             .values()
             .any(|s| s.tasks.iter().any(|t| t.session == Some(id)))
     }
     pub(super) fn close_preview(&mut self, cx: &mut Context<Self>) {
-        self.preview_open = None;
-        self.preview_close = None;
-        if self.session_preview.take().is_some() {
+        self.preview.open = None;
+        self.preview.close = None;
+        if self.preview.session_preview.take().is_some() {
             self.sidebar_frame.update(cx, |_, cx| cx.notify());
             self.project_rail_frame.update(cx, |_, cx| cx.notify());
             self.invalidate_chrome(cx);
@@ -24,23 +25,24 @@ impl Shell {
         }
         let settle = std::time::Duration::from_millis(180);
         let delay = self
-            .sidebar_last_scroll
+            .preview
+            .last_scroll
             .map(|last| settle.saturating_sub(last.elapsed()))
             .unwrap_or_default()
             + std::time::Duration::from_millis(120);
-        self.preview_open = Some(cx.spawn(async move |this, cx| {
+        self.preview.open = Some(cx.spawn(async move |this, cx| {
             cx.background_executor().timer(delay).await;
             let Ok(Some(store)) = this.update_in(cx, |this, window, cx| {
-                if this.session_hover != Some(id)
+                if this.preview.session_hover != Some(id)
                     || this.menu.is_some()
-                    || !this.session_summaries.contains_key(&id)
+                    || !this.has_session(id, cx)
                     || !anchor
                         .get()
                         .is_some_and(|bounds| bounds.contains(&window.mouse_position()))
                 {
                     return None;
                 }
-                this.session_preview = Some(SessionPreview {
+                this.preview.session_preview = Some(SessionPreview {
                     id,
                     data: None,
                     anchor,
@@ -62,6 +64,7 @@ impl Shell {
                 .ok();
             let _ = this.update(cx, |this, cx| {
                 if let Some(preview) = this
+                    .preview
                     .session_preview
                     .as_mut()
                     .filter(|preview| preview.id == id)
@@ -80,28 +83,28 @@ impl Shell {
         id: i64,
         anchor: AnchorSlot,
         hovered: bool,
-        compact: bool,
         window: &Window,
         cx: &mut Context<Self>,
     ) {
         if self.deleting.contains(&id) {
             return;
         }
-        let previous = self.session_hover;
+        let previous = self.preview.session_hover;
         if hovered {
-            self.session_hover = Some(id);
-        } else if self.session_hover == Some(id) {
-            self.session_hover = None;
+            self.preview.session_hover = Some(id);
+        } else if self.preview.session_hover == Some(id) {
+            self.preview.session_hover = None;
         }
-        if previous != self.session_hover {
+        if previous != self.preview.session_hover {
             self.sidebar_frame.update(cx, |_, cx| cx.notify());
             self.project_rail_frame.update(cx, |_, cx| cx.notify());
             self.invalidate_chrome(cx);
             cx.notify();
         }
-        if hovered && compact {
-            self.preview_close = None;
+        if hovered {
+            self.preview.close = None;
             if self
+                .preview
                 .session_preview
                 .as_ref()
                 .is_none_or(|preview| preview.id != id)
@@ -112,15 +115,17 @@ impl Shell {
         } else {
             // A row's leave can arrive after the next row's enter. Do not
             // cancel that newer hover, or metadata loading for an open card.
-            if self.session_hover.is_none()
+            if self.preview.session_hover.is_none()
                 && self
+                    .preview
                     .session_preview
                     .as_ref()
                     .is_none_or(|preview| preview.id != id)
             {
-                self.preview_open = None;
+                self.preview.open = None;
             }
             if self
+                .preview
                 .session_preview
                 .as_ref()
                 .is_some_and(|preview| preview.id == id)
@@ -132,16 +137,21 @@ impl Shell {
     pub(super) fn schedule_preview_close(&mut self, window: &Window, cx: &mut Context<Self>) {
         // During the entrance the card can already cover the gap beside its
         // row. The row's leave event must not undo the card's enter event.
-        if self.session_preview.as_ref().is_some_and(|preview| {
-            preview
-                .surface
-                .get()
-                .is_some_and(|bounds| bounds.contains(&window.mouse_position()))
-        }) {
-            self.preview_close = None;
+        if self
+            .preview
+            .session_preview
+            .as_ref()
+            .is_some_and(|preview| {
+                preview
+                    .surface
+                    .get()
+                    .is_some_and(|bounds| bounds.contains(&window.mouse_position()))
+            })
+        {
+            self.preview.close = None;
             return;
         }
-        self.preview_close = Some(cx.spawn(async move |this, cx| {
+        self.preview.close = Some(cx.spawn(async move |this, cx| {
             cx.background_executor()
                 .timer(std::time::Duration::from_millis(120))
                 .await;
@@ -210,8 +220,15 @@ impl Shell {
                         start,
                         self.workspace.preferences.show_archived,
                     )
-                    && (self.query.is_empty()
-                        || s.display_title().to_lowercase().contains(&self.query))
+                    && (self.sidebar.query.is_empty()
+                        || s.display_title()
+                            .to_lowercase()
+                            .contains(&self.sidebar.query)
+                        || self
+                            .sidebar
+                            .groups
+                            .get(&s.summary.cwd)
+                            .is_some_and(|folders| folders.matches(id, &self.sidebar.query)))
             })
             .collect();
         ids.sort_by_cached_key(|id| {

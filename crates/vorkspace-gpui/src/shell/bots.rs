@@ -3,7 +3,7 @@ pub(crate) use crate::bots::host_api::BotSession;
 use crate::bots::host_api::BotsHost;
 use serde_json::Value;
 use vorkspace_core::agent::Settings;
-use vorkspace_core::{project_appearance::ProjectAppearance, session_groups::Groups};
+use vorkspace_core::session_groups::Groups;
 impl Shell {
     #[cfg(test)]
     pub(crate) fn bot_manager(&self) -> Entity<crate::bots::Bots> {
@@ -75,24 +75,24 @@ impl Shell {
         summary: Session,
         settings: Settings,
         prompt: String,
-        draft: bool,
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
         let view = self
             .add_loaded(summary, cx)
             .ok_or("Could not open the new session")?;
         view.update(cx, |v, cx| {
-            v.install_transfer(settings, (!draft).then(|| prompt.clone()), cx);
-            if draft {
-                v.input.update(cx, |i, cx| i.set_text(prompt, cx));
-            }
+            v.install_transfer(settings, Some(prompt), cx);
         });
         self.publish_prepared(&view, None, cx);
         self.invalidate_chrome(cx);
         Ok(())
     }
     pub(crate) fn bot_groups(&self, project: &str) -> vorkspace_core::session_groups::Groups {
-        self.groups.get(project).cloned().unwrap_or_default()
+        self.sidebar
+            .groups
+            .get(project)
+            .map(|index| index.saved().clone())
+            .unwrap_or_default()
     }
 }
 
@@ -206,21 +206,9 @@ impl BotsHost for gpui::WeakEntity<Shell> {
             shell.app_notes_action(caller, projects, action, input, true, cx)
         })
     }
-    fn project_appearance(&self, project: &str, cx: &App) -> Option<ProjectAppearance> {
-        self.upgrade().and_then(|shell| {
-            let appearance = &shell.read(cx).workspace.project_appearance;
-            appearance.get(project).cloned()
-        })
-    }
-    fn projects(&self, cx: &App) -> (Vec<String>, HashMap<String, ProjectAppearance>) {
+    fn projects(&self, cx: &App) -> Vec<String> {
         self.upgrade()
-            .map(|shell| {
-                let workspace = &shell.read(cx).workspace;
-                (
-                    workspace.vorkspace_projects(),
-                    workspace.project_appearance.clone(),
-                )
-            })
+            .map(|shell| shell.read(cx).workspace.vorkspace_projects())
             .unwrap_or_default()
     }
 }

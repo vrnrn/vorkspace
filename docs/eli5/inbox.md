@@ -17,6 +17,8 @@ open its library in a tab. Use Open in tab, Command-click, or middle-click an it
 to keep it open separately. Different items keep their own scroll position and
 unfinished comment. You can tile these tabs beside notes, sessions and other
 items. Switching away keeps your place; closing one does not change the others.
+Linked conversations appear with an item. They update when a conversation is
+linked, renamed or removed, even between connector refreshes.
 
 Turning a service off hides it and stops checking it. Your saved login details
 and choices stay on your computer, so you can turn it back on later.
@@ -38,7 +40,7 @@ identify as your own successful comments or actions. Someone else's later update
 still counts as new activity. If a service cannot identify your update, the app
 keeps notifications enabled for it. You can turn sounds off in Settings.
 
-Your existing desktop preferences are kept when using the native app.
+Your connector, Jira filter and default Bot choices are saved for the next launch.
 See the [technical guide](../inbox.md) or [Jira guide](jira.md) for details.
 
 Changes have two views everywhere: **Unified** puts removed and added lines in

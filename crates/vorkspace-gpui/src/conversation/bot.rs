@@ -6,7 +6,30 @@ use vorkspace_ui::radius;
 #[cfg(test)]
 #[path = "bot_tests.rs"]
 mod tests;
-type DirectSubmission = (String, String, Vec<PathBuf>, std::ops::Range<usize>, bool);
+pub(super) struct DirectSubmission {
+    pub(super) id: String,
+    pub(super) text: String,
+    pub(super) attachments: Vec<PathBuf>,
+    pub(super) retry: bool,
+}
+
+#[derive(Default, serde::Serialize)]
+pub(super) struct SubmissionOptions {
+    pub(super) mode: Option<String>,
+    pub(super) queue: bool,
+}
+impl SubmissionOptions {
+    pub(super) fn read(payload: &serde_json::Value) -> Option<Self> {
+        let fields = &payload["botSubmission"];
+        fields.is_object().then(|| Self {
+            mode: fields["mode"].as_str().map(str::to_owned),
+            queue: fields["queue"].as_bool().unwrap_or(false),
+        })
+    }
+    pub(super) fn write(&self, payload: &mut serde_json::Value) {
+        payload["botSubmission"] = serde_json::json!(self);
+    }
+}
 #[derive(Default)]
 pub(super) struct ChatState {
     /// Standalone Bot chats opt into identity decoration; others keep None.
@@ -79,12 +102,11 @@ impl Conversation {
             .bot_ui
             .direct_sending
             .as_ref()
-            .is_some_and(|pending| &pending.0 == id)
+            .is_some_and(|pending| &pending.id == id)
         {
-            let (owner, text, attachments, _selection, _) =
-                self.bot_ui.direct_sending.take().unwrap();
-            let unchanged =
-                self.input.read(cx).content.as_ref() == text && self.attachments == attachments;
+            let pending = self.bot_ui.direct_sending.take().unwrap();
+            let unchanged = self.input.read(cx).content.as_ref() == pending.text
+                && self.attachments == pending.attachments;
             if unchanged {
                 self.input
                     .update(cx, |input, cx| input.set_text(String::new(), cx));
@@ -94,7 +116,7 @@ impl Conversation {
             // durable link between the old input and its outbox identity.
             self.capture_composer(cx);
             let result = self.composer_draft.flush().and_then(|()| {
-                locked(&self.store)?.clear_composer_recovery(self.summary.id, &owner)
+                locked(&self.store)?.clear_composer_recovery(self.summary.id, &pending.id)
             });
             if let Err(error) = result {
                 self.status = format!(
@@ -102,7 +124,7 @@ impl Conversation {
                 );
                 self.composer_draft.error = Some(self.status.clone());
             } else {
-                self.composer_draft.forget_recovery(&owner);
+                self.composer_draft.forget_recovery(&pending.id);
             }
             self.bot_ui.draft_error = None;
             cx.notify();
@@ -179,7 +201,7 @@ impl Conversation {
             self.transcript
                 .update(cx, |view, cx| view.set_saved_draft(None, cx));
             self.sync_bot_pending(cx);
-            cx.emit(SessionChanged);
+            cx.emit(SessionChanged::Draft);
         }
         if self.bot_ui.draft_sending.as_deref() == Some(id.as_str()) {
             self.bot_ui.draft_sending = None;
@@ -200,10 +222,10 @@ impl Conversation {
             .bot_ui
             .direct_sending
             .as_ref()
-            .is_some_and(|pending| pending.0 == id)
+            .is_some_and(|pending| pending.id == id)
         {
             if let Some(pending) = self.bot_ui.direct_sending.as_mut() {
-                pending.4 = true;
+                pending.retry = true;
             }
             self.status = format!(
                 "Could not queue message: {error}. Your composer was preserved; send the same input to retry."
@@ -328,16 +350,17 @@ impl Conversation {
     pub(crate) fn voice_composer_ready(&self) -> bool {
         !self.user_read_only() && self.history_ready() && !self.account_switching
     }
-    pub(crate) fn bot_ready(&self) -> bool {
+    pub(crate) fn bot_ready(&self, cx: &App) -> bool {
         self.history_ready()
-            && !self.busy
-            && !self.stopping
+            && !self.turn_in_flight()
             && self.loaded
             && self.settings.usage_limit.is_none()
             && !self.account_switching
+            && Kind::parse(&self.summary.provider).is_some()
+            && turn_driver::available(&self.store, self.summary.id, cx)
     }
     pub(crate) fn bot_settled(&self) -> bool {
-        !self.busy && !self.stopping
+        !self.turn_in_flight()
     }
     /// Model selection belongs to the conversation, while Settings also holds
     /// the last loaded model. Derived execution lanes need the live selection.
@@ -359,47 +382,20 @@ impl Conversation {
             return false;
         }
         if !self.history_ready() {
-            self.load(cx);
+            self.load_complete(cx);
             return false;
         }
-        if self.settings.pending_provider_switch.is_some() && self.busy {
+        if self.settings.pending_provider_switch.is_some() && self.responding() {
             self.stop(cx);
         }
-        if self.busy
-            || self.stopping
+        if self.turn_in_flight()
             || !self.loaded
             || self.settings.usage_limit.is_some()
             || self.account_switching
         {
             return false;
         }
-        self.settings.bot_message_id = Some(message.id.clone());
-        self.settings.bot_sent_at = message.sent_at;
-        self.settings.internal_message = message.internal;
-        self.settings.attachments = message.attachments.iter().map(PathBuf::from).collect();
-        let previous = (
-            self.settings.plan,
-            self.settings.operator,
-            self.settings.orchestrator,
-        );
-        self.settings.plan = mode == Some("plan");
-        self.settings.operator = mode == Some("operator");
-        self.settings.orchestrator = mode == Some("orchestrator");
-        self.planning_orchestration = self.settings.orchestrator;
-        self.orchestration_plan = None;
-        self.orchestration_error = None;
-        let previous_prepared = self.settings.prepared_prompt.take();
-        self.settings.prepared_prompt = message.prepared_prompt.clone();
-        self.team_dispatch = true;
-        self.launch_prompt(message.text.clone(), cx);
-        self.team_dispatch = false;
-        self.settings.prepared_prompt = previous_prepared;
-        (
-            self.settings.plan,
-            self.settings.operator,
-            self.settings.orchestrator,
-        ) = previous;
-        true
+        self.launch_bot_prompt(message, mode, cx)
     }
     /// The user's own message joins the active turn through the provider's
     /// follow-up control, as in a session. Peer and automatic messages keep
@@ -409,12 +405,11 @@ impl Conversation {
         if message.peer.is_some()
             || message.internal
             || message.error.is_some()
-            || !self.busy
-            || self.stopping
+            || !self.responding()
+            || self.is_stopping()
             || !self.follow_ups.ready
             || self.follow_ups.sending.is_some()
             || self.settings.pending_provider_switch.is_some()
-            || self.is_remote()
             || !cx
                 .try_global::<vorkspace_ui::preferences::Preferences>()
                 .is_none_or(|p| p.follow_up == "steer")
@@ -478,7 +473,7 @@ impl Conversation {
         if self.submission_generation != generation {
             return Ok(());
         }
-        if !self.history_ready() || self.stopping {
+        if !self.history_ready() || self.is_stopping() {
             return Err("Conversation history is loading; retry the update when ready".into());
         }
         // Row offsets are merely hints. Card IDs and the captured value own
@@ -493,8 +488,7 @@ impl Conversation {
             return Ok(());
         }
         let session = self.summary.id;
-        let Some(saved) = vorkspace_runtime::runtime::card_persistence::admit(
-            cx,
+        let Some(saved) = crate::card_saves::writer(cx)?.admit(
             self.store.clone(),
             session,
             expected.clone(),
@@ -562,7 +556,7 @@ impl Conversation {
             "Needs your input"
         } else if self.settings.usage_limit.is_some() {
             "Usage limit reached"
-        } else if self.stopping {
+        } else if self.is_stopping() {
             "Stopping"
         } else if self.responding() {
             if self.status == "Thinking…" {
@@ -570,7 +564,7 @@ impl Conversation {
             } else {
                 "Working"
             }
-        } else if self.loading {
+        } else if self.history_loading() {
             "Loading"
         } else if self.status != "Ready" {
             "Needs attention"
@@ -592,7 +586,7 @@ impl Conversation {
     }
     #[cfg(test)]
     pub(crate) fn app_steerable_turn(&mut self, controls: std::sync::mpsc::Sender<Control>) {
-        self.busy = true;
+        self.turn_state = TurnState::Running;
         self.controls = Some(controls);
         self.follow_ups.ready = true;
     }
@@ -605,9 +599,9 @@ impl Conversation {
     pub(crate) fn app_settle_stopped_turn(&mut self, cx: &mut Context<Self>) {
         // Reproduce a late terminal update that leaves status Ready. The
         // cancellation receipt, not the provider's status text, must win.
-        assert!(self.stopping);
-        self.stopping = false;
-        cx.emit(SessionChanged);
+        assert!(self.is_stopping());
+        self.turn_state = TurnState::Settled(vorkspace_runtime::runtime::TurnOutcome::Cancelled);
+        cx.emit(SessionChanged::Settled);
         cx.notify();
     }
     pub(crate) fn app_flush_draft(&mut self, cx: &mut Context<Self>) -> Result<(), String> {
@@ -622,7 +616,7 @@ impl Conversation {
     /// App management pauses even an idle queue. Publish the higher revision
     /// before replying so older queued writes cannot restore automatic sending.
     pub(crate) fn app_stop(&mut self, cx: &mut Context<Self>) -> Result<(), String> {
-        if !self.loaded || self.loading {
+        if !self.loaded || self.history_loading() {
             return Err("Session is loading; its queue and draft were preserved. Try again after loading completes.".into());
         }
         self.stop_if_busy(cx);
@@ -638,7 +632,7 @@ impl Conversation {
         self.follow_ups.state = snapshot;
         self.follow_ups.persisted = self.follow_ups.state.revision;
         self.composer_draft.flush()?;
-        cx.emit(SessionChanged);
+        cx.emit(SessionChanged::Draft);
         cx.notify();
         Ok(())
     }
@@ -652,10 +646,10 @@ impl Conversation {
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
         if !self.history_ready() {
-            self.load(cx);
+            self.load_complete(cx);
             return Err("Conversation history is loading; retry the report when ready".into());
         }
-        if self.busy || self.stopping {
+        if self.turn_in_flight() {
             return Err("Wait for the current turn before posting a report".into());
         }
         let row = vorkspace_core::transcript::Row {
@@ -669,7 +663,7 @@ impl Conversation {
         self.transcript
             .update(cx, |t, cx| t.patch(at, vec![row], cx));
         self.summary.has_messages = true;
-        cx.emit(SessionChanged);
+        cx.emit(SessionChanged::History);
         cx.notify();
         Ok(())
     }
@@ -677,7 +671,7 @@ impl Conversation {
         super::bot_settings::access_options(
             Kind::from_id(&self.summary.provider),
             self.settings.access,
-            self.busy,
+            self.responding(),
         )
     }
     pub(crate) fn bot_access(
@@ -705,11 +699,11 @@ impl Conversation {
         id: &str,
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
-        if self.busy || self.stopping {
+        if self.turn_in_flight() {
             return Err("Wait for the current reply before changing model settings".into());
         }
         self.menu_choice(id, cx);
-        cx.emit(SessionChanged);
+        cx.emit(SessionChanged::Configuration);
         Ok(())
     }
     pub(crate) fn bot_config(
@@ -719,13 +713,13 @@ impl Conversation {
         values: std::collections::HashMap<String, String>,
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
-        if self.busy || self.stopping {
+        if self.turn_in_flight() {
             return Err("Wait for the current reply before changing models".into());
         }
         if self.summary.provider != provider.id() {
             self.summary.provider = provider.id().into();
             self.summary.provider_id = None;
-            self.catalog.clear();
+            self.catalog = Default::default();
         }
         self.model = model;
         self.settings.effort = super::preferred_effort(provider.id(), cx);
@@ -739,7 +733,7 @@ impl Conversation {
         self.resolved_model = None;
         self.refresh_catalog(cx);
         self.save_settings(cx);
-        cx.emit(SessionChanged);
+        cx.emit(SessionChanged::Configuration);
         cx.notify();
         Ok(())
     }

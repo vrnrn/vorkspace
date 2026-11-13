@@ -773,8 +773,8 @@ impl Drop for TestForegroundJournalGuard {
 
 /// Installs a fresh journal for the duration of a test, isolated from
 /// whatever a previous test left on this thread. Used by tests outside this
-/// module (e.g. `bench_context`) that need to observe journal entries
-/// without interference from the shared per-thread journal.
+/// module that need to observe journal entries without interference from
+/// the shared per-thread journal.
 #[cfg(test)]
 pub(crate) fn install_test_foreground_journal(
     capacity: usize,

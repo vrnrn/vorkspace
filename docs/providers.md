@@ -12,7 +12,7 @@ Follow each provider’s linked installation guide for platform requirements and
 
 One provider is enough. vorkspace probes for each CLI at startup and disables the ones it can’t find, with a hint about how to install them, so a missing Codex doesn’t stop you from working on anything else.
 
-Once a provider is installed and signed in, open a project folder in vorkspace, choose that agent, and send a message. For sessions on another machine, install and authenticate the providers on the host as described in [remote access](remote-access.md).
+Once a provider is installed and signed in, open a project folder in vorkspace, choose that agent, and send a message.
 
 In **Settings → Providers**, use **Models** beside an agent to choose which models appear in pickers, favorites, and recent choices. Search for a model and uncheck it to hide it; **Show all** restores the list. Model visibility is global, saved with your preferences, and a hidden model stays in the **Models** list so you can restore it. The model a conversation is using stays visible in its own picker. Existing conversations keep their selected model.
 
@@ -24,7 +24,7 @@ In **Settings → Providers**, you can add multiple **Claude Code** and **Codex*
 
 When a Claude Code or Codex conversation (or a Bot using one of those providers) hits a rate or usage limit, vorkspace offers **Switch account** / **Choose another account** directly in the usage-limit banner:
 - **Native context transfer**: For local sessions, vorkspace stops the limited CLI process, copies the conversation's native transcript/rollout files, subagent trees, file-history checkpoints, and closed subagent state into the newly selected account's home directory, and resumes the exact conversation byte-for-byte.
-- **Transcript handoff fallback**: When native context cannot be copied directly (for example, when using a custom shared `CODEX_SQLITE_HOME`, a private Bot store, or a remote host), vorkspace carries the conversation forward using a structured transcript handoff on the next turn.
+- **Transcript handoff fallback**: When native context cannot be copied directly (for example, when using a custom shared `CODEX_SQLITE_HOME`, or a private Bot store), vorkspace carries the conversation forward using a structured transcript handoff on the next turn.
 
 To run vorkspace from a checkout, see [building from source](building.md). See the [README](../README.md) for the native application overview.
 
@@ -36,7 +36,7 @@ Export `COPILOT_GITHUB_TOKEN` in your shell configuration before you start vorks
 
 ## Copilot GPT models in Claude Code
 
-The desktop gateway runs in Rust alongside the installed Claude Code CLI. Remote hosts include their own Node gateway.
+The desktop gateway runs in Rust alongside the installed Claude Code CLI.
 Copilot models appear only when `COPILOT_GITHUB_TOKEN` is set; a `gh auth login` session alone does not enable them. For example, export `COPILOT_GITHUB_TOKEN="$(gh auth token 2>/dev/null)"` in your shell configuration.
 Restart vorkspace after you change the credential.
 Select **Claude Code**, then select a Copilot model such as **GPT-6.1 Sol (1M)** or **GPT-6 Luna (1M)**. Every GPT model whose major version is 6 or newer is eligible.
@@ -55,7 +55,6 @@ Claude-only options such as Fast Mode and Ultrathink do not appear for Copilot m
 Each Copilot session uses a private localhost adapter for the Anthropic Messages and Copilot Responses protocols.
 The desktop adapter stays alive while its Claude process is parked between turns, and stops when that process is released. It uses a per-process secret, rejects browser origins, bounds requests and streamed frames, and does not change your saved Claude settings.
 Ordinary Claude models retain your existing provider, including Bedrock.
-Remote hosts use their JavaScript adapter and their own credentials.
 
 Anthropic does not officially support non-Claude models in Claude Code.
 The adapter supports text, images, streamed tool calls, and tool results.

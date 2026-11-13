@@ -1,7 +1,7 @@
 use super::*;
 
 fn store() -> Store {
-    Store::open(Path::new(":memory:")).unwrap()
+    Store::test(Path::new(":memory:")).unwrap()
 }
 fn input(id: &str, title: &str, body: &str) -> NoteUpsert {
     NoteUpsert {
@@ -21,7 +21,7 @@ fn schema_version(store: &Store) -> i64 {
 #[test]
 fn recovered_note_copy_keeps_its_images_when_the_original_is_deleted() {
     let root = tempfile::tempdir().unwrap();
-    let store = Store::open(&root.path().join("notes.db")).unwrap();
+    let store = Store::test(&root.path().join("notes.db")).unwrap();
     let image = root.path().join("diagram.svg");
     std::fs::write(&image, "<svg/>").unwrap();
     let draft = input("original", "Plan", "");
@@ -56,7 +56,7 @@ fn image_import_materializes_only_new_drafts_and_rejects_failed_or_deleted_notes
     let path = root.path().join("notes.db");
     let image = root.path().join("first.svg");
     std::fs::write(&image, "<svg/>").unwrap();
-    let store = Store::open(&path).unwrap();
+    let store = Store::test(&path).unwrap();
     let draft = input("image-first", "", "");
     assert!(store
         .save_note_image(&draft.id, &root.path().join("absent.svg"), Some(&draft))
@@ -65,7 +65,7 @@ fn image_import_materializes_only_new_drafts_and_rejects_failed_or_deleted_notes
     let asset = store
         .save_note_image(&draft.id, &image, Some(&draft))
         .unwrap();
-    let reopened = Store::open(&path).unwrap();
+    let reopened = Store::test(&path).unwrap();
     assert_eq!(
         reopened.get_note(&draft.id).unwrap().unwrap().body,
         crate::notes::image_markdown(&asset)
@@ -82,7 +82,7 @@ fn image_import_materializes_only_new_drafts_and_rejects_failed_or_deleted_notes
 }
 
 #[test]
-fn desktop_note_crud_keeps_source_tags_and_project_moves() {
+fn note_crud_keeps_source_tags_and_project_moves() {
     let store = store();
     let session = store.create("codex", "/project").unwrap();
     let mut request = input("saved-note", "  A title  ", "# Heading\r\n\r\nBody\rtext");
@@ -91,7 +91,7 @@ fn desktop_note_crud_keeps_source_tags_and_project_moves() {
         "design-notes".into(),
         "Rust".into(),
     ];
-    request.source_session_id = Some(session.id.to_string());
+    request.source_session_id = Some(store.persisted_session_id(session.id).unwrap());
     request.source_cwd = Some("/project".into());
     let saved = store.upsert_note(&request).unwrap();
     assert_eq!(saved.title, "A title");
@@ -192,7 +192,63 @@ fn note_mentions_expand_in_reference_order_once_and_ignore_missing_slugs() {
 }
 
 #[test]
-fn response_note_facade_and_legacy_settings_share_one_saved_identity() {
+fn note_reads_skip_unrelated_bodies_and_keep_legacy_columns_read_only() {
+    let store = Store::test(Path::new(":memory:")).unwrap();
+    let first = store
+        .upsert_note(&input("first", "First", "Kept body"))
+        .unwrap();
+    let second = store
+        .upsert_note(&input("second", "Second", "Also kept"))
+        .unwrap();
+    store
+        .conn
+        .execute_batch(
+            "INSERT INTO notes(id,slug,title,body,created_at,updated_at)
+        VALUES('broken','broken','Unreadable',x'FF',1,1);
+        INSERT INTO notes(id,slug,title,body,created_at,updated_at,content_kind)
+        VALUES('artifact','artifact','Artifact','Private',1,1,'artifact');",
+        )
+        .unwrap();
+    assert_eq!(store.get_note(&second.id).unwrap(), Some(second.clone()));
+    assert!(store.get_note("artifact").unwrap().is_none());
+    assert_eq!(
+        store.note_ids().unwrap(),
+        [first.id.clone(), second.id.clone(), "broken".into()]
+            .into_iter()
+            .collect()
+    );
+    let prompt = "Use @note/second and @note/first and @note/second and @note/artifact";
+    assert_eq!(
+        store.apply_notes_to_turn(prompt).unwrap(),
+        crate::notes::inject_prompt(prompt, &[second, first])
+    );
+
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("legacy.db");
+    let store = Store::open_vorkspace(&path).unwrap();
+    store
+        .conn
+        .execute_batch(
+            "ALTER TABLE notes DROP COLUMN content_kind;
+        ALTER TABLE notes DROP COLUMN tags_json; ALTER TABLE notes DROP COLUMN slug_pending;
+        INSERT INTO notes(id,slug,title,body,created_at,updated_at)
+        VALUES('older','old-slug','Older','Original',1,2);",
+        )
+        .unwrap();
+    let before = schema_version(&store);
+    let reader = Store::read_vorkspace(&path).unwrap();
+    let note = reader.get_note("older").unwrap().unwrap();
+    assert_eq!((&*note.slug, &*note.body), ("old-slug", "Original"));
+    assert!(note.tags.is_empty() && !note.slug_pending);
+    assert_eq!(
+        reader.apply_notes_to_turn("Read @note/old-slug").unwrap(),
+        crate::notes::inject_prompt("Read @note/old-slug", &[note])
+    );
+    assert_eq!(schema_version(&reader), before);
+}
+
+#[test]
+fn response_note_facade_keeps_one_saved_identity() {
     let store = store();
     let session = store.create("codex", "/project").unwrap();
     let mut response = crate::response::Note {
@@ -203,25 +259,17 @@ fn response_note_facade_and_legacy_settings_share_one_saved_identity() {
         source_session: session.id,
         source_cwd: "/project".into(),
     };
-    store
-        .conn
-        .execute(
-            "INSERT INTO native_settings(key,value) VALUES('note:123',?1)",
-            [serde_json::to_string(&response).unwrap()],
-        )
-        .unwrap();
-    assert_eq!(store.list_notes().unwrap().len(), 1);
     store.save_note(&response).unwrap();
+    assert_eq!(store.list_notes().unwrap().len(), 1);
     response.body = "Edited response".into();
     store.save_note(&response).unwrap();
     assert_eq!(store.list_notes().unwrap().len(), 1);
-    let compatible = store.notes().unwrap();
-    assert_eq!(compatible.len(), 1);
-    assert_eq!(compatible[0].id, response.id);
-    assert_eq!(compatible[0].body, response.body);
-    assert_eq!(compatible[0].source_session, session.id);
+    let compatible = store.response_note(store.get_note("gpui-note-123").unwrap().unwrap());
+    assert_eq!(compatible.id, response.id);
+    assert_eq!(compatible.body, response.body);
+    assert_eq!(compatible.source_session, session.id);
     store.delete_note("gpui-note-123").unwrap();
-    assert!(store.notes().unwrap().is_empty());
+    assert!(store.get_note("gpui-note-123").unwrap().is_none());
 }
 
 #[test]
@@ -229,7 +277,7 @@ fn shared_response_bridge_preserves_original_identity_slug_and_subtype() {
     let directory = tempfile::tempdir().unwrap();
     let store = Store::open_vorkspace(&directory.path().join("vorkspace.db")).unwrap();
     store.conn.execute("INSERT INTO notes(id,slug,title,body,created_at,updated_at,artifact_kind) VALUES('source-id','stable','Saved','Body',1,2,'document')", []).unwrap();
-    let mut compatible = store.notes().unwrap().pop().unwrap();
+    let mut compatible = store.response_note(store.get_note("source-id").unwrap().unwrap());
     compatible.body = "Changed".into();
     store.save_note(&compatible).unwrap();
     let saved = store.get_note("source-id").unwrap().unwrap();
@@ -261,7 +309,9 @@ fn external_note_update_keeps_pending_slug_subtype_and_recording_link() {
     let mut update = saved.upsert(true);
     update.title = "New title".into();
     update.body = "Revised".into();
-    let revised = store.update_note_preserving_artifact(&update).unwrap();
+    let revised = store
+        .update_note_preserving_artifact(update, &saved)
+        .unwrap();
     assert_eq!(revised.id, saved.id);
     assert_eq!(revised.slug, saved.slug);
     assert!(revised.slug_pending);
@@ -278,9 +328,88 @@ fn external_note_update_keeps_pending_slug_subtype_and_recording_link() {
         )
         .unwrap();
     assert_eq!(subtype, "document");
+    let mut moved = revised.upsert(false);
+    moved.source_cwd = Some("/other-project".into());
+    let moved = upsert_content(&store.conn, &moved, "note", Some("document")).unwrap();
+    let mut stale = revised.upsert(false);
+    stale.body = "Stale write".into();
     assert!(store
-        .update_note_preserving_artifact(&input("missing", "No", "note"))
+        .update_note_preserving_artifact(stale, &revised)
         .is_err());
+    assert_eq!(store.get_note(&moved.id).unwrap(), Some(moved));
+}
+
+#[test]
+fn note_summary_projection_keeps_order_and_excludes_artifacts() {
+    let store = store();
+    let mut original = input("native", "Notes are indexed", "A saved body");
+    original.tags = vec!["rust".into()];
+    original.source_cwd = Some("/project".into());
+    store.upsert_note(&original).unwrap();
+    let mut earlier = input("gpui-note-42", "Earlier note", "An earlier body");
+    earlier.tags = vec!["old".into()];
+    earlier.source_cwd = Some("/archive".into());
+    store.upsert_note(&earlier).unwrap();
+    upsert_content(
+        &store.conn,
+        &input("artifact", "Artifact", "Separate"),
+        "artifact",
+        None,
+    )
+    .unwrap();
+    store
+        .conn
+        .execute_batch("UPDATE notes SET updated_at=CASE id WHEN 'native' THEN 20 ELSE 10 END")
+        .unwrap();
+    assert_eq!(
+        store
+            .list_note_summaries()
+            .unwrap()
+            .into_iter()
+            .map(|note| note.id)
+            .collect::<Vec<_>>(),
+        ["native", "gpui-note-42"]
+    );
+    assert_eq!(
+        store.list_note_summaries().unwrap(),
+        store
+            .list_notes()
+            .unwrap()
+            .into_iter()
+            .map(crate::notes::NoteSummary::from)
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        store.get_note("gpui-note-42").unwrap().unwrap().body,
+        earlier.body
+    );
+}
+
+#[test]
+fn legacy_note_references_are_selected_from_the_users_message() {
+    let store = store();
+    for (id, title, body) in [
+        ("gpui-note-3", "Older note", "Third body"),
+        ("gpui-note-5", "Second note", "Second body"),
+        (
+            "gpui-note-7",
+            "Selected note",
+            "First body references @note:3",
+        ),
+    ] {
+        store.upsert_note(&input(id, title, body)).unwrap();
+    }
+    let request = "Use @note:7, then @note:5. @note:7\n> @note:3";
+    let expanded = store
+        .apply_legacy_notes_to_turn(request, format!("Prepared context @note:3\n{request}"))
+        .unwrap();
+    assert_eq!(
+        expanded.matches("Referenced note: Selected note").count(),
+        1
+    );
+    assert_eq!(expanded.matches("Referenced note: Second note").count(), 1);
+    assert!(!expanded.contains("Third body"));
+    assert!(expanded.ends_with(request));
 }
 
 const RECORDING_A: &str = "0123456789abcdef0123456789abcdef";
@@ -294,7 +423,7 @@ fn recording_links_read_does_not_create_schema() {
     let before = schema_version(&store);
     assert!(store.note_recordings().unwrap().is_empty());
     assert_eq!(schema_version(&store), before);
-    assert!(!super::super::shared::has_table(&store.conn, "note_recordings").unwrap());
+    assert!(!super::super::sessions::has_table(&store.conn, "note_recordings").unwrap());
     let reader = Store::read_vorkspace(&path).unwrap();
     assert!(reader.note_recordings().unwrap().is_empty());
     assert!(reader.attach_note_recording("note", RECORDING_A).is_err());
@@ -386,6 +515,32 @@ fn recording_import_reuses_an_existing_deterministic_note_without_overwriting_it
     );
     assert_eq!(store.list_notes().unwrap(), [existing]);
     assert_eq!(store.note_recordings().unwrap().len(), 1);
+}
+
+#[test]
+fn legacy_recording_keys_keep_their_exact_link_and_a_stable_note_id() {
+    let store = store();
+    let key = "planning-2024.06_12";
+    let first = store
+        .import_recording_note(key, "Planning", 123)
+        .unwrap()
+        .unwrap();
+    assert!(first.id.starts_with("meeting-legacy-"));
+    assert_eq!(
+        store
+            .note_recording(&first.id)
+            .unwrap()
+            .unwrap()
+            .recording_id,
+        key
+    );
+    assert_eq!(
+        store.import_recording_note(key, "Changed", 456).unwrap(),
+        Some(first)
+    );
+    assert!(store
+        .import_recording_note("../outside", "Invalid", 0)
+        .is_err());
 }
 
 #[test]
@@ -514,6 +669,8 @@ fn recording_attachment_rejects_relinking_and_artifact_ownership() {
 #[test]
 fn recording_link_ids_are_validated_before_any_schema_write() {
     let store = store();
+    let version = schema_version(&store);
+    let changes = store.conn.total_changes();
     for invalid in ["", "../escape", "space here", "bad/identity", "nöté"] {
         assert!(store.attach_note_recording(invalid, RECORDING_A).is_err());
     }
@@ -524,11 +681,35 @@ fn recording_link_ids_are_validated_before_any_schema_write() {
         "0123456789abcdef0123456789abcdeg",
         "0123456789abcdef0123456789abcdef0",
     ] {
-        assert!(store.attach_note_recording("note", invalid).is_err());
-        assert!(store.import_recording_note(invalid, "Title", 0).is_err());
+        assert!(
+            store.attach_note_recording("note", invalid).is_err(),
+            "{invalid:?}"
+        );
     }
-    assert!(!super::super::shared::has_table(&store.conn, "notes").unwrap());
-    assert!(!super::super::shared::has_table(&store.conn, "note_recordings").unwrap());
+    // Discovery also imports legacy filename keys. Exercise malformed keys
+    // that neither the recording catalog nor Notes can accept.
+    let oversized_key = "a".repeat(81);
+    for invalid in [
+        "",
+        "../escape",
+        "bad/identity",
+        "bad\\identity",
+        ".hidden",
+        "trailing.",
+        "double..dot",
+        "space here",
+        "nöté",
+        oversized_key.as_str(),
+    ] {
+        assert!(
+            store.import_recording_note(invalid, "Title", 0).is_err(),
+            "{invalid:?}"
+        );
+    }
+    assert_eq!(schema_version(&store), version);
+    assert_eq!(store.conn.total_changes(), changes);
+    assert!(store.list_notes().unwrap().is_empty());
+    assert!(!super::super::sessions::has_table(&store.conn, "note_recordings").unwrap());
 }
 
 #[test]

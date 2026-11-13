@@ -44,19 +44,55 @@ pub(crate) struct SharedRoster {
 
 impl EventEmitter<MembershipChanged> for SharedRoster {}
 
+pub(crate) struct PreparedRoster {
+    snapshot: Result<Roster, String>,
+    root: PathBuf,
+}
+
+impl PreparedRoster {
+    pub(crate) fn read(store: &Store) -> Self {
+        Self {
+            snapshot: Roster::load(store),
+            root: vorkspace_core::store::bot_root(store),
+        }
+    }
+}
+
 impl SharedRoster {
+    pub(crate) fn internal_session_ids(&self) -> impl Iterator<Item = i64> + '_ {
+        self.snapshot.iter().flat_map(|roster| {
+            roster
+                .hidden_sessions
+                .iter()
+                .copied()
+                .chain(roster.bots.iter().flat_map(|bot| {
+                    bot.session_id
+                        .into_iter()
+                        .chain(bot.habit_sessions.iter().copied())
+                }))
+        })
+    }
+
     pub(crate) fn install(store: Database, cx: &mut App) -> Entity<Self> {
-        let (snapshot, root) = match locked(&store) {
-            Ok(db) => (Roster::load(&db), vorkspace_core::store::bot_root(&db)),
-            Err(error) => (
-                Err(error),
-                std::env::temp_dir().join(vorkspace_core::bot::new_id()),
-            ),
+        let prepared = match locked(&store) {
+            Ok(db) => PreparedRoster::read(&db),
+            Err(error) => PreparedRoster {
+                snapshot: Err(error),
+                root: std::env::temp_dir().join(vorkspace_core::bot::new_id()),
+            },
         };
+        Self::install_prepared(store, prepared, cx)
+    }
+
+    pub(crate) fn install_prepared(
+        store: Database,
+        prepared: PreparedRoster,
+        cx: &mut App,
+    ) -> Entity<Self> {
         let shared = cx.new(|_| Self {
             store,
-            root,
-            snapshot,
+            root: prepared.root,
+            snapshot: prepared.snapshot,
             revision: 0,
             removed: HashMap::new(),
             chat_owners: HashMap::new(),

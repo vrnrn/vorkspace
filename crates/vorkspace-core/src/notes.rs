@@ -1,4 +1,4 @@
-//! Notes share their identities, slugs and storage format with the desktop app.
+//! Notes keep their existing identities, slugs and storage format.
 use serde::{Deserialize, Serialize};
 
 pub const MAX_TITLE: usize = 200;
@@ -23,6 +23,36 @@ pub struct Note {
     pub slug_pending: bool,
     pub created_at: i64,
     pub updated_at: i64,
+}
+
+/// The note catalog can be read and retained independently of note bodies.
+#[derive(Debug, PartialEq, Eq)]
+pub struct NoteSummary {
+    pub id: String,
+    pub slug: String,
+    pub title: String,
+    pub tags: Vec<String>,
+    pub source_cwd: Option<String>,
+    pub updated_at: i64,
+}
+
+impl From<Note> for NoteSummary {
+    fn from(note: Note) -> Self {
+        Self {
+            id: note.id,
+            slug: note.slug,
+            title: note.title,
+            tags: note.tags,
+            source_cwd: note.source_cwd,
+            updated_at: note.updated_at,
+        }
+    }
+}
+
+pub fn numeric_id(id: &str) -> u64 {
+    id.strip_prefix("gpui-note-")
+        .and_then(|id| id.parse().ok())
+        .unwrap_or_else(|| crate::session::session_handle(id) as u64)
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -71,14 +101,6 @@ impl Note {
             .as_deref()
             .filter(|cwd| is_project(cwd))
             .map(crate::files::leaf_name)
-    }
-
-    pub fn in_project(&self, scope: Option<&str>) -> bool {
-        let Some(scope) = scope else { return true };
-        self.source_cwd
-            .as_deref()
-            .filter(|cwd| is_project(cwd))
-            .is_none_or(|cwd| crate::files::path_key(cwd) == crate::files::path_key(scope))
     }
 
     pub fn preview(&self) -> String {
@@ -222,8 +244,8 @@ fn unwrap_markdown(text: &str) -> String {
         .to_owned()
 }
 
-/// The same prompt boundary as `injectNotePrompt` in the desktop composer.
-pub fn inject_prompt(text: &str, notes: &[Note]) -> String {
+/// Prepend referenced notes to a prompt in the established note-reference format.
+pub(crate) fn inject_prompt(text: &str, notes: &[Note]) -> String {
     if notes.is_empty() {
         return text.into();
     }
@@ -244,18 +266,7 @@ pub fn inject_prompt(text: &str, notes: &[Note]) -> String {
     format!("{}\n\n---\n{}", text.trim_end(), blocks.join("\n"))
 }
 
-pub fn compose_message(note: &Note, text: &str) -> String {
-    inject_prompt(
-        if text.trim().is_empty() {
-            "Use this note."
-        } else {
-            text.trim()
-        },
-        std::slice::from_ref(note),
-    )
-}
-
-pub fn slugs_in_text(text: &str) -> Vec<String> {
+pub(crate) fn slugs_in_text(text: &str) -> Vec<String> {
     static SLUG: std::sync::LazyLock<regex::Regex> =
         std::sync::LazyLock::new(|| regex::Regex::new(r"(?:^|\s)@note/([A-Za-z0-9_-]+)").unwrap());
     let mut result = Vec::new();

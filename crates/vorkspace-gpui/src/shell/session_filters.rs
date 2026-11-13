@@ -1,4 +1,4 @@
-//! SessionFiltersMenu.tsx: persisted status, time and provider checkboxes.
+//! The session filters menu: persisted status, time and provider checkboxes.
 use super::*;
 use vorkspace_core::session_filters::{BotFilter, TimeFilter};
 
@@ -185,8 +185,13 @@ impl Shell {
         }
         self.close_preview(cx);
         let visible = self.sidebar_session_ids(cx);
-        self.selected_sessions.retain(|id| visible.contains(id));
-        self.selection_anchor = self.selection_anchor.filter(|id| visible.contains(id));
+        self.sidebar
+            .selected_sessions
+            .retain(|id| visible.contains(id));
+        self.sidebar.selection_anchor = self
+            .sidebar
+            .selection_anchor
+            .filter(|id| visible.contains(id));
         self.invalidate_chrome(cx);
         self.persist(cx);
         cx.notify();
@@ -217,10 +222,10 @@ mod tests {
                 }
                 shell.sessions[&a].update(cx, |s, _| {
                     s.summary.provider = "codex".into();
-                    s.busy = true;
+                    s.set_running_for_test(true);
                 });
                 shell.sessions[&b].update(cx, |s, _| s.summary.provider = "claude".into());
-                shell.selected_sessions.insert(b);
+                shell.sidebar.selected_sessions.insert(b);
                 shell.open_menu(
                     MenuTarget::SessionFilter,
                     Anchor::Point(gpui::point(px(220.), px(180.))),
@@ -239,8 +244,8 @@ mod tests {
                 assert!(shell.menu.is_some(), "status checkboxes keep the menu open");
                 assert_eq!(shell.sidebar_session_ids(cx), [a]);
                 assert_eq!(shell.workspace.active, Some(b));
-                assert!(shell.sessions[&a].read(cx).busy);
-                assert!(!shell.selected_sessions.contains(&b));
+                assert!(shell.sessions[&a].read(cx).responding());
+                assert!(!shell.sidebar.selected_sessions.contains(&b));
                 let state: Workspace =
                     serde_json::from_str(&shell.latest_window_layout(cx)).unwrap();
                 assert!(state.session_filters.status.working);
@@ -250,11 +255,11 @@ mod tests {
             .update(visual, |shell, _, cx| {
                 shell.change_session_filter("clear", cx);
                 assert_eq!(shell.sidebar_session_ids(cx).len(), 2);
-                shell.sessions[&a].update(cx, |s, _| s.busy = false);
+                shell.sessions[&a].update(cx, |s, _| s.set_running_for_test(false));
                 shell.unseen_finished.insert(a);
                 shell.change_session_filter("done", cx);
                 assert_eq!(shell.sidebar_session_ids(cx), [a]);
-                shell.sessions[&b].update(cx, |s, _| s.busy = true);
+                shell.sessions[&b].update(cx, |s, _| s.set_running_for_test(true));
                 shell.change_session_filter("working", cx);
                 assert_eq!(shell.sidebar_session_ids(cx).len(), 2);
                 shell.change_session_filter("provider:claude", cx);
@@ -263,36 +268,6 @@ mod tests {
                 assert_eq!(shell.sidebar_session_ids(cx), [a]);
                 shell.sessions[&a].update(cx, |s, _| s.summary.updated_at = 1);
                 assert!(shell.sidebar_session_ids(cx).is_empty());
-            })
-            .unwrap();
-    }
-
-    #[gpui::test]
-    fn working_filter_preserves_running_remote_sessions_without_materializing_them(
-        cx: &mut TestAppContext,
-    ) {
-        let (window, _, _) = super::super::tests::window(cx);
-        window
-            .update(cx, |shell, _, cx| {
-                let project = shell.workspace.project.clone();
-                let mut remote_summary = locked(&shell.store)
-                    .unwrap()
-                    .create("codex", &project)
-                    .unwrap();
-                remote_summary.has_messages = true;
-                remote_summary.updated_at = vorkspace_core::time::now_ms();
-                let remote_id = remote_summary.id;
-                shell.session_summaries.insert(remote_id, remote_summary);
-                shell.order.push(remote_id);
-                shell.remote_marks.insert(remote_id, (true, false));
-                assert!(!shell.sessions.contains_key(&remote_id));
-
-                shell.change_session_filter("working", cx);
-                assert!(shell.sidebar_session_ids(cx).contains(&remote_id));
-                assert!(
-                    !shell.sessions.contains_key(&remote_id),
-                    "filtering running remote sessions must stay metadata-only"
-                );
             })
             .unwrap();
     }

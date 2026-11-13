@@ -12,8 +12,13 @@ use sha2::{Digest, Sha256};
 
 use super::Store;
 
+mod edit;
+pub use edit::{EditAdmissionError, EditBarrier, EditClaim};
+
 const MAX_PAYLOAD_BYTES: usize = 64 << 20;
 const MAX_USER_TURN_BYTES: usize = 8 << 20;
+const RECOVERY_INDEX: &str = "CREATE INDEX IF NOT EXISTS local_submissions_unfinished_idx
+       ON local_submissions(session_id) WHERE phase IN ('reserved','dispatching');";
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -70,7 +75,8 @@ pub(crate) fn ensure_table(conn: &Connection) -> rusqlite::Result<()> {
          CREATE TABLE IF NOT EXISTS local_submission_deleted_sessions (session_id TEXT PRIMARY KEY);
          CREATE INDEX IF NOT EXISTS local_submissions_session_idx
            ON local_submissions(session_id, created_at);",
-    )
+    )?;
+    conn.execute_batch(RECOVERY_INDEX)
 }
 
 fn instance() -> &'static str {
@@ -98,8 +104,7 @@ pub(crate) fn pid_alive(pid: u32) -> bool {
     }
 }
 
-/// Called on disk open, never on ordinary reads or a second window. Live
-/// owners (including this process) retain their reservations untouched.
+/// Attempts whose workers relinquished ownership before SQLite could settle them.
 fn closed_attempts() -> &'static Mutex<HashSet<(String, String)>> {
     static CLOSED: OnceLock<Mutex<HashSet<(String, String)>>> = OnceLock::new();
     CLOSED.get_or_init(Mutex::default)
@@ -121,11 +126,25 @@ impl SubmissionOwner {
             .unwrap_or_else(|e| e.into_inner())
             .insert((self.0.clone(), attempt.to_owned()));
     }
+
+    fn has_released(&self, attempt: &str) -> bool {
+        closed_attempts()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains(&(self.0.clone(), attempt.to_owned()))
+    }
 }
-pub(crate) fn recover_unresolved(conn: &Connection) -> rusqlite::Result<()> {
-    let mut statement = conn.prepare("SELECT attempt_id,owner_pid,owner_instance FROM local_submissions WHERE phase IN ('reserved','dispatching')")?;
+fn recover_unresolved(conn: &Connection, source: Option<&str>) -> rusqlite::Result<()> {
+    let sql = if source.is_some() {
+        "SELECT attempt_id,owner_pid,owner_instance FROM local_submissions
+         WHERE phase IN ('reserved','dispatching') AND session_id=?1"
+    } else {
+        "SELECT attempt_id,owner_pid,owner_instance FROM local_submissions
+         WHERE phase IN ('reserved','dispatching')"
+    };
+    let mut statement = conn.prepare(sql)?;
     let owners = statement
-        .query_map([], |row| {
+        .query_map(rusqlite::params_from_iter(source), |row| {
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, u32>(1)?,
@@ -133,20 +152,32 @@ pub(crate) fn recover_unresolved(conn: &Connection) -> rusqlite::Result<()> {
             ))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
-    let identity = connection_identity(conn);
+    let identity = SubmissionOwner(connection_identity(conn));
     for (attempt, pid, owner) in owners {
-        let closed = closed_attempts()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .contains(&(identity.clone(), attempt.clone()));
-        if !closed && (owner == instance() || pid_alive(pid)) {
+        if !identity.has_released(&attempt) && (owner == instance() || pid_alive(pid)) {
             continue;
         }
-        conn.execute("UPDATE local_submissions SET phase='uncertain',outcome=NULL,error='The local send ended before completion could be confirmed. The provider may have received it; it was not replayed.',updated_at=?1 WHERE attempt_id=?2 AND owner_instance=?3 AND phase IN ('reserved','dispatching')",params![now(),attempt,owner])?;
+        if attempt.starts_with(edit::ATTEMPT_PREFIX) {
+            conn.execute(
+                "UPDATE local_submissions SET
+                   phase=CASE phase WHEN 'reserved' THEN 'settled' ELSE 'uncertain' END,
+                   outcome=CASE phase WHEN 'reserved' THEN 'failed' END,
+                   error=?1,updated_at=?2
+                 WHERE attempt_id=?3 AND owner_instance=?4 AND phase IN ('reserved','dispatching')",
+                params![
+                    "The message edit ended before local history was updated.",
+                    now(),
+                    attempt,
+                    owner
+                ],
+            )?;
+        } else {
+            conn.execute("UPDATE local_submissions SET phase='uncertain',outcome=NULL,error='The local send ended before completion could be confirmed. The provider may have received it; it was not replayed.',updated_at=?1 WHERE attempt_id=?2 AND owner_instance=?3 AND phase IN ('reserved','dispatching')",params![now(),attempt,owner])?;
+        }
         closed_attempts()
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .remove(&(identity.clone(), attempt));
+            .remove(&(identity.0.clone(), attempt));
     }
     Ok(())
 }
@@ -163,7 +194,7 @@ pub(crate) fn delete_session(conn: &Connection, session_id: &str) -> rusqlite::R
 }
 
 pub(super) fn delete_if_present(conn: &Connection, source: &str) -> Result<(), String> {
-    if super::shared::has_table(conn, "local_submissions")? {
+    if super::sessions::has_table(conn, "local_submissions")? {
         ensure_table(conn).map_err(|e| e.to_string())?;
         delete_session(conn, source).map_err(|e| e.to_string())?;
     }
@@ -266,18 +297,13 @@ fn sanitize_user_turn(
 }
 
 #[cfg(test)]
-fn reserve(
-    conn: &Connection,
-    input: SubmissionInput,
-    session_table: &str,
-) -> Result<SubmissionReservation, String> {
-    reserve_checked(conn, input, session_table, || Ok(()))
+fn reserve(conn: &Connection, input: SubmissionInput) -> Result<SubmissionReservation, String> {
+    reserve_checked(conn, input, || Ok(()))
 }
 
 fn reserve_checked(
     conn: &Connection,
     input: SubmissionInput,
-    session_table: &str,
     check: impl FnOnce() -> Result<(), String>,
 ) -> Result<SubmissionReservation, String> {
     for value in [&input.attempt_id, &input.user_turn_id] {
@@ -302,15 +328,10 @@ fn reserve_checked(
         .map(|turn| sanitize_user_turn(turn, &input.user_turn_id))
         .transpose()?;
     let signature = format!("{:x}", Sha256::digest(input.payload_json.as_bytes()));
-    let owner_table = match session_table {
-        "sessions" => "sessions",
-        "native_sessions" => "native_sessions",
-        _ => return Err("Invalid local submission owner table".into()),
-    };
     let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate)
         .map_err(|e| e.to_string())?;
     check()?;
-    // Compaction has no user turn and exclusively owns the provider context.
+    // Edits and compaction have no user turn and exclusively own provider context.
     // Prompt receipts can still overlap within a run to support steering.
     let competing_operation = tx
         .query_row(
@@ -324,10 +345,10 @@ fn reserve_checked(
     if competing_operation {
         return Err("A local provider operation is already active in this conversation.".into());
     }
-    let insert = format!("INSERT INTO local_submissions (attempt_id,user_turn_id,session_id,signature,phase,owner_pid,owner_instance,created_at,updated_at,user_turn_json) SELECT ?1,?2,?3,?4,'reserved',?5,?6,?7,?7,?8 WHERE NOT EXISTS (SELECT 1 FROM local_submission_deleted_sessions WHERE session_id=?3) AND EXISTS(SELECT 1 FROM {owner_table} WHERE id=?3) AND NOT EXISTS(SELECT 1 FROM local_submissions WHERE session_id=?3 AND user_turn_id=?2 AND (phase IN ('reserved','dispatching','uncertain') OR outcome='completed')) ON CONFLICT(attempt_id) DO NOTHING");
+    let insert = "INSERT INTO local_submissions (attempt_id,user_turn_id,session_id,signature,phase,owner_pid,owner_instance,created_at,updated_at,user_turn_json) SELECT ?1,?2,?3,?4,'reserved',?5,?6,?7,?7,?8 WHERE NOT EXISTS (SELECT 1 FROM local_submission_deleted_sessions WHERE session_id=?3) AND EXISTS(SELECT 1 FROM sessions WHERE id=?3) AND NOT EXISTS(SELECT 1 FROM local_submissions WHERE session_id=?3 AND user_turn_id=?2 AND (phase IN ('reserved','dispatching','uncertain') OR outcome='completed')) ON CONFLICT(attempt_id) DO NOTHING";
     let created = tx
         .execute(
-            &insert,
+            insert,
             params![
                 input.attempt_id,
                 input.user_turn_id,
@@ -391,23 +412,34 @@ fn settle(
 }
 
 impl Store {
-    /// Recover only a previous process's unfinished attempts. Reading a store
-    /// and validation probes do not create tables or mutate recovery state.
     pub fn local_submission_owner(&self) -> SubmissionOwner {
         SubmissionOwner(connection_identity(&self.conn))
     }
-    pub fn release_local_submission(&self, attempt: &str) {
-        closed_attempts()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert((connection_identity(&self.conn), attempt.to_owned()));
-    }
+    /// Recover the workspace when opening it for normal desktop use.
+    /// A validation-only open does not call this.
     pub fn recover_local_submissions(&self) -> Result<(), String> {
-        if super::shared::has_table(&self.conn, "local_submissions")? {
-            recover_unresolved(&self.conn).map_err(|e| e.to_string())?;
+        if super::sessions::has_table(&self.conn, "local_submissions")? {
+            self.conn
+                .execute_batch(RECOVERY_INDEX)
+                .map_err(|error| error.to_string())?;
+            recover_unresolved(&self.conn, None).map_err(|error| error.to_string())?;
         }
         Ok(())
     }
+
+    /// Refresh just this conversation after loading its history or closing a worker.
+    pub fn session_submission_recovery(
+        &self,
+        session: i64,
+    ) -> Result<Option<SubmissionReceipt>, String> {
+        if !super::sessions::has_table(&self.conn, "local_submissions")? {
+            return Ok(None);
+        }
+        let source = self.submission_source_id(session)?;
+        recover_unresolved(&self.conn, Some(&source)).map_err(|error| error.to_string())?;
+        self.latest_unconfirmed_for_source(&source)
+    }
+
     pub fn reserve_local_submission(
         &self,
         session: i64,
@@ -421,20 +453,16 @@ impl Store {
     pub fn reserve_local_submission_after_native_history(
         &self,
         session: i64,
-        mut input: SubmissionInput,
+        input: SubmissionInput,
         history: Option<&super::NativeHistoryRequest>,
     ) -> Result<SubmissionReservation, String> {
-        if self.shared.is_some() {
-            self.shared_writable()?;
+        if input.attempt_id.starts_with(edit::ATTEMPT_PREFIX) {
+            return Err("Invalid local submission identity".into());
         }
-        input.session_id = self.submission_source_id(session)?;
-        let table = if self.shared.is_some() {
-            "sessions"
-        } else {
-            "native_sessions"
-        };
-        ensure_table(&self.conn).map_err(|e| e.to_string())?;
-        reserve_checked(&self.conn, input, table, || {
+        self.reserve_submission_checked(session, input, || {
+            if let Some(reason) = self.edit_recovery_reason(session)? {
+                return Err(reason);
+            }
             if let Some(history) = history {
                 if history.session.id != session || !self.native_history_current(history)? {
                     return Err("The Bot conversation changed during native history sync. Retry to continue the same session.".into());
@@ -443,15 +471,42 @@ impl Store {
             Ok(())
         })
     }
+
+    fn reserve_submission_checked(
+        &self,
+        session: i64,
+        mut input: SubmissionInput,
+        check: impl FnOnce() -> Result<(), String>,
+    ) -> Result<SubmissionReservation, String> {
+        self.shared_writable()?;
+        input.session_id = self.submission_source_id(session)?;
+        ensure_table(&self.conn).map_err(|e| e.to_string())?;
+        reserve_checked(&self.conn, input, check)
+    }
     fn submission_source_id(&self, session: i64) -> Result<String, String> {
-        if self.shared.is_some() {
-            self.persisted_session_id(session)
-        } else {
-            Ok(session.to_string())
-        }
+        self.persisted_session_id(session)
     }
     pub fn dispatch_local_submission(&self, attempt: &str) -> Result<SubmissionClaim, String> {
         dispatch(&self.conn, attempt)
+    }
+    pub fn dispatch_composer_submission(
+        &self,
+        attempt: &str,
+        origin: &super::ComposerOrigin,
+    ) -> Result<SubmissionClaim, String> {
+        let tx = Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)
+            .map_err(|error| error.to_string())?;
+        let claim = dispatch(&tx, attempt)?;
+        if claim.claimed {
+            if claim.receipt.session_id != origin.source
+                || claim.receipt.user_turn_id != origin.message_id()
+            {
+                return Err("Local receipt does not own this composer version".into());
+            }
+            self.transfer_composer_origin(&tx, origin.session, origin)?;
+        }
+        tx.commit().map_err(|error| error.to_string())?;
+        Ok(claim)
     }
     pub fn settle_local_submission(
         &self,
@@ -462,7 +517,7 @@ impl Store {
         settle(&self.conn, attempt, outcome, error)
     }
     pub fn local_submissions(&self, session: i64) -> Result<Vec<SubmissionReceipt>, String> {
-        if !super::shared::has_table(&self.conn, "local_submissions")? {
+        if !super::sessions::has_table(&self.conn, "local_submissions")? {
             return Ok(Vec::new());
         }
         let source = self.submission_source_id(session)?;
@@ -479,18 +534,23 @@ impl Store {
         &self,
         session: i64,
     ) -> Result<Option<SubmissionReceipt>, String> {
-        if !super::shared::has_table(&self.conn, "local_submissions")? {
+        if !super::sessions::has_table(&self.conn, "local_submissions")? {
             return Ok(None);
         }
         let source = self.submission_source_id(session)?;
-        self.conn.query_row("SELECT attempt_id,user_turn_id,session_id,signature,phase,outcome,error,user_turn_json FROM local_submissions WHERE session_id=?1 AND phase='uncertain' AND COALESCE(outcome,'') != 'reviewed' ORDER BY updated_at DESC,attempt_id LIMIT 1",[source],receipt_row).optional().map_err(|e|e.to_string())
+        self.latest_unconfirmed_for_source(&source)
+    }
+
+    fn latest_unconfirmed_for_source(
+        &self,
+        source: &str,
+    ) -> Result<Option<SubmissionReceipt>, String> {
+        self.conn.query_row("SELECT attempt_id,user_turn_id,session_id,signature,phase,outcome,error,user_turn_json FROM local_submissions WHERE session_id=?1 AND phase='uncertain' AND attempt_id NOT GLOB ?2 AND COALESCE(outcome,'') != 'reviewed' ORDER BY updated_at DESC,attempt_id LIMIT 1",params![source,edit::ATTEMPT_PATTERN],receipt_row).optional().map_err(|e|e.to_string())
     }
     /// Dismissing a notice records review, never proof of external completion.
     /// Its uncertainty and stable-message tombstone continue to forbid replay.
     pub fn acknowledge_local_submission(&self, session: i64, attempt: &str) -> Result<(), String> {
-        if self.shared.is_some() {
-            self.shared_writable()?;
-        }
+        self.shared_writable()?;
         let source = self.submission_source_id(session)?;
         self.conn.execute("UPDATE local_submissions SET outcome='reviewed',updated_at=?1 WHERE session_id=?2 AND attempt_id=?3 AND phase='uncertain'",params![now(),source,attempt]).map_err(|e|e.to_string())?;
         Ok(())

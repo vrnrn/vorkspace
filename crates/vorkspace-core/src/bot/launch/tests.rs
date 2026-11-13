@@ -6,6 +6,9 @@ fn settings() -> Settings {
         effort: Some("low".into()),
         worktree_cwd: Some("/other-project".into()),
         operator: true,
+        text_only: true,
+        native_prompt_id: Some("source-prompt".into()),
+        disable_claude_hooks: true,
         ..Default::default()
     }
 }
@@ -16,6 +19,9 @@ fn explicit_launch_settings_are_preserved_and_ephemeral_capabilities_are_not_inh
     assert_eq!(launch.settings.effort.as_deref(), Some("high"));
     assert_eq!(launch.settings.model_settings["custom"], "kept");
     assert!(!launch.settings.operator);
+    assert!(!launch.settings.text_only);
+    assert!(launch.settings.native_prompt_id.is_none());
+    assert!(!launch.settings.disable_claude_hooks);
     assert!(launch.settings.worktree_cwd.is_none());
     assert!(matches!(launch.workspace, Workspace::New(_)));
     let inherited = Launch::parse(
@@ -124,17 +130,11 @@ fn failed_configuration_removes_its_allocated_session() {
     assert!(store.sessions().unwrap().is_empty());
 }
 #[test]
-fn started_launch_persists_parent_link_in_both_schemas() {
-    for shared in [false, true] {
+fn started_launch_persists_parent_link() {
+    {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("state.db");
-        let open = || {
-            if shared {
-                crate::store::Store::open_vorkspace(&path)
-            } else {
-                crate::store::Store::open(&path)
-            }
-        };
+        let open = || crate::store::Store::test(&path);
         let mut store = open().unwrap();
         let caller = store.create("codex", "/project").unwrap().id;
         let mut launch = Launch::parse(
@@ -164,7 +164,7 @@ fn started_launch_persists_parent_link_in_both_schemas() {
 }
 #[test]
 fn failed_configuration_keeps_worktree_if_session_deletion_fails() {
-    for shared in [false, true] {
+    {
         let root = tempfile::tempdir().unwrap();
         let project = root.path().join("project");
         std::fs::create_dir(&project).unwrap();
@@ -190,17 +190,8 @@ fn failed_configuration_keeps_worktree_if_session_deletion_fails() {
                 .success());
         }
         let path = root.path().join("state.db");
-        let mut store = if shared {
-            crate::store::Store::open_vorkspace(&path)
-        } else {
-            crate::store::Store::open(&path)
-        }
-        .unwrap();
-        let table = if shared {
-            "sessions"
-        } else {
-            "native_sessions"
-        };
+        let mut store = { crate::store::Store::test(&path) }.unwrap();
+        let table = { "sessions" };
         rusqlite::Connection::open(&path).unwrap().execute_batch(&format!("CREATE TRIGGER reject_title BEFORE UPDATE OF title ON {table} BEGIN SELECT RAISE(ABORT,'injected title failure'); END;
                 CREATE TRIGGER reject_cleanup BEFORE DELETE ON {table} BEGIN SELECT RAISE(ABORT,'injected cleanup failure'); END;")).unwrap();
         let project_text = project.to_str().unwrap();

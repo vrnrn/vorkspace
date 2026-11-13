@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use url::Url;
 
 const DEFAULT_GITLAB_URL: &str = "https://gitlab.com";
 const DEFAULT_LIMIT: u32 = 40;
@@ -15,7 +16,7 @@ const USER_AGENT: &str = "vorkspace";
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct GitlabStatus {
+pub(crate) struct GitlabStatus {
     pub connected: bool,
     pub url: String,
 }
@@ -28,21 +29,21 @@ struct GitlabConfig {
 
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct GitlabLabel {
+pub(crate) struct GitlabLabel {
     pub name: String,
     pub color: String,
 }
 
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct GitlabAssignee {
+pub(crate) struct GitlabAssignee {
     pub login: String,
     pub avatar_url: String,
 }
 
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct GitlabWorkItem {
+pub(crate) struct GitlabWorkItem {
     pub kind: String,
     pub number: i64,
     pub title: String,
@@ -58,7 +59,7 @@ pub struct GitlabWorkItem {
 
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct GitlabWorkItemDetails {
+pub(crate) struct GitlabWorkItemDetails {
     pub body: String,
     pub author: String,
     pub author_avatar_url: String,
@@ -69,7 +70,7 @@ pub struct GitlabWorkItemDetails {
 
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct GitlabWorkItemComment {
+pub(crate) struct GitlabWorkItemComment {
     pub id: String,
     pub kind: String,
     pub author: String,
@@ -87,7 +88,7 @@ pub struct GitlabWorkItemComment {
 
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct GitlabWorkItemThread {
+pub(crate) struct GitlabWorkItemThread {
     pub comments: Vec<GitlabWorkItemComment>,
     pub truncated: bool,
     pub review_decision: String,
@@ -97,7 +98,7 @@ pub struct GitlabWorkItemThread {
 
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct GitlabMrFile {
+pub(crate) struct GitlabMrFile {
     pub path: String,
     pub additions: i64,
     pub deletions: i64,
@@ -105,7 +106,7 @@ pub struct GitlabMrFile {
 
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct GitlabMrDiff {
+pub(crate) struct GitlabMrDiff {
     pub additions: i64,
     pub deletions: i64,
     pub files: Vec<GitlabMrFile>,
@@ -113,7 +114,7 @@ pub struct GitlabMrDiff {
     pub truncated: bool,
 }
 
-pub fn gitlab_status(app: PathBuf) -> Result<GitlabStatus, String> {
+pub(crate) fn gitlab_status(app: PathBuf) -> Result<GitlabStatus, String> {
     let config = read_config(&app)?;
     Ok(GitlabStatus {
         connected: config.is_some(),
@@ -123,7 +124,11 @@ pub fn gitlab_status(app: PathBuf) -> Result<GitlabStatus, String> {
     })
 }
 
-pub fn gitlab_set_config(app: PathBuf, url: String, token: String) -> Result<GitlabStatus, String> {
+pub(crate) fn gitlab_set_config(
+    app: PathBuf,
+    url: String,
+    token: String,
+) -> Result<GitlabStatus, String> {
     let url = normalize_gitlab_url(&url)?;
     let token = token.trim().to_string();
     if token.is_empty() {
@@ -145,16 +150,15 @@ pub fn gitlab_set_config(app: PathBuf, url: String, token: String) -> Result<Git
     })
 }
 
-pub fn gitlab_repo(app: PathBuf, cwd: String) -> Result<String, String> {
+pub(crate) fn gitlab_repo(app: PathBuf, cwd: String) -> Result<String, String> {
     let config = require_config(&app)?;
     gitlab_repo_for(&expand_home(&cwd), &config.url)
 }
 
-pub fn gitlab_list_work_items(
+pub(crate) fn gitlab_list_work_items(
     app: PathBuf,
     cwd: String,
     kind: String,
-    assigned_to_me: bool,
     state: String,
     limit: Option<u32>,
 ) -> Result<Vec<GitlabWorkItem>, String> {
@@ -164,13 +168,12 @@ pub fn gitlab_list_work_items(
         &config,
         &repo,
         &kind,
-        assigned_to_me,
         &state,
         limit.unwrap_or(DEFAULT_LIMIT),
     )
 }
 
-pub fn gitlab_list_todos(
+pub(crate) fn gitlab_list_todos(
     app: PathBuf,
     kind: String,
     limit: Option<u32>,
@@ -179,51 +182,67 @@ pub fn gitlab_list_todos(
     gitlab_list_todos_for(&config, &kind, limit.unwrap_or(DEFAULT_LIMIT))
 }
 
-pub fn gitlab_work_item_details(
-    app: PathBuf,
-    repo: String,
-    kind: String,
+pub(super) struct WorkItem<'a> {
+    config: GitlabConfig,
+    repo: &'a str,
+    kind: &'a str,
     number: i64,
-) -> Result<GitlabWorkItemDetails, String> {
-    let config = require_config(&app)?;
-    let repo = validate_repo(&repo)?;
-    gitlab_work_item_details_for(&config, &repo, &kind, number)
 }
 
-pub fn gitlab_work_item_thread(
-    app: PathBuf,
-    repo: String,
-    kind: String,
-    number: i64,
-) -> Result<GitlabWorkItemThread, String> {
-    let config = require_config(&app)?;
-    let repo = validate_repo(&repo)?;
-    gitlab_work_item_thread_for(&config, &repo, &kind, number)
-}
+impl<'a> WorkItem<'a> {
+    pub(super) fn bind(app: &Path, item: &'a super::Item) -> Result<Self, String> {
+        let config = require_config(app)?;
+        let repo = item.repo.trim();
+        if !valid_project_path(repo) {
+            return Err("Invalid GitLab project".into());
+        }
+        let (kind, number) = (item.kind.as_str(), item.number);
+        validate_item(kind, number)?;
+        let matches =
+            super::target::on_instance(&config.url, &item.url).is_some_and(|(base, url)| {
+                let actual = url.path().trim_end_matches('/');
+                let iid = number.to_string();
+                let resource = resource_for_kind(kind);
+                actual == work_item_url(&base, repo, resource, &iid).path()
+                    || actual
+                        == super::target::item_url(&base, repo.split('/').chain([resource, &iid]))
+                            .path()
+            });
+        if !matches {
+            return Err("Connect this item's GitLab instance in Settings → Integrations.".into());
+        }
+        Ok(Self {
+            config,
+            repo,
+            kind,
+            number,
+        })
+    }
 
-pub fn gitlab_work_item_comment(
-    app: PathBuf,
-    repo: String,
-    kind: String,
-    number: i64,
-    body: String,
-) -> Result<super::CommentReceipt, String> {
-    let config = require_config(&app)?;
-    let repo = validate_repo(&repo)?;
-    gitlab_work_item_comment_for(&config, &repo, &kind, number, &body)
-}
+    pub(super) fn details(&self) -> Result<GitlabWorkItemDetails, String> {
+        gitlab_work_item_details_for(&self.config, self.repo, self.kind, self.number)
+    }
 
-pub fn gitlab_mr_diff(app: PathBuf, repo: String, number: i64) -> Result<GitlabMrDiff, String> {
-    let config = require_config(&app)?;
-    let repo = validate_repo(&repo)?;
-    gitlab_mr_diff_for(&config, &repo, number)
+    pub(super) fn thread(&self) -> Result<GitlabWorkItemThread, String> {
+        gitlab_work_item_thread_for(&self.config, self.repo, self.kind, self.number)
+    }
+
+    pub(super) fn comment(&self, body: &str) -> Result<super::CommentReceipt, String> {
+        gitlab_work_item_comment_for(&self.config, self.repo, self.kind, self.number, body)
+    }
+
+    pub(super) fn diff(&self) -> Result<GitlabMrDiff, String> {
+        if self.kind != "pr" {
+            return Err("This issue has no pull request diff".into());
+        }
+        gitlab_mr_diff_for(&self.config, self.repo, self.number)
+    }
 }
 
 fn gitlab_list_work_items_for(
     config: &GitlabConfig,
     repo: &str,
     kind: &str,
-    assigned_to_me: bool,
     state: &str,
     limit: u32,
 ) -> Result<Vec<GitlabWorkItem>, String> {
@@ -235,17 +254,12 @@ fn gitlab_list_work_items_for(
         "opened"
     };
     let limit = limit.clamp(1, 100);
-    let assigned = if assigned_to_me {
-        "&scope=assigned_to_me"
-    } else {
-        "&scope=all"
-    };
     let path = format!(
-        "/projects/{}/{resource}?state={state}&order_by=updated_at&sort=desc&per_page={limit}&with_labels_details=true{assigned}",
+        "/projects/{}/{resource}?state={state}&order_by=updated_at&sort=desc&per_page={limit}&with_labels_details=true&scope=all",
         encode_path_component(repo)
     );
     let response = gitlab_get(config, &path)?;
-    parse_work_items(&response.value, kind, repo)
+    parse_work_items(&response.value, kind, repo, &config.url)
 }
 
 fn gitlab_list_todos_for(
@@ -262,7 +276,7 @@ fn gitlab_list_todos_for(
     let limit = limit.clamp(1, 100);
     let path = format!("/todos?state=pending&type={target_type}&per_page={limit}");
     let response = gitlab_get(config, &path)?;
-    parse_todos(&response.value, kind)
+    parse_todos(&response.value, kind, &config.url)
 }
 
 fn gitlab_work_item_details_for(
@@ -271,7 +285,6 @@ fn gitlab_work_item_details_for(
     kind: &str,
     number: i64,
 ) -> Result<GitlabWorkItemDetails, String> {
-    validate_item(kind, number)?;
     let path = item_path(repo, kind, number);
     let response = gitlab_get(config, &path)?;
     parse_work_item_details(&response.value, kind)
@@ -283,7 +296,6 @@ fn gitlab_work_item_thread_for(
     kind: &str,
     number: i64,
 ) -> Result<GitlabWorkItemThread, String> {
-    validate_item(kind, number)?;
     let path = format!(
         "{}/notes?order_by=created_at&sort=desc&per_page=100",
         item_path(repo, kind, number)
@@ -306,7 +318,6 @@ fn gitlab_work_item_comment_for(
     number: i64,
     body: &str,
 ) -> Result<super::CommentReceipt, String> {
-    validate_item(kind, number)?;
     let body = body.trim();
     if body.is_empty() {
         return Err("Comment cannot be empty".into());
@@ -329,7 +340,6 @@ fn gitlab_mr_diff_for(
     repo: &str,
     number: i64,
 ) -> Result<GitlabMrDiff, String> {
-    validate_item("pr", number)?;
     let path = format!(
         "/projects/{}/merge_requests/{number}/diffs?per_page=100",
         encode_path_component(repo)
@@ -390,17 +400,28 @@ fn item_path(repo: &str, kind: &str, number: i64) -> String {
     )
 }
 
-fn parse_work_items(value: &Value, kind: &str, repo: &str) -> Result<Vec<GitlabWorkItem>, String> {
+fn work_item_url(base: &Url, repo: &str, resource: &str, iid: &str) -> Url {
+    super::target::item_url(base, repo.split('/').chain(["-", resource, iid]))
+}
+
+fn parse_work_items(
+    value: &Value,
+    kind: &str,
+    repo: &str,
+    base: &str,
+) -> Result<Vec<GitlabWorkItem>, String> {
+    let base = Url::parse(base).map_err(|_| "GitLab URL is invalid")?;
     let rows = value
         .as_array()
         .ok_or_else(|| "GitLab did not return work items".to_string())?;
     Ok(rows
         .iter()
-        .filter_map(|row| parse_work_item(row, kind, repo))
+        .filter_map(|row| parse_work_item(row, kind, repo, &base, None))
         .collect())
 }
 
-fn parse_todos(value: &Value, kind: &str) -> Result<Vec<GitlabWorkItem>, String> {
+fn parse_todos(value: &Value, kind: &str, base: &str) -> Result<Vec<GitlabWorkItem>, String> {
+    let base = Url::parse(base).map_err(|_| "GitLab URL is invalid")?;
     let rows = value
         .as_array()
         .ok_or_else(|| "GitLab did not return to-do items".to_string())?;
@@ -414,10 +435,13 @@ fn parse_todos(value: &Value, kind: &str) -> Result<Vec<GitlabWorkItem>, String>
                 return None;
             }
             let target = row.get("target")?;
-            let mut item = parse_work_item(target, kind, &repo)?;
-            if item.url.is_empty() {
-                item.url = string_field(row, "target_url").unwrap_or_default();
-            }
+            let mut item = parse_work_item(
+                target,
+                kind,
+                &repo,
+                &base,
+                row.get("target_url").and_then(Value::as_str),
+            )?;
             if item.updated_at.is_empty() {
                 item.updated_at = string_field(row, "created_at").unwrap_or_default();
             }
@@ -427,7 +451,13 @@ fn parse_todos(value: &Value, kind: &str) -> Result<Vec<GitlabWorkItem>, String>
         .collect())
 }
 
-fn parse_work_item(row: &Value, kind: &str, repo: &str) -> Option<GitlabWorkItem> {
+fn parse_work_item(
+    row: &Value,
+    kind: &str,
+    repo: &str,
+    base: &Url,
+    fallback: Option<&str>,
+) -> Option<GitlabWorkItem> {
     let number = row.get("iid").and_then(Value::as_i64)?;
     if number <= 0 {
         return None;
@@ -446,7 +476,17 @@ fn parse_work_item(row: &Value, kind: &str, repo: &str) -> Option<GitlabWorkItem
         kind: kind.into(),
         number,
         title,
-        url: string_field(row, "web_url").unwrap_or_default(),
+        url: row
+            .get("web_url")
+            .and_then(Value::as_str)
+            .filter(|url| !url.trim().is_empty())
+            .or(fallback)
+            .map(str::trim)
+            .filter(|url| !url.is_empty())
+            .map(str::to_owned)
+            .unwrap_or_else(|| {
+                work_item_url(base, repo, resource_for_kind(kind), &number.to_string()).into()
+            }),
         state: normalize_state(&string_field(row, "state").unwrap_or_default()),
         updated_at: string_field(row, "updated_at").unwrap_or_default(),
         labels: parse_labels(row),
@@ -455,15 +495,6 @@ fn parse_work_item(row: &Value, kind: &str, repo: &str) -> Option<GitlabWorkItem
         repo: repo.into(),
         attention_reason: String::new(),
     })
-}
-
-fn validate_repo(repo: &str) -> Result<String, String> {
-    let repo = repo.trim();
-    if valid_project_path(repo) {
-        Ok(repo.to_string())
-    } else {
-        Err("Invalid GitLab project".into())
-    }
 }
 
 fn parse_work_item_details(value: &Value, kind: &str) -> Result<GitlabWorkItemDetails, String> {
@@ -1007,12 +1038,12 @@ fn valid_project_path(path: &str) -> bool {
         })
 }
 
-fn config_path(app: &Path) -> Result<PathBuf, String> {
-    Ok(app.join("gitlab-config.json"))
+fn config_path(app: &Path) -> PathBuf {
+    app.join("gitlab-config.json")
 }
 
 fn read_config(app: &Path) -> Result<Option<GitlabConfig>, String> {
-    let path = config_path(app)?;
+    let path = config_path(app);
     match fs::read_to_string(path) {
         Ok(raw) => {
             let mut config: GitlabConfig = serde_json::from_str(&raw)
@@ -1035,36 +1066,18 @@ fn require_config(app: &Path) -> Result<GitlabConfig, String> {
 }
 
 fn write_config(app: &Path, config: &GitlabConfig) -> Result<(), String> {
-    let path = config_path(app)?;
+    let path = config_path(app);
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     }
     let value = serde_json::to_string(config).map_err(|error| error.to_string())?;
-    write_secret_file(&path, &value)
+    use std::io::Write;
+    crate::private_file::replace(&path, |file| file.write_all(value.as_bytes()))
+        .map_err(|error| error.to_string())
 }
 
 fn delete_config(app: &Path) -> Result<(), String> {
-    let path = config_path(app)?;
-    match fs::remove_file(path) {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(error.to_string()),
-    }
-}
-
-fn write_secret_file(path: &Path, value: &str) -> Result<(), String> {
-    use std::io::Write;
-    use std::os::unix::fs::OpenOptionsExt;
-    let mut file = fs::OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(true)
-        .mode(0o600)
-        .open(path)
-        .map_err(|error| error.to_string())?;
-    file.write_all(value.as_bytes())
-        .map_err(|error| error.to_string())?;
-    Ok(())
+    crate::private_file::remove(&config_path(app)).map_err(|error| error.to_string())
 }
 
 fn expand_home(input: &str) -> PathBuf {

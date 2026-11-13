@@ -1,4 +1,4 @@
-//! Visual-only tool captions shared by restored desktop blocks and live tools.
+//! Visual-only tool captions shared by restored blocks and live tools.
 use super::{ToolCall, ToolState};
 use serde_json::Value;
 

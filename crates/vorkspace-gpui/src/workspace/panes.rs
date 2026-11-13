@@ -22,7 +22,7 @@ impl AppPane {
 
     pub fn same_resource(&self, other: &Self) -> bool {
         match (self, other) {
-            (Self::ConnectorItem(a), Self::ConnectorItem(b)) => a.key() == b.key(),
+            (Self::ConnectorItem(a), Self::ConnectorItem(b)) => a.detail_key() == b.detail_key(),
             (Self::Terminal { id: a, .. }, Self::Terminal { id: b, .. }) if *a != 0 => a == b,
             _ => self == other,
         }

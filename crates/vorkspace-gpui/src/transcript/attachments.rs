@@ -2,9 +2,11 @@ use super::*;
 use gpui::{AnyElement, Entity, ImageSource, RenderImage};
 use image::{AnimationDecoder, Frame, ImageDecoder, ImageReader, Limits};
 use std::{
-    fs::File,
+    fs::OpenOptions,
     io::{Cursor, Read},
+    os::unix::fs::OpenOptionsExt,
     path::PathBuf,
+    sync::LazyLock,
 };
 use vorkspace_ui::radius;
 
@@ -37,11 +39,7 @@ impl Attachment {
                 .is_some_and(|path| vorkspace_core::composer::image_mime(path).is_some());
         let data = match value["data"].take() {
             serde_json::Value::String(data) if !data.is_empty() => Some(Arc::from(data)),
-            _ => path
-                .as_ref()
-                .and_then(|path| path.to_str())
-                .filter(|path| vorkspace_core::remote::attachments::is_attachment_source(path))
-                .map(Arc::from),
+            _ => None,
         };
         Self {
             name: name.into(),
@@ -90,6 +88,7 @@ pub(super) struct Photo {
     loading: bool,
     mime: SharedString,
     image: Option<Arc<RenderImage>>,
+    _decode: Option<gpui::Task<()>>,
 }
 
 impl Photo {
@@ -115,48 +114,69 @@ impl Photo {
         self.data.len().saturating_add(pixels)
     }
 
-    fn new(data: Arc<str>, mime: SharedString, cx: &mut Context<Self>) -> Self {
-        let encoded = data.clone();
-        let format = mime.clone();
-        let work = cx.background_executor().spawn(async move {
-            if encoded.len() > MAX_ATTACHMENT_SOURCE_BYTES {
-                return Err("attachment image exceeds the encoded size limit".into());
-            }
-            let bytes = vorkspace_core::composer::decode_image_data(&encoded)
-                .map_err(|error| error.to_string())?;
-            decode_attachment_thumbnail(&bytes, &format)
+    fn new(
+        data: Arc<str>,
+        path: Option<PathBuf>,
+        mime: SharedString,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let loading = path.is_some() || data.len() <= MAX_ATTACHMENT_SOURCE_BYTES;
+        let decode = loading.then(|| {
+            let source = data.clone();
+            let format = mime.clone();
+            cx.spawn(async move |this, cx| {
+                let slot = DecodeSlot::acquire().await;
+                let work = cx.background_executor().spawn(async move {
+                    let _slot = slot;
+                    let bytes = match path {
+                        Some(path) => read_attachment_file(path),
+                        None => vorkspace_core::composer::decode_image_data(&source),
+                    }?;
+                    decode_attachment_thumbnail(&bytes, &format)
+                });
+                let image = work.await.ok();
+                let _ = this.update(cx, |this, cx| this.decoded(image, cx));
+            })
         });
-        cx.spawn(async move |this, cx| {
-            let image = work.await.ok();
-            let _ = this.update(cx, |this, cx| this.decoded(image, cx));
-        })
-        .detach();
         Self {
-            loading: true,
+            loading,
             data,
             mime,
             image: None,
+            _decode: decode,
         }
     }
+}
 
-    fn from_path(path: PathBuf, mime: SharedString, cx: &mut Context<Self>) -> Self {
-        let display_path: Arc<str> = Arc::from(path.to_string_lossy().as_ref());
-        let decode_mime = mime.clone();
-        let work = cx.background_executor().spawn(async move {
-            let bytes = read_attachment_file(path)?;
-            decode_attachment_thumbnail(&bytes, &decode_mime)
-        });
-        cx.spawn(async move |this, cx| {
-            let image = work.await.ok();
-            let _ = this.update(cx, |this, cx| this.decoded(image, cx));
-        })
-        .detach();
-        Self {
-            loading: true,
-            data: display_path,
-            mime,
-            image: None,
+// Thumbnail decoding can expand a small file to tens of MiB. Share the
+// admission limit across windows and keep full-screen previews independent.
+const CONCURRENT_THUMBNAILS: usize = 2;
+static THUMBNAIL_SLOTS: LazyLock<(async_channel::Sender<()>, async_channel::Receiver<()>)> =
+    LazyLock::new(|| {
+        let (return_slot, available) = async_channel::bounded(CONCURRENT_THUMBNAILS);
+        for _ in 0..CONCURRENT_THUMBNAILS {
+            return_slot.try_send(()).expect("empty thumbnail slot");
         }
+        (return_slot, available)
+    });
+
+struct DecodeSlot;
+
+impl DecodeSlot {
+    async fn acquire() -> Self {
+        THUMBNAIL_SLOTS
+            .1
+            .recv()
+            .await
+            .expect("thumbnail slot channel");
+        Self
+    }
+}
+
+impl Drop for DecodeSlot {
+    fn drop(&mut self) {
+        let returned = THUMBNAIL_SLOTS.0.try_send(());
+        debug_assert!(returned.is_ok());
     }
 }
 
@@ -171,10 +191,16 @@ const MAX_THUMBNAIL_BYTES: usize =
 const THUMBNAIL_CACHE_BYTES: usize = 64 * 1024 * 1024;
 
 fn read_attachment_file(path: PathBuf) -> Result<Vec<u8>, String> {
-    let file = File::open(path).map_err(|error| error.to_string())?;
-    if file.metadata().map_err(|error| error.to_string())?.len()
-        > MAX_ATTACHMENT_SOURCE_BYTES as u64
-    {
+    let file = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open(path)
+        .map_err(|error| error.to_string())?;
+    let metadata = file.metadata().map_err(|error| error.to_string())?;
+    if !metadata.is_file() {
+        return Err("Attachment is not a regular file.".into());
+    }
+    if metadata.len() > MAX_ATTACHMENT_SOURCE_BYTES as u64 {
         return Err("attachment image exceeds the encoded size limit".into());
     }
     let mut bytes = Vec::new();
@@ -218,9 +244,7 @@ fn thumbnail_frame(mut frame: Frame) -> Frame {
             frame.delay(),
         );
     }
-    for pixel in frame.buffer_mut().as_mut().as_chunks_mut::<4>().0 {
-        pixel.swap(0, 2);
-    }
+    crate::render_pixels::swap_red_blue(frame.buffer_mut());
     frame
 }
 
@@ -326,9 +350,7 @@ fn render_image_frame(image: &RenderImage, index: usize) -> Option<Frame> {
     let mut buffer =
         image::RgbaImage::from_raw(size.width.0 as u32, size.height.0 as u32, bytes.to_vec())?;
     // GPUI RenderImage storage is BGRA; image::Frame expects RGBA.
-    for pixel in buffer.as_mut().as_chunks_mut::<4>().0 {
-        pixel.swap(0, 2);
-    }
+    crate::render_pixels::swap_red_blue(&mut buffer);
     Some(Frame::from_parts(buffer, 0, 0, image.delay(index)))
 }
 
@@ -420,11 +442,7 @@ impl TranscriptView {
                             .cloned();
                         let photo = cached.unwrap_or_else(|| {
                             let photo = cx.new(|cx| {
-                                let photo = if let Some(path) = path {
-                                    Photo::from_path(path, mime.clone(), cx)
-                                } else {
-                                    Photo::new(data.clone(), mime.clone(), cx)
-                                };
+                                let photo = Photo::new(data, path, mime, cx);
                                 cx.on_release(|photo, cx| {
                                     if let Some(image) = photo.image.take() {
                                         cx.drop_image(image, None);

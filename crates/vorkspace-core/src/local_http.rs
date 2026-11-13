@@ -22,10 +22,10 @@ pub(crate) struct Request {
     started: bool,
 }
 impl Request {
-    pub fn has_started(&self) -> bool {
+    pub(crate) fn has_started(&self) -> bool {
         self.started
     }
-    pub fn read_body(&mut self) -> Result<Vec<u8>, String> {
+    pub(crate) fn read_body(&mut self) -> Result<Vec<u8>, String> {
         if self.stopped.load(Ordering::Acquire) {
             return Err("Stopped".into());
         }
@@ -39,7 +39,7 @@ impl Request {
         }
         Ok(body)
     }
-    pub fn start(&mut self, status: u16, content_type: &str) -> Result<(), String> {
+    pub(crate) fn start(&mut self, status: u16, content_type: &str) -> Result<(), String> {
         self.headers(status, content_type, None)
     }
     fn headers(
@@ -57,11 +57,16 @@ impl Request {
             .unwrap_or_default();
         write!(self.stream, "HTTP/1.1 {status} Response\r\nContent-Type: {content_type}\r\n{length}Connection: close\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\n\r\n").map_err(|e| e.to_string())
     }
-    pub fn respond(&mut self, status: u16, content_type: &str, body: &[u8]) -> Result<(), String> {
+    pub(crate) fn respond(
+        &mut self,
+        status: u16,
+        content_type: &str,
+        body: &[u8],
+    ) -> Result<(), String> {
         self.headers(status, content_type, Some(body.len()))?;
         self.write(body)
     }
-    pub fn json(&mut self, status: u16, body: &serde_json::Value) -> Result<(), String> {
+    pub(crate) fn json(&mut self, status: u16, body: &serde_json::Value) -> Result<(), String> {
         self.respond(status, "application/json", body.to_string().as_bytes())
     }
     fn finish(&mut self) {
@@ -87,7 +92,7 @@ impl Request {
             }
         }
     }
-    pub fn write(&mut self, body: &[u8]) -> Result<(), String> {
+    pub(crate) fn write(&mut self, body: &[u8]) -> Result<(), String> {
         if self.stopped.load(Ordering::Acquire) {
             return Err("Stopped".into());
         }
@@ -104,7 +109,7 @@ pub(crate) struct Server {
     sockets: Arc<Mutex<HashMap<u64, TcpStream>>>,
 }
 impl Server {
-    pub fn start(
+    pub(crate) fn start(
         max_body: usize,
         handler: impl Fn(&mut Request) -> Result<(), String> + Send + Sync + 'static,
     ) -> Result<Self, String> {

@@ -51,6 +51,42 @@ fn window(section: Section, cx: &mut TestAppContext) -> WindowHandle<SettingsVie
 }
 
 #[gpui::test]
+fn discovery_is_scoped_to_the_visible_settings_page(cx: &mut TestAppContext) {
+    let root = tempfile::tempdir().unwrap();
+    let cwd = root.path().display().to_string();
+    let view = cx.new(|cx| {
+        SettingsView::new(
+            Section::General,
+            Preferences::default(),
+            SettingsContext {
+                cwd: cwd.clone(),
+                ..Default::default()
+            },
+            cx,
+        )
+    });
+    view.update(cx, |view, cx| {
+        assert!(view.discovery_task.is_none());
+        assert!(!view.discovery_loading);
+        view.select_section(Section::Skills, cx);
+        assert_eq!(
+            view.discovery_scope,
+            Some((data::DiscoveryPage::Skills, cwd.clone()))
+        );
+        assert!(view.discovery_loading);
+        view.select_section(Section::General, cx);
+        assert!(view.discovery_task.is_none());
+        assert!(view.discovery_scope.is_none());
+    });
+    cx.run_until_parked();
+    view.read_with(cx, |view, _| {
+        assert!(!view.discovery_loading);
+        assert!(view.discovery.binaries.is_empty());
+        assert!(view.discovery.skills.is_empty());
+    });
+}
+
+#[gpui::test]
 fn skills_document_has_its_own_full_height_pane_and_compact_actions(cx: &mut TestAppContext) {
     let window = window(Section::Skills, cx);
     window
@@ -119,6 +155,16 @@ fn skills_document_has_its_own_full_height_pane_and_compact_actions(cx: &mut Tes
     assert_eq!(left.size.width, px(700.));
     assert_eq!(right.size.width, px(700.));
     assert!(visual.debug_bounds("skill-document").unwrap().size.height > px(200.));
+    window
+        .update(visual, |view, window, cx| {
+            assert!(view.dismiss_transient(window, cx));
+            assert!(view.skill_preview.is_none());
+            assert!(view.skill_preview_text.is_none());
+            assert!(view.skill_documents.is_empty());
+        })
+        .unwrap();
+    visual.run_until_parked();
+    assert!(visual.debug_bounds("skill-preview-pane").is_none());
 }
 
 #[gpui::test]
@@ -180,13 +226,16 @@ fn bot_mascot_is_beside_name_and_sidebar_switch_stays_visible(cx: &mut TestAppCo
 #[gpui::test]
 fn models_menu_hides_and_restores_individual_models(cx: &mut TestAppContext) {
     use vorkspace_core::provider::Kind;
+    cx.update(input::bind);
     let window = window(Section::Providers, cx);
     window
         .update(cx, |view, _, cx| {
             view.discovery.binaries = vec![(Kind::Claude, Some("/bin/claude".into()))];
-            view.ctx.catalogs.insert(
-                "claude".into(),
-                vec![("a".into(), "Alpha".into()), ("b".into(), "Beta".into())],
+            let profile = view.catalog_profile(Kind::Claude, cx);
+            let generation = vorkspace_core::catalog::generation(Kind::Claude, &profile);
+            view.discovered_catalogs.insert(
+                (Kind::Claude, profile, generation),
+                vec![catalog_model("a", "Alpha"), catalog_model("b", "Beta")].into(),
             );
             cx.notify();
         })
@@ -220,6 +269,14 @@ fn models_menu_hides_and_restores_individual_models(cx: &mut TestAppContext) {
             assert!(view.prefs.hidden_models.is_empty())
         })
         .unwrap();
+    visual.simulate_keystrokes("down down enter");
+    visual.run_until_parked();
+    window
+        .update(visual, |view, _, _| {
+            assert_eq!(view.prefs.hidden_models, ["claude:b"]);
+            assert_eq!(view.model_active.as_deref(), Some("b"));
+        })
+        .unwrap();
 }
 
 #[gpui::test]
@@ -229,10 +286,12 @@ fn models_menu_scrolls_to_lower_rows(cx: &mut TestAppContext) {
     window
         .update(cx, |view, _, cx| {
             view.discovery.binaries = vec![(Kind::Claude, Some("/bin/claude".into()))];
-            view.ctx.catalogs.insert(
-                "claude".into(),
+            let profile = view.catalog_profile(Kind::Claude, cx);
+            let generation = vorkspace_core::catalog::generation(Kind::Claude, &profile);
+            view.discovered_catalogs.insert(
+                (Kind::Claude, profile, generation),
                 (0..30)
-                    .map(|n| (format!("model-{n}"), format!("Model {n}")))
+                    .map(|n| catalog_model(&format!("model-{n}"), &format!("Model {n}")))
                     .collect(),
             );
             cx.notify();
@@ -276,7 +335,7 @@ fn providers_without_an_open_conversation_list_their_loaded_models(cx: &mut Test
                     Default::default(),
                     vorkspace_core::catalog::generation(Kind::Codex, &Default::default()),
                 ),
-                vec![catalog_model("a", "Alpha")],
+                vec![catalog_model("a", "Alpha")].into(),
             );
             cx.notify();
         })
@@ -300,7 +359,7 @@ fn discovered_catalog_follows_the_selected_account_and_keeps_profiles_separate(
     use vorkspace_core::provider::Kind;
     let directory = tempfile::tempdir().unwrap();
     let store = std::sync::Arc::new(std::sync::Mutex::new(
-        vorkspace_core::store::Store::open(&directory.path().join("native.sqlite")).unwrap(),
+        vorkspace_core::store::Store::test(&directory.path().join("native.sqlite")).unwrap(),
     ));
     cx.update(|cx| crate::accounts::install(store, cx));
     let window = window(Section::Providers, cx);
@@ -324,7 +383,7 @@ fn discovered_catalog_follows_the_selected_account_and_keeps_profiles_separate(
                     default.clone(),
                     vorkspace_core::catalog::generation(Kind::Codex, &default),
                 ),
-                vec![catalog_model("default-model", "Default model")],
+                vec![catalog_model("default-model", "Default model")].into(),
             );
             view.discovered_catalogs.insert(
                 (
@@ -332,7 +391,7 @@ fn discovered_catalog_follows_the_selected_account_and_keeps_profiles_separate(
                     work.clone(),
                     vorkspace_core::catalog::generation(Kind::Codex, &work),
                 ),
-                vec![catalog_model("work-model", "Work model")],
+                vec![catalog_model("work-model", "Work model")].into(),
             );
             assert_eq!(
                 view.discovered_models(Kind::Codex, cx).unwrap()[0].id,
@@ -346,7 +405,7 @@ fn discovered_catalog_follows_the_selected_account_and_keeps_profiles_separate(
                     default.clone(),
                     vorkspace_core::catalog::generation(Kind::Codex, &default),
                 ),
-                vec![catalog_model("new-default-model", "New default model")],
+                vec![catalog_model("new-default-model", "New default model")].into(),
             );
             center.update(cx, |center, cx| {
                 center
@@ -380,7 +439,7 @@ fn cost_monitoring_link_setting_appears_only_for_aws_bedrock(cx: &mut TestAppCon
     use vorkspace_core::{provider::Kind, usage::Snapshot};
     let directory = tempfile::tempdir().unwrap();
     let store = std::sync::Arc::new(std::sync::Mutex::new(
-        vorkspace_core::store::Store::open(&directory.path().join("native.sqlite")).unwrap(),
+        vorkspace_core::store::Store::test(&directory.path().join("native.sqlite")).unwrap(),
     ));
     cx.update(|cx| crate::accounts::install(store, cx));
     let window = window(Section::Providers, cx);
@@ -457,7 +516,7 @@ fn summary_picker_saves_effort_and_clears_it_when_changing_models(cx: &mut TestA
                     Default::default(),
                     vorkspace_core::catalog::generation(Kind::Codex, &Default::default()),
                 ),
-                vec![catalog_model("alpha", "Alpha"), beta],
+                vec![catalog_model("alpha", "Alpha"), beta].into(),
             );
             cx.notify();
         })
@@ -635,7 +694,7 @@ fn native_settings_captures() {
                     notifications: false,
                     ..Default::default()
                 };
-                vorkspace_ui::theme::configure(&prefs, light, false);
+                vorkspace_ui::theme::configure(&prefs, light);
                 let mut cx = gpui::HeadlessAppContext::with_platform(
                     Arc::new(gpui_apple::AppleTextSystem::new()),
                     Arc::new(crate::assets::Assets),
@@ -677,7 +736,7 @@ fn native_settings_captures() {
                                         &Default::default(),
                                     ),
                                 ),
-                                vec![catalog_model("gpt-6.1-terra", "GPT-6.1 Terra")],
+                                vec![catalog_model("gpt-6.1-terra", "GPT-6.1 Terra")].into(),
                             );
                             view
                         });

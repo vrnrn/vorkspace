@@ -1,4 +1,6 @@
 use super::*;
+use PathCommand::{Line, Move};
+
 fn c(sha: &str, parents: &[&str]) -> GraphCommit {
     GraphCommit {
         sha: sha.into(),
@@ -29,8 +31,16 @@ fn expect(rows: &[Row], want: &[(&str, &[&str])]) {
         .collect();
     assert_eq!(ids(rows), want);
 }
-fn ds(graph: &RowGraph) -> Vec<&str> {
-    graph.paths.iter().map(|p| p.d.as_str()).collect()
+fn paths(graph: &RowGraph) -> Vec<&[PathCommand]> {
+    graph.paths.iter().map(|p| p.commands.as_slice()).collect()
+}
+fn arc(x: f32, y: f32, radius: f32, sweep: bool) -> PathCommand {
+    PathCommand::Arc {
+        x,
+        y,
+        radius,
+        sweep,
+    }
 }
 fn merge() -> Vec<Row> {
     layout(&[
@@ -70,7 +80,13 @@ fn second_child_forks_and_stash_index_keeps_through_lane() {
     let rows = layout(&[c("C", &["B"]), c("D", &["B"]), c("B", &[])]);
     expect(&rows, &[("C", &["B"]), ("D", &["B", "B"]), ("B", &[])]);
     let tip = row_graph(&rows[1], SWIMLANE_HEIGHT);
-    assert_eq!(ds(&tip), ["M 11 0 V 22", "M 22 11 V 22"]);
+    assert_eq!(
+        paths(&tip),
+        [
+            &[Move(11., 0.), Line(11., 22.)],
+            &[Move(22., 11.), Line(22., 22.)]
+        ]
+    );
 
     let rows = layout(&[
         with_ref(c("A", &["M"]), "main", true),
@@ -91,8 +107,14 @@ fn second_child_forks_and_stash_index_keeps_through_lane() {
             ("M", &[]),
         ],
     );
-    assert!(ds(&row_graph(&rows[2], SWIMLANE_HEIGHT)).contains(&"M 22 0 V 22"));
-    assert!(ds(&row_graph(&rows[5], SWIMLANE_HEIGHT)).contains(&"M 22 0 A 11 11 0 0 1 11 11 H 11"));
+    assert!(
+        paths(&row_graph(&rows[2], SWIMLANE_HEIGHT))
+            .contains(&&[Move(22., 0.), Line(22., 22.)][..])
+    );
+    assert!(
+        paths(&row_graph(&rows[5], SWIMLANE_HEIGHT))
+            .contains(&&[Move(22., 0.), arc(11., 11., 11., true), Line(11., 11.)][..])
+    );
 }
 #[test]
 fn current_branch_uses_the_ref_color() {
@@ -110,16 +132,24 @@ fn taller_rows_extend_lanes_not_nodes() {
         m.circles.iter().map(|c| (c.cy, c.r)).collect::<Vec<_>>(),
         [(22., 6.), (22., 3.)]
     );
-    assert!(m.paths[0].d.contains("A 11 11 0 0 1 22 33 V 44"));
+    assert!(m.paths[0].commands.starts_with(&[
+        Move(11., 22.),
+        arc(22., 33., 11., true),
+        Line(22., 44.)
+    ]));
     let join = row_graph(&rows[3], 44.);
-    assert!(join.paths[0].d.contains("M 22 0 V 11 A 11 11 0 0 1 11 22"));
+    assert!(join.paths[0].commands.starts_with(&[
+        Move(22., 0.),
+        Line(22., 11.),
+        arc(11., 22., 11., true)
+    ]));
 }
 #[test]
 fn linear_merge_and_join_paths() {
     let rows = layout(&[c("c", &["b"]), c("b", &["a"])]);
     let g = row_graph(&rows[0], SWIMLANE_HEIGHT);
     assert_eq!(g.width, 22.);
-    assert_eq!(ds(&g), ["M 11 11 V 22"]);
+    assert_eq!(paths(&g), [&[Move(11., 11.), Line(11., 22.)]]);
     assert_eq!(
         g.circles,
         [Circle {
@@ -132,12 +162,23 @@ fn linear_merge_and_join_paths() {
     );
     let rows = merge();
     assert_eq!(
-        ds(&row_graph(&rows[0], SWIMLANE_HEIGHT)),
-        ["M 11 11 A 11 11 0 0 1 22 22 M 11 11 H 11 ", "M 11 11 V 22"]
+        paths(&row_graph(&rows[0], SWIMLANE_HEIGHT)),
+        [
+            &[
+                Move(11., 11.),
+                arc(22., 22., 11., true),
+                Move(11., 11.),
+                Line(11., 11.)
+            ][..],
+            &[Move(11., 11.), Line(11., 22.)][..]
+        ]
     );
     assert_eq!(
-        ds(&row_graph(&rows[3], SWIMLANE_HEIGHT)),
-        ["M 22 0 A 11 11 0 0 1 11 11 H 11", "M 11 0 V 11"]
+        paths(&row_graph(&rows[3], SWIMLANE_HEIGHT)),
+        [
+            &[Move(22., 0.), arc(11., 11., 11., true), Line(11., 11.)][..],
+            &[Move(11., 0.), Line(11., 11.)][..]
+        ]
     );
 }
 #[test]
@@ -153,10 +194,16 @@ fn shifted_lane_draws_elbows_and_head_has_cutout() {
     ]);
     let ids: Vec<_> = rows[4].input.iter().map(|l| l.id.as_str()).collect();
     assert_eq!(ids, ["B", "B", "X"]);
-    assert!(
-        ds(&row_graph(&rows[4], SWIMLANE_HEIGHT))
-            .contains(&"M 33 0 V 6 A 5 5 0 0 1 28 11 H 27 A 5 5 0 0 0 22 16 V 22")
-    );
+    assert!(paths(&row_graph(&rows[4], SWIMLANE_HEIGHT)).contains(
+        &&[
+            Move(33., 0.),
+            Line(33., 6.),
+            arc(28., 11., 5., true),
+            Line(27., 11.),
+            arc(22., 16., 5., false),
+            Line(22., 22.)
+        ][..]
+    ));
     let mut head = c("c", &["b"]);
     head.head = true;
     let g = row_graph(&layout(&[head])[0], SWIMLANE_HEIGHT);

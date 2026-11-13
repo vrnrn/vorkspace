@@ -484,7 +484,7 @@ impl UsageFooter {
                         .has_footer_auth(self.kind, &self.key.profile.id)
                 }))
     }
-    /// React's AccountSwitchRow, above the sign-in panel.
+    /// The account switch row, above the sign-in panel.
     fn account_row(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
         let label = crate::accounts::get(cx)
             .and_then(|center| {

@@ -17,15 +17,12 @@ impl Inbox {
                 && self.state.jira_filter.mode != "jql"
                 && !self.state.hidden_jira_projects.is_empty())
     }
-    pub(crate) fn filters_changed(&mut self, refetch: bool, cx: &mut Context<Self>) {
+    pub(crate) fn filters_changed(&mut self, cx: &mut Context<Self>) {
         self.save(cx);
         if self.active
-            && let Some(item) = self.visible_items(cx).first()
+            && let Some(key) = self.first_visible_key(cx)
         {
-            self.select(item.key(), cx);
-        }
-        if refetch {
-            self.refresh(cx);
+            self.select(key, cx);
         }
         cx.notify();
     }
@@ -47,7 +44,7 @@ impl Inbox {
                 )
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.state.filters.assigned_to_me = !this.state.filters.assigned_to_me;
-                    this.filters_changed(true, cx);
+                    this.filters_changed(cx);
                 }))
                 .into_any_element(),
             );
@@ -63,7 +60,7 @@ impl Inbox {
                 menu_row(format!("inbox-time-{time}"), label, f.time == time)
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.state.filters.time = time.into();
-                        this.filters_changed(false, cx);
+                        this.filters_changed(cx);
                     }))
                     .into_any_element(),
             );
@@ -89,7 +86,7 @@ impl Inbox {
                             "Closed" => s.closed = !s.closed,
                             _ => s.merged = !s.merged,
                         }
-                        this.filters_changed(true, cx);
+                        this.filters_changed(cx);
                     }))
                     .into_any_element(),
             );
@@ -115,7 +112,7 @@ impl Inbox {
                     )
                     .on_click(cx.listener(move |this, _, _, cx| {
                         toggle(&mut this.state.filters.hidden_kinds, kind.into());
-                        this.filters_changed(false, cx);
+                        this.filters_changed(cx);
                     }))
                     .into_any_element(),
                 );
@@ -129,10 +126,10 @@ impl Inbox {
                         project_name(project),
                         !f.hidden_projects.contains(&key),
                     )
-                    .child(self.project_mark(&key, 12.))
+                    .child(crate::project_mark::project_icon(&key, 12.))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         toggle(&mut this.state.filters.hidden_projects, key.clone());
-                        this.filters_changed(false, cx);
+                        this.filters_changed(cx);
                     }))
                     .into_any_element(),
                 );
@@ -152,7 +149,7 @@ impl Inbox {
                     )
                     .on_click(cx.listener(move |this, _, _, cx| {
                         toggle(&mut this.state.hidden_jira_projects, id.clone());
-                        this.filters_changed(true, cx);
+                        this.filters_changed(cx);
                     }))
                     .into_any_element(),
                 );
@@ -166,7 +163,7 @@ impl Inbox {
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.state.filters = model::Filters::default();
                     this.state.hidden_jira_projects.clear();
-                    this.filters_changed(true, cx);
+                    this.filters_changed(cx);
                 }))
                 .into_any_element(),
         );
@@ -192,50 +189,10 @@ impl Inbox {
         )
         .into_any_element()
     }
-    pub(super) fn connection_menu(&self, cx: &mut Context<Self>) -> AnyElement {
-        let weak = cx.entity().downgrade();
-        popover(
-            "inbox-connections-menu",
-            Anchor::Slot(self.connection_anchor.clone()),
-        )
-        .width(272.)
-        .padding(4.)
-        .on_dismiss(move |_, cx| {
-            let _ = weak.update(cx, |this, cx| {
-                this.connections_open = false;
-                cx.notify();
-            });
-        })
-        .child(caption("Connections"))
-        .children(self.state.connectors.enabled_providers().map(|provider| {
-            let connected = self
-                .snapshot
-                .connections
-                .get(provider)
-                .is_some_and(|s| s.connected);
-            let label = format!(
-                "{} {}",
-                if connected { "Manage" } else { "Connect" },
-                model::provider_label(provider)
-            );
-            page::action(format!("inbox-connect-{provider}"), label.clone(), true)
-                .debug_selector(move || format!("inbox-connect-{provider}"))
-                .w_full()
-                .justify_start()
-                .gap(px(8.))
-                .child(provider_mark(provider))
-                .child(label)
-                .on_click(
-                    cx.listener(move |this, _, _, cx| this.open_connection(provider.into(), cx)),
-                )
-        }))
-        .into_any_element()
-    }
-
     pub(super) fn connection_dialog(&self, cx: &mut Context<Self>) -> AnyElement {
         let mut background = pane_fill();
         background.a = 0.9;
-        let provider = self.connect_provider.clone().unwrap_or_default();
+        let provider = self.connect.provider.clone().unwrap_or_default();
         let connected = self
             .snapshot
             .connections
@@ -285,15 +242,9 @@ impl Inbox {
                             .child(page::title().flex_1().min_w_0().child(title))
                             .child(
                                 icon_button("inbox-close-connect", "Close connection", "close")
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        if !this.connecting {
-                                            this.connect_provider = None;
-                                            this.connect_token.update(cx, |input, cx| {
-                                                input.set_text(String::new(), cx)
-                                            });
-                                            cx.notify();
-                                        }
-                                    })),
+                                    .on_click(
+                                        cx.listener(|this, _, _, cx| this.dismiss_connection(cx)),
+                                    ),
                             ),
                     )
                     .child(page::body().child(hint))
@@ -302,7 +253,7 @@ impl Inbox {
                             page::field_frame()
                                 .border_1()
                                 .border_color(page::divider())
-                                .child(self.connect_url.clone()),
+                                .child(self.connect.url.clone()),
                         )
                     })
                     .when(provider == "jira", |d| {
@@ -310,7 +261,7 @@ impl Inbox {
                             page::field_frame()
                                 .border_1()
                                 .border_color(page::divider())
-                                .child(self.connect_email.clone()),
+                                .child(self.connect.email.clone()),
                         )
                     })
                     .when(provider != "github", |d| {
@@ -318,10 +269,10 @@ impl Inbox {
                             page::field_frame()
                                 .border_1()
                                 .border_color(page::divider())
-                                .child(self.connect_token.clone()),
+                                .child(self.connect.token.clone()),
                         )
                     })
-                    .when_some(self.connect_error.clone(), |d, text| d.child(error(text)))
+                    .when_some(self.connect.error.clone(), |d, text| d.child(error(text)))
                     .child(
                         div()
                             .flex()
@@ -334,7 +285,7 @@ impl Inbox {
                                         "inbox-disconnect",
                                         "Disconnect",
                                         true,
-                                        self.connecting,
+                                        self.connect.connecting,
                                     )
                                     .child("Disconnect")
                                     .on_click(cx.listener(|this, _, _, cx| this.connect(true, cx))),
@@ -349,16 +300,20 @@ impl Inbox {
                             })
                             .child(div().flex_1())
                             .child({
-                                let label = if self.connecting {
+                                let label = if self.connect.connecting {
                                     "Connecting…"
                                 } else if provider == "github" {
                                     "Check again"
                                 } else {
                                     "Connect"
                                 };
-                                page::primary("inbox-connect-submit", label, self.connecting)
-                                    .child(label)
-                                    .on_click(cx.listener(|this, _, _, cx| this.connect(false, cx)))
+                                page::primary(
+                                    "inbox-connect-submit",
+                                    label,
+                                    self.connect.connecting,
+                                )
+                                .child(label)
+                                .on_click(cx.listener(|this, _, _, cx| this.connect(false, cx)))
                             }),
                     ),
             )
@@ -368,13 +323,13 @@ impl Inbox {
         let weak = cx.entity().downgrade();
         popover(
             "inbox-project-menu",
-            Anchor::Slot(self.project_anchor.clone()),
+            Anchor::Slot(self.start.project_anchor.clone()),
         )
         .width(240.)
         .padding(4.)
         .on_dismiss(move |_, cx| {
             let _ = weak.update(cx, |this, cx| {
-                this.project_picker = false;
+                this.start.project_picker = false;
                 cx.notify();
             });
         })
@@ -383,19 +338,23 @@ impl Inbox {
             menu_row(
                 format!("inbox-start-project-{ix}"),
                 project_name(project),
-                self.start_bot.is_none() && *project == self.start_project,
+                self.start.bot.is_none() && *project == self.start.project,
             )
-            .child(self.project_mark(&project.to_string_lossy(), 14.))
+            .child(crate::project_mark::project_icon(
+                &project.to_string_lossy(),
+                14.,
+            ))
             .on_click(cx.listener(move |this, _, _, cx| {
-                this.start_project = path.clone();
-                this.start_bot = None;
-                this.destination_explicit = true;
-                this.project_picker = false;
+                this.start.project = path.clone();
+                this.start.bot = None;
+                this.start.destination_explicit = true;
+                this.start.project_picker = false;
                 cx.notify();
             }))
         }))
         .children(
-            self.bots
+            self.start
+                .bots
                 .iter()
                 .filter(|_| {
                     self.item()
@@ -406,13 +365,13 @@ impl Inbox {
                     menu_row(
                         format!("inbox-start-bot-{id}"),
                         name.clone(),
-                        self.start_bot.as_ref() == Some(&id),
+                        self.start.bot.as_ref() == Some(&id),
                     )
                     .child(icon("bot", 14.))
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        this.start_bot = Some(id.clone());
-                        this.destination_explicit = true;
-                        this.project_picker = false;
+                        this.start.bot = Some(id.clone());
+                        this.start.destination_explicit = true;
+                        this.start.project_picker = false;
                         cx.notify();
                     }))
                 }),
@@ -424,13 +383,13 @@ impl Inbox {
         let weak = cx.entity().downgrade();
         popover(
             "inbox-action-menu",
-            Anchor::Slot(self.action_anchor.clone()),
+            Anchor::Slot(self.actions.anchor.clone()),
         )
         .width(272.)
         .padding(4.)
         .on_dismiss(move |_, cx| {
             let _ = weak.update(cx, |this, cx| {
-                this.action_menu = false;
+                this.actions.menu = false;
                 cx.notify();
             });
         })
@@ -457,10 +416,10 @@ impl Inbox {
                 page::row(
                     format!("inbox-merge-{name}"),
                     label,
-                    self.merge_action == name,
+                    self.actions.merge_action == name,
                 )
                 .role(Role::MenuItemRadio)
-                .aria_toggled(if self.merge_action == name {
+                .aria_toggled(if self.actions.merge_action == name {
                     gpui::Toggled::True
                 } else {
                     gpui::Toggled::False
@@ -470,7 +429,7 @@ impl Inbox {
                 .items_start()
                 .gap(px(8.))
                 .child(div().mt(px(4.)).size(px(6.)).rounded_full().bg(
-                    if self.merge_action == name {
+                    if self.actions.merge_action == name {
                         accent_color()
                     } else {
                         content(0.2)
@@ -483,8 +442,8 @@ impl Inbox {
                         .child(page::meta().child(description)),
                 )
                 .on_click(cx.listener(move |this, _, _, cx| {
-                    this.merge_action = name.into();
-                    this.action_menu = false;
+                    this.actions.merge_action = name.into();
+                    this.actions.menu = false;
                     cx.notify();
                 }))
             }),
@@ -492,8 +451,8 @@ impl Inbox {
         .into_any_element()
     }
     pub(super) fn action_confirmation(&self, cx: &mut Context<Self>) -> AnyElement {
-        let action_name = self.confirm_action.clone().unwrap_or_default();
-        let details = self.details.clone().unwrap_or_default();
+        let action_name = self.actions.confirm_action.clone().unwrap_or_default();
+        let details = self.detail.details.clone().unwrap_or_default();
         let source = if details.head_ref_name.is_empty() {
             "this branch".into()
         } else {
@@ -555,11 +514,11 @@ impl Inbox {
             ),
         };
         let anchor = match action_name.as_str() {
-            "ready" => self.pr_action_anchors[0].clone(),
-            "draft" => self.pr_action_anchors[1].clone(),
-            "close" => self.pr_action_anchors[2].clone(),
-            "reopen" => self.pr_action_anchors[3].clone(),
-            _ => self.action_anchor.clone(),
+            "ready" => self.actions.pr_action_anchors[0].clone(),
+            "draft" => self.actions.pr_action_anchors[1].clone(),
+            "close" => self.actions.pr_action_anchors[2].clone(),
+            "reopen" => self.actions.pr_action_anchors[3].clone(),
+            _ => self.actions.anchor.clone(),
         };
         let weak = cx.entity().downgrade();
         popover("inbox-pr-confirmation", Anchor::Slot(anchor))
@@ -568,9 +527,9 @@ impl Inbox {
             .padding(12.)
             .on_dismiss(move |_, cx| {
                 let _ = weak.update(cx, |this, cx| {
-                    if !this.acting {
-                        this.confirm_action = None;
-                        this.action_error = None;
+                    if !this.actions.acting {
+                        this.actions.confirm_action = None;
+                        this.actions.error = None;
                         cx.notify();
                     }
                 });
@@ -586,7 +545,7 @@ impl Inbox {
                     .child(page::label().font_weight(FontWeight::MEDIUM).child(title))
                     .child(page::meta().child(detail)),
             )
-            .when_some(self.action_error.clone(), |d, text| {
+            .when_some(self.actions.error.clone(), |d, text| {
                 d.child(
                     page::meta()
                         .mt(px(8.))
@@ -602,21 +561,26 @@ impl Inbox {
                     .justify_end()
                     .gap(px(8.))
                     .child(
-                        page::secondary("inbox-action-cancel", "Cancel", false, self.acting)
-                            .child("Cancel")
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                if !this.acting {
-                                    this.confirm_action = None;
-                                    this.action_error = None;
-                                    cx.notify();
-                                }
-                            })),
+                        page::secondary(
+                            "inbox-action-cancel",
+                            "Cancel",
+                            false,
+                            self.actions.acting,
+                        )
+                        .child("Cancel")
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            if !this.actions.acting {
+                                this.actions.confirm_action = None;
+                                this.actions.error = None;
+                                cx.notify();
+                            }
+                        })),
                     )
                     .child(
                         action_enabled(
                             "inbox-action-confirm",
-                            if self.acting { progress } else { label },
-                            !self.acting,
+                            if self.actions.acting { progress } else { label },
+                            !self.actions.acting,
                         )
                         .font_weight(FontWeight::MEDIUM)
                         .bg(if action_name == "close" {

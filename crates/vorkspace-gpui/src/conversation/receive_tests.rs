@@ -2,46 +2,38 @@ use super::*;
 use gpui::{TestAppContext, WindowHandle};
 use vorkspace_core::{store::Store, transcript::Row};
 
-fn update(index: usize, finished: bool) -> vorkspace_runtime::runtime::Update {
-    vorkspace_runtime::runtime::Update {
-        source_len: None,
-        bot_turn_start: None,
-        activity: None,
-        worktree_cwd: None,
-        commands: None,
-        provider_turn_id: None,
-        turn_ready: false,
-        follow_up_delivered: vec![],
-        follow_up_errors: vec![],
-        delivered: None,
-        start: index,
-        rows: vec![Row {
-            role: "assistant".into(),
-            text: format!("Synthetic update {index}"),
-            first: true,
-            sent_at: None,
-        }],
-        provider_id: None,
-        provider_reset: false,
-        model: None,
-        config_model: None,
-        config_settings: None,
-        context: None,
-        metrics: None,
-        usage_limit: None,
-        approvals: vec![],
-        approvals_resolved: vec![],
-        questions: vec![],
-        questions_resolved: vec![],
-        handoff: None,
+use vorkspace_runtime::runtime::{
+    HistoryRecovery, ProviderBinding, TranscriptPatch, TurnOutcome, TurnSettlement, TurnTransition,
+    Update,
+};
+
+fn synthetic_row(index: usize) -> Row {
+    Row {
+        role: "assistant".into(),
+        text: format!("Synthetic update {index}"),
+        first: true,
+        sent_at: None,
+    }
+}
+
+fn update(index: usize, finished: bool) -> Update {
+    Update {
+        transcript: TranscriptPatch::Tail {
+            start: index,
+            rows: vec![synthetic_row(index)],
+        },
         status: format!("Synthetic status {index}"),
-        finished,
-        history_recovery: None,
+        transition: if finished {
+            TurnTransition::settled(TurnOutcome::Completed)
+        } else {
+            TurnTransition::Progress
+        },
+        ..Default::default()
     }
 }
 
 fn conversation(cx: &mut TestAppContext) -> WindowHandle<Conversation> {
-    let store = Store::open(Path::new(":memory:")).unwrap();
+    let store = Store::test(Path::new(":memory:")).unwrap();
     let summary = store.create("codex", "/missing/receiver-fixture").unwrap();
     let window = cx.update(|cx| {
         input::bind(cx);
@@ -59,6 +51,170 @@ fn conversation(cx: &mut TestAppContext) -> WindowHandle<Conversation> {
     window
 }
 
+#[gpui::test]
+fn a_turn_binding_tracks_its_own_updates_and_preserves_an_independent_replacement(
+    cx: &mut TestAppContext,
+) {
+    let window = conversation(cx);
+    window
+        .update(cx, |view, _, cx| {
+            view.summary.provider_id = Some("admitted-thread".into());
+            let mut projection = turn_projection::TurnProjection::new(
+                view.submission_generation,
+                view.summary.provider.clone(),
+                view.settings.account.id.clone(),
+                view.summary.provider_id.clone(),
+                None,
+            );
+            for id in ["first-observed-thread", "second-observed-thread"] {
+                projection.apply(
+                    view,
+                    Update {
+                        binding: ProviderBinding::Set(Some(id.into())),
+                        ..Default::default()
+                    },
+                    cx,
+                );
+                assert_eq!(view.summary.provider_id.as_deref(), Some(id));
+            }
+            view.summary.provider_id = Some("independent-thread".into());
+            let current_context = vorkspace_core::context::Usage {
+                used: 990,
+                window: Some(1000),
+            };
+            view.context = Some(current_context);
+            projection.apply(
+                view,
+                Update {
+                    binding: ProviderBinding::Set(Some("second-observed-thread".into())),
+                    context: Some(Default::default()),
+                    transition: TurnTransition::settled(TurnOutcome::Completed),
+                    ..Default::default()
+                },
+                cx,
+            );
+            assert_eq!(
+                view.summary.provider_id.as_deref(),
+                Some("independent-thread")
+            );
+            assert_eq!(view.context, Some(current_context));
+        })
+        .unwrap();
+}
+
+#[gpui::test]
+fn saved_provider_feedback_updates_the_projection_without_resaving_or_overriding_a_choice(
+    cx: &mut TestAppContext,
+) {
+    let window = conversation(cx);
+    let (store, id) = window
+        .update(cx, |view, _, cx| {
+            use vorkspace_core::agent::ConfigurationPatch;
+            use vorkspace_runtime::runtime::ProviderConfiguration;
+
+            view.settings.revision = 7;
+            view.summary.provider_id = Some("source-thread".into());
+            let id = view.summary.id;
+            let patch = ConfigurationPatch {
+                model: Some("observed-model".into()),
+                model_settings: [("fast".into(), "true".into())].into(),
+            };
+            {
+                let saved = locked(&view.store).unwrap();
+                saved.provider_id(id, "source-thread").unwrap();
+                saved.save_agent_preferences(id, &view.settings).unwrap();
+                assert!(
+                    saved
+                        .record_provider_configuration(
+                            vorkspace_core::store::ProviderSource {
+                                session: id,
+                                provider: &view.summary.provider,
+                                account: &view.settings.account.id,
+                                provider_id: Some("source-thread"),
+                                revision: 7,
+                            },
+                            &patch
+                        )
+                        .unwrap()
+                );
+            }
+            let configuration = ProviderConfiguration {
+                revision: 7,
+                provider_id: Some("source-thread".into()),
+                patch,
+            };
+            let mut projection = turn_projection::TurnProjection::new(
+                view.submission_generation,
+                view.summary.provider.clone(),
+                view.settings.account.id.clone(),
+                view.summary.provider_id.clone(),
+                None,
+            );
+            projection.apply(
+                view,
+                Update {
+                    configuration: Some(configuration.clone()),
+                    status: "Ready".into(),
+                    ..Default::default()
+                },
+                cx,
+            );
+            assert_eq!(view.settings.revision, 7);
+            assert_eq!(view.model.as_deref(), Some("observed-model"));
+            assert!(view.settings.fast);
+
+            view.settings.revision = 8;
+            view.settings.model = Some("deliberate-model".into());
+            view.model = view.settings.model.clone();
+            view.settings.fast = false;
+            locked(&view.store)
+                .unwrap()
+                .configure_agent(id, &view.summary.provider, &view.settings)
+                .unwrap();
+            projection.apply(
+                view,
+                Update {
+                    configuration: Some(configuration),
+                    status: "Ready".into(),
+                    ..Default::default()
+                },
+                cx,
+            );
+            assert_eq!(view.model.as_deref(), Some("deliberate-model"));
+            assert!(!view.settings.fast);
+            (view.store.clone(), id)
+        })
+        .unwrap();
+    cx.run_until_parked();
+    let saved = locked(&store)
+        .unwrap()
+        .agent_preferences(id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(saved.revision, 8);
+    assert_eq!(saved.model.as_deref(), Some("deliberate-model"));
+    assert!(!saved.fast);
+}
+
+#[gpui::test]
+fn a_stale_resource_stop_cannot_cancel_the_next_turn(cx: &mut TestAppContext) {
+    let window = conversation(cx);
+    window
+        .update(cx, |view, _, cx| {
+            let old = vorkspace_core::process::TurnToken::from(&view.cancel);
+            view.cancel = Arc::new(AtomicBool::new(false));
+            view.begin_turn(cx);
+            let current = vorkspace_core::process::TurnToken::from(&view.cancel);
+            assert!(!view.stop_running_turn(&old, cx));
+            assert!(view.responding());
+            assert!(!view.cancel.load(Ordering::Relaxed));
+            assert!(view.stop_running_turn(&current, cx));
+            assert!(view.is_stopping());
+            assert!(view.cancel.load(Ordering::Relaxed));
+        })
+        .unwrap();
+}
+
 fn start_receiver(
     window: WindowHandle<Conversation>,
     rx: async_channel::Receiver<vorkspace_runtime::runtime::Update>,
@@ -69,14 +225,63 @@ fn start_receiver(
             view.begin_turn(cx);
             view.receive_turn_updates(
                 rx,
-                view.submission_generation,
-                view.summary.provider.clone(),
-                view.settings.account.id.clone(),
-                None,
+                turn_projection::TurnProjection::new(
+                    view.submission_generation,
+                    view.summary.provider.clone(),
+                    view.settings.account.id.clone(),
+                    view.summary.provider_id.clone(),
+                    None,
+                ),
                 cx,
             );
         })
         .unwrap();
+}
+
+#[gpui::test]
+fn resolving_one_request_publishes_attention_while_another_remains(cx: &mut TestAppContext) {
+    let window = conversation(cx);
+    let entity = window.entity(cx).unwrap();
+    let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    cx.update(|cx| {
+        let seen = seen.clone();
+        cx.subscribe(&entity, move |view, event: &SessionChanged, cx| {
+            if matches!(event, SessionChanged::Attention) {
+                seen.borrow_mut().push(
+                    view.read(cx)
+                        .pending_notification_inputs(cx)
+                        .into_iter()
+                        .map(|input| input.request_id)
+                        .collect::<Vec<_>>(),
+                );
+            }
+        })
+        .detach();
+    });
+    window
+        .update(cx, |view, _, cx| {
+            view.begin_turn(cx);
+            view.request_approval_for_test("first", "First");
+            view.request_approval_for_test("second", "Second");
+            let mut projection = turn_projection::TurnProjection::new(
+                view.submission_generation,
+                view.summary.provider.clone(),
+                view.settings.account.id.clone(),
+                view.summary.provider_id.clone(),
+                None,
+            );
+            projection.apply(
+                view,
+                Update {
+                    approvals_resolved: vec!["first".into()],
+                    ..Default::default()
+                },
+                cx,
+            );
+        })
+        .unwrap();
+    cx.run_until_parked();
+    assert_eq!(&*seen.borrow(), &[vec!["second".to_owned()]]);
 }
 
 /// Tick runnable tasks without advancing timers. Once the receiver starts,
@@ -99,7 +304,7 @@ pub(super) fn settle_turn(window: WindowHandle<Conversation>, cx: &mut TestAppCo
     // run_until_parked drains runnable work, but does not advance this
     // scheduler's clock. Await the semantic transition, driving its timers.
     let executor = cx.foreground_executor().clone();
-    executor.block_test(cx.condition(&entity, |view, _| !view.busy && !view.stopping));
+    executor.block_test(cx.condition(&entity, |view, _| !view.turn_in_flight()));
     cx.run_until_parked();
 }
 
@@ -117,11 +322,8 @@ fn ready_turn_updates_return_to_the_executor_before_draining_the_queue(cx: &mut 
     window
         .update(cx, |view, _, cx| {
             assert_eq!(view.status, "Synthetic status 0");
-            assert_eq!(
-                view.transcript.read(cx).source_rows(),
-                update(0, false).rows
-            );
-            assert!(view.busy);
+            assert_eq!(view.transcript.read(cx).source_rows(), [synthetic_row(0)]);
+            assert!(view.responding());
             // Control/user input gets an opportunity between atomic patches.
             view.input
                 .update(cx, |input, cx| input.set_text("Unsent draft".into(), cx));
@@ -131,10 +333,10 @@ fn ready_turn_updates_return_to_the_executor_before_draining_the_queue(cx: &mut 
     settle_turn(window, cx);
     window
         .update(cx, |view, _, cx| {
-            let expected: Vec<_> = (0..8).flat_map(|index| update(index, false).rows).collect();
+            let expected: Vec<_> = (0..8).map(synthetic_row).collect();
             assert_eq!(view.transcript.read(cx).source_rows(), expected);
             assert_eq!(view.status, "Synthetic status 7");
-            assert!(!view.busy && !view.stopping);
+            assert!(!view.turn_in_flight());
             assert_eq!(view.input.read(cx).content.as_str(), "Unsent draft");
         })
         .unwrap();
@@ -169,11 +371,8 @@ fn superseding_a_yielded_receiver_protects_the_successor(cx: &mut TestAppContext
     window
         .update(cx, |view, _, cx| {
             assert_eq!(view.status, "Successor");
-            assert!(view.busy && !view.stopping);
-            assert_eq!(
-                view.transcript.read(cx).source_rows(),
-                update(0, false).rows
-            );
+            assert!(view.responding());
+            assert_eq!(view.transcript.read(cx).source_rows(), [synthetic_row(0)]);
         })
         .unwrap();
 }
@@ -193,7 +392,7 @@ fn stop_between_updates_skips_streaming_but_accepts_the_final_replay(cx: &mut Te
     let (tx, rx) = async_channel::bounded(8);
     tx.try_send(update(0, false)).unwrap();
     let mut skipped = update(1, false);
-    skipped.provider_reset = true;
+    skipped.binding = ProviderBinding::Set(None);
     skipped.context = Some(Default::default());
     skipped.approvals.push(Approval {
         id: "late-approval".into(),
@@ -205,9 +404,12 @@ fn stop_between_updates_skips_streaming_but_accepts_the_final_replay(cx: &mut Te
     // The worker replays the whole accepted turn on cancellation, rather than
     // depending on intermediate patches which the stopping UI must ignore.
     let mut final_update = update(0, true);
-    final_update.rows.extend(update(1, false).rows);
+    let TranscriptPatch::Tail { rows, .. } = &mut final_update.transcript else {
+        unreachable!();
+    };
+    rows.push(synthetic_row(1));
     final_update.status = "Ready".into();
-    final_update.provider_reset = true;
+    final_update.binding = ProviderBinding::Set(None);
     final_update.context = Some(Default::default());
     tx.try_send(final_update).unwrap();
     start_receiver(window, rx, cx);
@@ -216,17 +418,17 @@ fn stop_between_updates_skips_streaming_but_accepts_the_final_replay(cx: &mut Te
         .update(cx, |view, _, cx| {
             assert_eq!(view.status, "Synthetic status 0");
             view.stop(cx);
-            assert!(view.stopping && !view.busy);
+            assert!(view.is_stopping() && !view.responding());
         })
         .unwrap();
     drop(tx);
     settle_turn(window, cx);
     window
         .update(cx, |view, _, cx| {
-            let expected: Vec<_> = (0..2).flat_map(|index| update(index, false).rows).collect();
+            let expected: Vec<_> = (0..2).map(synthetic_row).collect();
             assert_eq!(view.transcript.read(cx).source_rows(), expected);
             assert_eq!(view.status, "Ready");
-            assert!(!view.busy && !view.stopping);
+            assert!(!view.turn_in_flight());
             assert!(view.approvals.is_empty());
             assert_eq!(view.summary.provider_id, None);
             assert_eq!(view.context, Some(Default::default()));
@@ -280,24 +482,26 @@ fn stopped_bot_accepts_a_settled_snapshot_without_its_initial_imported_rows(
     window
         .update(cx, |view, _, cx| {
             view.stop(cx);
-            assert!(view.stopping);
+            assert!(view.is_stopping());
             assert_eq!(view.transcript.read(cx).source_rows().len(), 2);
         })
         .unwrap();
     let mut skipped = update(0, false);
-    skipped.rows = rows[..7].to_vec();
-    skipped.source_len = Some(skipped.rows.len());
-    skipped.bot_turn_start = Some(6);
-    skipped.provider_id = Some("wrong-skipped-thread".into());
+    skipped.transcript = TranscriptPatch::BotSnapshot {
+        turn_start: 6,
+        rows: rows[..7].to_vec(),
+    };
+    skipped.binding = ProviderBinding::Set(Some("wrong-skipped-thread".into()));
     tx.try_send(skipped).unwrap();
     tx.try_send(vorkspace_runtime::runtime::Update {
-        rows: rows.clone(),
-        source_len: Some(rows.len()),
-        bot_turn_start: Some(6),
+        transcript: TranscriptPatch::BotSnapshot {
+            turn_start: 6,
+            rows: rows.clone(),
+        },
         provider_turn_id: Some("managed-turn".into()),
-        provider_id: Some("saved-thread".into()),
+        binding: ProviderBinding::Set(Some("saved-thread".into())),
         status: "Ready".into(),
-        finished: true,
+        transition: TurnTransition::settled(TurnOutcome::Completed),
         ..Default::default()
     })
     .unwrap();
@@ -332,21 +536,23 @@ impl Conversation {
         let (tx, rx) = async_channel::bounded(8);
         self.receive_turn_updates(
             rx,
-            self.submission_generation,
-            self.summary.provider.clone(),
-            self.settings.account.id.clone(),
-            None,
+            turn_projection::TurnProjection::new(
+                self.submission_generation,
+                self.summary.provider.clone(),
+                self.settings.account.id.clone(),
+                self.summary.provider_id.clone(),
+                None,
+            ),
             cx,
         );
-        cx.emit(SessionChanged);
+        cx.emit(SessionChanged::Loaded);
         tx
     }
 }
 
-pub(crate) fn sidebar_tool_update(label: Option<&str>) -> vorkspace_runtime::runtime::Update {
+pub(crate) fn sidebar_tool_update() -> vorkspace_runtime::runtime::Update {
     let mut update = update(0, false);
-    update.rows.clear();
-    update.activity = label.map(str::to_owned);
+    update.transcript = TranscriptPatch::Unchanged;
     update
 }
 
@@ -366,7 +572,7 @@ fn verify_recovered_turn_refresh(cx: &mut TestAppContext, pending: bool) {
     let mut store = Store::open_vorkspace(&path).unwrap();
     let summary = store.create("codex", "/project").unwrap();
     let id = summary.id;
-    let stale = update(0, false).rows;
+    let stale = vec![synthetic_row(0)];
     let mut saved = stale.clone();
     saved[0].text = "Latest durable history".into();
     store.write_rows(id, 0, &saved).unwrap();
@@ -414,12 +620,15 @@ fn verify_recovered_turn_refresh(cx: &mut TestAppContext, pending: bool) {
     let (tx, rx) = async_channel::bounded(1);
     start_receiver(window, rx, cx);
     tx.try_send(vorkspace_runtime::runtime::Update {
-        finished: true,
         status: "Recovered a competing version of this turn".into(),
-        history_recovery: Some(if pending {
-            vorkspace_runtime::runtime::HistoryRecovery::Unsaved
-        } else {
-            vorkspace_runtime::runtime::HistoryRecovery::Saved
+        transition: TurnTransition::Settled(TurnSettlement {
+            outcome: TurnOutcome::Completed,
+            history_recovery: Some(if pending {
+                HistoryRecovery::Unsaved
+            } else {
+                HistoryRecovery::Saved
+            }),
+            usage_limit: None,
         }),
         ..Default::default()
     })
@@ -428,8 +637,8 @@ fn verify_recovered_turn_refresh(cx: &mut TestAppContext, pending: bool) {
     let entity = window.entity(cx).unwrap();
     let executor = cx.foreground_executor().clone();
     executor.block_test(cx.condition(&entity, |view, cx| {
-        !view.busy
-            && !view.loading
+        !view.responding()
+            && !view.history_loading()
             && view.transcript.read(cx).source_rows()[0].text == "Latest durable history"
     }));
     cx.run_until_parked();

@@ -23,7 +23,8 @@ fn combined_picker_paints_effort_and_beside_mode_moves_it_to_its_own_control(
                 default: true,
                 tiers: Vec::new(),
                 controls: Vec::new(),
-            }];
+            }]
+            .into();
             cx.set_global(vorkspace_ui::preferences::Preferences::default());
             cx.notify();
         })
@@ -64,10 +65,10 @@ fn composer_labels_use_the_saved_model_effort_and_the_catalog_default(cx: &mut T
             view.summary.provider = "codex".into();
             view.model = Some("gpt-6.1-sol".into());
             view.settings.effort = Some("xhigh".into());
-            view.catalog.clear();
+            view.catalog = Default::default();
             assert_eq!(view.model_label(), "GPT-6.1-Sol");
             assert_eq!(view.trigger_effort_label().as_deref(), Some("Extra high"));
-            view.catalog.push(Model {
+            view.catalog = vec![Model {
                 alias_target: None,
                 id: "gpt-6.1-sol".into(),
                 name: "GPT-6.1 Sol".into(),
@@ -78,7 +79,8 @@ fn composer_labels_use_the_saved_model_effort_and_the_catalog_default(cx: &mut T
                 default: true,
                 tiers: Vec::new(),
                 controls: Vec::new(),
-            });
+            }]
+            .into();
             assert_eq!(view.model_label(), "GPT-6.1 Sol");
             assert_eq!(view.trigger_effort_label().as_deref(), Some("Extra high"));
             view.model = None;
@@ -178,7 +180,7 @@ fn response_target_picker_preserves_model_effort_and_working_copy(cx: &mut TestA
                 1,
                 vorkspace_core::response::TransferKind::Handoff,
                 AnchorSlot::default(),
-                Some(vec![(Kind::Codex, Some(Ok(vec![model])))]),
+                Some(vec![(Kind::Codex, Some(Ok(vec![model].into())))]),
                 window,
                 cx,
             );
@@ -211,6 +213,57 @@ fn response_target_picker_preserves_model_effort_and_working_copy(cx: &mut TestA
 }
 
 #[gpui::test]
+fn observed_head_belongs_to_the_effective_checkout(cx: &mut TestAppContext) {
+    use crate::git_status::GitHeadChanged;
+    use vorkspace_core::scm::LocalHead;
+
+    let store = Store::test(Path::new(":memory:")).unwrap();
+    let summary = store.create("codex", "/work/head-projection").unwrap();
+    let main = summary.cwd.clone();
+    let linked = format!("{main}-linked");
+    let view = cx.new(|cx| Conversation::new(summary, Arc::new(Mutex::new(store)), cx));
+    view.update(cx, |chat, cx| {
+        chat.loaded = true;
+        chat.settings.worktree_cwd = Some(linked.clone());
+        chat.observe_git_head(
+            &GitHeadChanged {
+                cwd: main.clone(),
+                head: LocalHead::Attached("ignored-main".into()),
+            },
+            cx,
+        );
+        assert!(chat.branch.is_none());
+        chat.observe_git_head(
+            &GitHeadChanged {
+                cwd: linked,
+                head: LocalHead::Detached(Some("12345678901".into())),
+            },
+            cx,
+        );
+        assert_eq!(chat.branch.as_deref(), Some("12345678901"));
+        assert!(
+            chat.git
+                .as_ref()
+                .is_some_and(|head| head.detached && head.linked)
+        );
+        chat.settings.worktree_removed = true;
+        chat.observe_git_head(
+            &GitHeadChanged {
+                cwd: main,
+                head: LocalHead::Attached("main".into()),
+            },
+            cx,
+        );
+        assert_eq!(chat.branch.as_deref(), Some("main"));
+        assert!(
+            chat.git
+                .as_ref()
+                .is_some_and(|head| !head.detached && !head.linked)
+        );
+    });
+}
+
+#[gpui::test]
 fn new_tab_shows_its_folders_branch_at_once_and_no_loading_status(cx: &mut TestAppContext) {
     vorkspace_model::git_cache::remember(
         "/work/remembered",
@@ -219,7 +272,7 @@ fn new_tab_shows_its_folders_branch_at_once_and_no_loading_status(cx: &mut TestA
             ..Default::default()
         },
     );
-    let store = Store::open(Path::new(":memory:")).unwrap();
+    let store = Store::test(Path::new(":memory:")).unwrap();
     let summary = store.create("codex", "/work/remembered").unwrap();
     let store = Arc::new(Mutex::new(store));
     let window = cx.update(|cx| {
@@ -227,7 +280,7 @@ fn new_tab_shows_its_folders_branch_at_once_and_no_loading_status(cx: &mut TestA
             cx.new(|cx| {
                 let mut c = Conversation::new(summary, store, cx);
                 // The first frame of a tab whose history is still loading.
-                c.loading = true;
+                c.history_read = history::ReadState::Reading;
                 c
             })
         })
@@ -245,7 +298,7 @@ fn new_tab_shows_its_folders_branch_at_once_and_no_loading_status(cx: &mut TestA
     // Once loaded, a real status (an error here) still shows.
     window
         .update(visual, |c, _, cx| {
-            c.loading = false;
+            c.history_read = history::ReadState::Idle;
             c.status = "Couldn't load".into();
             cx.notify();
         })
@@ -256,7 +309,7 @@ fn new_tab_shows_its_folders_branch_at_once_and_no_loading_status(cx: &mut TestA
 
 #[gpui::test]
 fn picked_access_becomes_the_default_for_new_chats(cx: &mut TestAppContext) {
-    let store = Store::open(Path::new(":memory:")).unwrap();
+    let store = Store::test(Path::new(":memory:")).unwrap();
     let first = store.create("codex", "/work").unwrap();
     let second = store.create("codex", "/work").unwrap();
     let store = Arc::new(Mutex::new(store));
@@ -310,7 +363,7 @@ fn effort_choices_survive_provider_switches_and_new_projects(cx: &mut TestAppCon
             assert_eq!(restored.provider_efforts["claude"], "medium");
             assert_eq!(restored.provider_efforts["codex"], "xhigh");
             assert_eq!(restored.default_access.as_deref(), Some("auto"));
-            let store = Store::open(Path::new(":memory:")).unwrap();
+            let store = Store::test(Path::new(":memory:")).unwrap();
             let summary = store.create("codex", "/different/project").unwrap();
             let next = cx.new(|cx| Conversation::new(summary, Arc::new(Mutex::new(store)), cx));
             assert_eq!(next.read(cx).settings.effort.as_deref(), Some("xhigh"));
@@ -320,7 +373,7 @@ fn effort_choices_survive_provider_switches_and_new_projects(cx: &mut TestAppCon
 }
 
 fn conversation(cx: &mut TestAppContext) -> WindowHandle<Conversation> {
-    let store = Store::open(Path::new(":memory:")).unwrap();
+    let store = Store::test(Path::new(":memory:")).unwrap();
     let summary = store.create("claude", "/work/vorkspace").unwrap();
     let store = Arc::new(Mutex::new(store));
     let window = cx.update(|cx| {
@@ -391,11 +444,12 @@ fn workspace_existing_worktrees_open_as_a_submenu_and_preserve_the_draft(cx: &mu
                     head: "123456789abc".into(),
                     ..Default::default()
                 },
-            ],
+            ]
+            .into(),
             ..Default::default()
         },
     );
-    let store = Store::open(Path::new(":memory:")).unwrap();
+    let store = Store::test(Path::new(":memory:")).unwrap();
     let summary = store.create("claude", cwd).unwrap();
     let store = Arc::new(Mutex::new(store));
     let window = cx.update(|cx| {
@@ -489,7 +543,7 @@ fn workspace_existing_worktrees_open_as_a_submenu_and_preserve_the_draft(cx: &mu
                 Some(feature.as_str())
             );
             assert!(!c.settings.new_worktree);
-            assert!(!c.busy);
+            assert!(!c.responding());
             assert_eq!(c.input.read(cx).content.as_ref(), "Keep my unsent draft");
             assert!(c.input.focus_handle(cx).is_focused(w));
             assert_eq!(
@@ -571,22 +625,76 @@ fn mode_menu_edits_the_inline_prefix_and_removal_preserves_the_draft(cx: &mut Te
 fn submitted_modes_clear_for_a_started_turn_and_stay_cleared_after_completion(
     cx: &mut TestAppContext,
 ) {
+    use vorkspace_core::store::SubmissionInput;
+    use vorkspace_runtime::runtime::{TurnTransition, Update};
+
     for mode in ["operator", "orchestrator", "plan"] {
         let window = conversation(cx);
         window
             .update(cx, |view, _, cx| {
-                // An absent directory prevents the supported CLI from starting.
-                view.summary.provider = "codex".into();
-                view.summary.cwd = "/missing/submitted-mode-project".into();
                 view.loaded = true;
                 view.input
                     .update(cx, |i, cx| i.set_text("check the composer".into(), cx));
                 view.toggle_mode(mode, cx);
-                view.send(cx);
-                assert!(view.busy);
+                let origin = view
+                    .prepare_composer_submission(composer_draft::ComposerLane::Turn, cx)
+                    .unwrap();
+                view.begin_turn(cx);
+                assert!(view.responding());
+                assert_eq!(view.selected_turn_mode(), Some(mode));
+                assert!(!view.input.read(cx).content.is_empty());
+                {
+                    let store = locked(&view.store).unwrap();
+                    store
+                        .reserve_local_submission(
+                            view.summary.id,
+                            SubmissionInput {
+                                attempt_id: "mode-admission".into(),
+                                user_turn_id: origin.message_id(),
+                                session_id: String::new(),
+                                payload_json: "{}".into(),
+                                user_turn: None,
+                            },
+                        )
+                        .unwrap();
+                    assert!(
+                        store
+                            .dispatch_composer_submission("mode-admission", &origin)
+                            .unwrap()
+                            .claimed
+                    );
+                    store
+                        .settle_local_submission("mode-admission", "completed", None)
+                        .unwrap();
+                }
+                let mut projection = turn_projection::TurnProjection::new(
+                    view.submission_generation,
+                    view.summary.provider.clone(),
+                    view.settings.account.id.clone(),
+                    view.summary.provider_id.clone(),
+                    None,
+                );
+                projection.composer_origin = Some(origin.clone());
+                projection.apply(
+                    view,
+                    Update {
+                        transition: TurnTransition::AcceptedComposer(origin),
+                        ..Default::default()
+                    },
+                    cx,
+                );
                 assert!(view.input.read(cx).content.is_empty());
                 assert!(
                     !view.settings.plan && !view.settings.operator && !view.settings.orchestrator
+                );
+                projection.apply(
+                    view,
+                    Update {
+                        transition: TurnTransition::settled(TurnOutcome::Completed),
+                        status: "Ready".into(),
+                        ..Default::default()
+                    },
+                    cx,
                 );
             })
             .unwrap();
@@ -621,7 +729,7 @@ fn model_menu_picks_by_keyboard_and_returns_focus(cx: &mut TestAppContext) {
         .update(cx, |c, _, _| {
             assert!(c.menu.is_none());
             assert_eq!(c.model.as_deref(), Some("sonnet"));
-            // The pill drops the catalog's "Claude " prefix, as React's does.
+            // The pill drops the catalog's "Claude " prefix.
             assert_eq!(c.model_label(), "Sonnet");
         })
         .unwrap();

@@ -63,7 +63,7 @@ impl Bots {
                 else {
                     return;
                 };
-                let changed = bot.apply_work(documents, launches).unwrap_or(false);
+                let changed = bot.apply_work(documents, launches);
                 if changed {
                     this.configure_chat(&id, cx);
                     this.refresh_cards(cx);

@@ -144,28 +144,9 @@ fn write_json_config(
     };
     update(&mut root)?;
     let encoded = serde_json::to_vec_pretty(&root).map_err(|e| e.to_string())?;
-    let temporary = parent.join(format!(
-        ".{}.{}.tmp",
-        path.file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("mcp"),
-        rand::random::<u128>()
-    ));
-    let result = (|| -> std::io::Result<()> {
-        use std::io::Write;
-        let mut options = std::fs::OpenOptions::new();
-        options.write(true).create_new(true);
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-        let mut file = options.open(&temporary)?;
-        file.write_all(&encoded)?;
-        file.sync_all()?;
-        std::fs::rename(&temporary, path)
-    })();
-    if result.is_err() {
-        let _ = std::fs::remove_file(&temporary);
-    }
-    result.map_err(|e| e.to_string())
+    use std::io::Write;
+    crate::private_file::replace(path, |file| file.write_all(&encoded))
+        .map_err(|error| error.to_string())
 }
 
 #[derive(Clone, Debug, Serialize)]

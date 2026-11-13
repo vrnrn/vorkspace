@@ -1,0 +1,150 @@
+//! Provider-to-view publication of transcript changes and turn outcomes.
+use vorkspace_core::{agent::Approval, provider, transcript::Row};
+
+#[derive(Default)]
+pub struct Update {
+    pub transition: TurnTransition,
+    pub transcript: TranscriptPatch,
+    pub worktree_cwd: Option<String>,
+    pub commands: Option<Vec<provider::NativeCommand>>,
+    pub provider_turn_id: Option<String>,
+    pub turn_ready: bool,
+    pub follow_up_delivered: Vec<String>,
+    pub follow_up_errors: Vec<(String, String)>,
+    pub delivered: Option<String>,
+    pub binding: ProviderBinding,
+    pub model: Option<String>,
+    pub configuration: Option<ProviderConfiguration>,
+    pub context: Option<vorkspace_core::context::Usage>,
+    pub metrics: Option<vorkspace_core::agent::TurnMetrics>,
+    pub approvals: Vec<Approval>,
+    pub approvals_resolved: Vec<String>,
+    pub questions: Vec<vorkspace_core::agent::Question>,
+    pub questions_resolved: Vec<String>,
+    pub handoff: Option<Option<vorkspace_core::agent::Handoff>>,
+    pub status: String,
+}
+
+/// An observed binding is published only after its owner commits it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum ProviderBinding {
+    #[default]
+    Unchanged,
+    Set(Option<String>),
+}
+
+/// A saved provider observation and the local choice it is allowed to refresh.
+#[derive(Clone)]
+pub struct ProviderConfiguration {
+    pub revision: u64,
+    pub provider_id: Option<String>,
+    pub patch: vorkspace_core::agent::ConfigurationPatch,
+}
+
+impl ProviderConfiguration {
+    pub(super) fn merge_into(self, saved: &mut Option<Self>) {
+        if let Some(previous) = saved
+            && previous.revision == self.revision
+            && previous.provider_id == self.provider_id
+        {
+            previous.patch.merge(self.patch);
+        } else {
+            *saved = Some(self);
+        }
+    }
+}
+
+#[derive(Default)]
+pub enum TurnTransition {
+    #[default]
+    Progress,
+    /// The input was transferred to a durable receipt or journal.
+    AcceptedComposer(vorkspace_core::store::ComposerOrigin),
+    Settled(TurnSettlement),
+}
+
+impl TurnTransition {
+    pub fn settled(outcome: TurnOutcome) -> Self {
+        Self::Settled(TurnSettlement {
+            outcome,
+            history_recovery: None,
+            usage_limit: None,
+        })
+    }
+}
+
+pub struct TurnSettlement {
+    pub outcome: TurnOutcome,
+    /// The losing turn has a separate owner in the same chat. Replace the projected
+    /// transcript from storage instead of applying the losing row offsets.
+    pub history_recovery: Option<HistoryRecovery>,
+    pub usage_limit: Option<vorkspace_core::usage::Limit>,
+}
+
+impl Update {
+    pub fn finished(&self) -> bool {
+        matches!(self.transition, TurnTransition::Settled(_))
+    }
+
+    pub fn settlement(&self) -> Option<&TurnSettlement> {
+        match &self.transition {
+            TurnTransition::Settled(settlement) => Some(settlement),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TurnOutcome {
+    Completed,
+    Cancelled,
+    Failed,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HistoryRecovery {
+    Saved,
+    Unsaved,
+}
+
+/// Transcript updates use absolute source row indices. Only an authoritative
+/// snapshot can remove a previously visible suffix.
+#[derive(Default)]
+pub enum TranscriptPatch {
+    #[default]
+    Unchanged,
+    Tail {
+        start: usize,
+        rows: Vec<Row>,
+    },
+    Snapshot {
+        start: usize,
+        rows: Vec<Row>,
+    },
+    /// Includes the complete Bot history admitted for this run, even if the
+    /// view skipped the first update while stopping.
+    BotSnapshot {
+        turn_start: usize,
+        rows: Vec<Row>,
+    },
+}
+
+impl TranscriptPatch {
+    pub(super) fn tail(start: usize, rows: Vec<Row>) -> Self {
+        if rows.is_empty() {
+            Self::Unchanged
+        } else {
+            Self::Tail { start, rows }
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn rows(&self) -> &[Row] {
+        match self {
+            Self::Unchanged => &[],
+            Self::Tail { rows, .. }
+            | Self::Snapshot { rows, .. }
+            | Self::BotSnapshot { rows, .. } => rows,
+        }
+    }
+}

@@ -7,8 +7,228 @@ fn payload() -> Value {
             "mcpTags":[{"token":"@mcp/docs","server":{"provider":"codex","name":"docs","scope":"user","configPath":"/private/config.toml","transport":"stdio","enabled":true}}],
             "future":{"keep":"opaque"}})
 }
+
+fn reserve_draft(store: &Store, id: i64, origin: &ComposerOrigin, attempt: &str) {
+    let user_turn_id = origin.message_id();
+    store
+        .reserve_local_submission(
+            id,
+            SubmissionInput {
+                attempt_id: attempt.into(),
+                user_turn_id: user_turn_id.clone(),
+                session_id: String::new(),
+                payload_json: json!({"text": payload()["text"]}).to_string(),
+                user_turn: Some(
+                    json!({"id": user_turn_id, "role": "user", "text": payload()["text"]}),
+                ),
+            },
+        )
+        .unwrap();
+}
+
 #[test]
-fn desktop_input_roundtrips_in_its_existing_table_without_sidecar_copy() {
+fn dispatch_transfers_only_the_offered_composer_version() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("state.db");
+    let open = { Store::test };
+    let store = open(&path).unwrap();
+    let session = store.create("codex", "/project").unwrap();
+    let revision = store
+        .save_composer_draft(session.id, 0, &payload())
+        .unwrap();
+    let origin = store.composer_origin(session.id, revision).unwrap();
+    reserve_draft(&store, session.id, &origin, "first-attempt");
+    assert!(!store.composer_draft(session.id).unwrap().unwrap().deleted);
+    assert!(
+        store
+            .dispatch_composer_submission("first-attempt", &origin)
+            .unwrap()
+            .claimed
+    );
+    drop(store);
+    let store = open(&path).unwrap();
+    let consumed = store.composer_draft(session.id).unwrap().unwrap();
+    assert!(consumed.deleted);
+    assert_eq!(consumed.revision, revision);
+    assert_eq!(consumed.payload, payload());
+    assert!(store.composer_origin(session.id, revision).is_err());
+
+    let mut successor = payload();
+    successor["text"] = json!("A newer draft");
+    let revision = store
+        .save_composer_draft(session.id, revision, &successor)
+        .unwrap();
+    assert!(
+        !store
+            .dispatch_composer_submission("first-attempt", &origin)
+            .unwrap()
+            .claimed
+    );
+    let origin = store.composer_origin(session.id, revision).unwrap();
+    reserve_draft(&store, session.id, &origin, "second-attempt");
+    successor["text"] = json!("Another edit");
+    store
+        .save_composer_draft(session.id, revision, &successor)
+        .unwrap();
+    assert!(
+        store
+            .dispatch_composer_submission("second-attempt", &origin)
+            .unwrap()
+            .claimed
+    );
+    let retained = store.composer_draft(session.id).unwrap().unwrap();
+    assert!(!retained.deleted);
+    assert_eq!(retained.payload, successor);
+}
+
+#[test]
+fn failed_draft_transfer_rolls_back_the_local_dispatch_claim() {
+    let store = Store::test(std::path::Path::new(":memory:")).unwrap();
+    let session = store.create("codex", "/project").unwrap();
+    let revision = store
+        .save_composer_draft(session.id, 0, &payload())
+        .unwrap();
+    let origin = store.composer_origin(session.id, revision).unwrap();
+    reserve_draft(&store, session.id, &origin, "retry-after-write-failure");
+    store
+        .conn
+        .execute_batch(
+            "CREATE TRIGGER fail_transfer BEFORE UPDATE OF deleted ON composer_drafts
+         WHEN NEW.deleted=1 BEGIN SELECT RAISE(ABORT, 'simulated disk error'); END;",
+        )
+        .unwrap();
+    assert!(store
+        .dispatch_composer_submission("retry-after-write-failure", &origin)
+        .is_err());
+    assert_eq!(
+        store.local_submissions(session.id).unwrap()[0].phase,
+        "reserved"
+    );
+    assert!(!store.composer_draft(session.id).unwrap().unwrap().deleted);
+    store
+        .conn
+        .execute_batch("DROP TRIGGER fail_transfer;")
+        .unwrap();
+    assert!(
+        store
+            .dispatch_composer_submission("retry-after-write-failure", &origin)
+            .unwrap()
+            .claimed
+    );
+    assert!(store.composer_draft(session.id).unwrap().unwrap().deleted);
+}
+
+#[test]
+fn a_distinct_queue_entry_can_commit_while_the_older_turn_is_offered() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("state.db");
+    let open = { Store::test };
+    let store = open(&path).unwrap();
+    let session = store.create("codex", "/project").unwrap().id;
+    let revision = store.save_composer_draft(session, 0, &payload()).unwrap();
+    let first = store.composer_origin(session, revision).unwrap();
+    reserve_draft(&store, session, &first, "older-turn");
+    assert!(store
+        .save_composer_after_local_offer(&first, &Value::Null)
+        .is_err());
+    assert!(store.composer_recoveries(session).unwrap().is_empty());
+
+    let mut newer = payload();
+    newer["text"] = json!("A distinct follow-up");
+    let (revision, recovery) = store
+        .save_composer_after_local_offer(&first, &newer)
+        .unwrap();
+    assert_eq!(recovery.unwrap().payload, payload());
+    let second = store.composer_origin(session, revision).unwrap();
+    let queue = crate::follow_up::State {
+        revision: 1,
+        paused: true,
+        messages: vec![crate::follow_up::Message {
+            id: "queue-next".into(),
+            text: "A distinct follow-up".into(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    store
+        .accept_composer_message(session, &queue, &second, "queue-next")
+        .unwrap();
+    assert!(!store.composer_transfer_committed(&first).unwrap());
+    assert!(store.composer_transfer_committed(&second).unwrap());
+    drop(store);
+
+    let reopened = open(&path).unwrap();
+    let records = reopened.composer_recoveries(session).unwrap();
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].payload, payload());
+    assert_eq!(
+        reopened.follow_ups(session).unwrap().messages,
+        queue.messages
+    );
+    assert!(
+        reopened
+            .dispatch_composer_submission("older-turn", &first)
+            .unwrap()
+            .claimed
+    );
+    assert!(reopened.composer_recoveries(session).unwrap().is_empty());
+    assert_eq!(
+        reopened.composer_draft(session).unwrap().unwrap().payload,
+        newer
+    );
+}
+
+#[test]
+fn a_queued_version_cannot_also_dispatch_as_an_initial_turn() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("state.db");
+    let open = { Store::test };
+    let editor = open(&path).unwrap();
+    let worker = open(&path).unwrap();
+    let session = editor.create("codex", "/project").unwrap();
+    {
+        worker
+            .resolve_session_id(&editor.persisted_session_id(session.id).unwrap())
+            .unwrap();
+    }
+    let revision = editor
+        .save_composer_draft(session.id, 0, &payload())
+        .unwrap();
+    let origin = editor.composer_origin(session.id, revision).unwrap();
+    reserve_draft(&worker, session.id, &origin, "other-window-attempt");
+    let mut successor = payload();
+    successor["text"] = json!("A distinct input");
+    editor
+        .save_composer_draft(session.id, revision, &successor)
+        .unwrap();
+    let mut queue = editor.follow_ups(session.id).unwrap();
+    queue.revision += 1;
+    queue.messages.push(crate::follow_up::Message {
+        id: "queue-owner".into(),
+        text: payload()["text"].as_str().unwrap().into(),
+        ..Default::default()
+    });
+    editor
+        .accept_composer_message(session.id, &queue, &origin, "queue-owner")
+        .unwrap();
+    assert!(worker.composer_transfer_committed(&origin).unwrap());
+    assert!(worker
+        .dispatch_composer_submission("other-window-attempt", &origin)
+        .is_err());
+    assert_eq!(
+        worker.local_submissions(session.id).unwrap()[0].phase,
+        "reserved"
+    );
+    let reopened = open(&path).unwrap();
+    let queue = reopened.follow_ups(session.id).unwrap();
+    assert_eq!(queue.messages.len(), 1);
+    assert_eq!(queue.messages[0].id, "queue-owner");
+    let draft = reopened.composer_draft(session.id).unwrap().unwrap();
+    assert!(!draft.deleted);
+    assert_eq!(draft.payload, successor);
+}
+#[test]
+fn saved_input_roundtrips_in_its_existing_table_without_sidecar_copy() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("desktop.db");
     let store = Store::open_vorkspace(&path).unwrap();
@@ -92,20 +312,20 @@ fn missing_draft_table_is_read_without_creation_and_failed_writes_rollback() {
     let store = Store::open_vorkspace(&path).unwrap();
     let session = store.create("codex", "/project").unwrap();
     assert!(store.composer_draft(session.id).unwrap().is_none());
-    assert!(!shared::has_table(&store.conn, "composer_drafts").unwrap());
+    assert!(!sessions::has_table(&store.conn, "composer_drafts").unwrap());
     assert!(store
         .save_composer_draft(session.id, 1, &payload())
         .is_err());
-    assert!(!shared::has_table(&store.conn, "composer_drafts").unwrap());
+    assert!(!sessions::has_table(&store.conn, "composer_drafts").unwrap());
     let reader = Store::read_vorkspace(&path).unwrap();
     assert!(reader
         .save_composer_draft(session.id, 0, &payload())
         .is_err());
-    assert!(!shared::has_table(&store.conn, "composer_drafts").unwrap());
+    assert!(!sessions::has_table(&store.conn, "composer_drafts").unwrap());
 }
 #[test]
 fn malformed_or_unavailable_draft_fields_are_preserved_for_recovery() {
-    let store = Store::open_vorkspace(Path::new(":memory:")).unwrap();
+    let store = Store::test(Path::new(":memory:")).unwrap();
     let session = store.create("codex", "/project").unwrap();
     store
         .save_composer_draft(session.id, 0, &payload())
@@ -158,7 +378,7 @@ fn independent_writers_keep_distinct_recovery_rows_and_clear_only_their_owner() 
     let session = first.create("codex", "/project").unwrap();
     let second = Store::open_vorkspace(&path).unwrap();
     assert!(first.composer_recoveries(session.id).unwrap().is_empty());
-    assert!(!shared::has_table(&first.conn, "composer_draft_recoveries").unwrap());
+    assert!(!sessions::has_table(&first.conn, "composer_draft_recoveries").unwrap());
     for (store, owner) in [(&first, "writer-one"), (&second, "writer-two")] {
         store
             .save_composer_recovery(

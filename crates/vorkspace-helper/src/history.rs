@@ -24,7 +24,7 @@ pub(super) enum Content {
     Image { kind: &'static str, bytes: Vec<u8> },
 }
 impl Content {
-    pub fn fingerprint(&self) -> u64 {
+    pub(crate) fn fingerprint(&self) -> u64 {
         let mut hash = std::collections::hash_map::DefaultHasher::new();
         match self {
             Self::Text { value, .. } => value.hash(&mut hash),
@@ -86,7 +86,7 @@ impl History {
         let hash = content.fingerprint();
         self.insert_hashed(content, hash)
     }
-    pub fn insert_hashed(&mut self, content: Content, hash: u64) -> Option<u64> {
+    pub(crate) fn insert_hashed(&mut self, content: Content, hash: u64) -> Option<u64> {
         let cost = content.cost().filter(|n| *n <= MAX_BYTES)?;
         if let Some(index) = self
             .items
@@ -114,17 +114,17 @@ impl History {
         self.bytes += cost;
         Some(id)
     }
-    pub fn get(&self, id: u64) -> Option<&Item> {
+    pub(crate) fn get(&self, id: u64) -> Option<&Item> {
         self.items.iter().find(|i| i.id == id)
     }
-    pub fn matching(&self, query: &str) -> Vec<u64> {
+    pub(crate) fn matching(&self, query: &str) -> Vec<u64> {
         self.items
             .iter()
             .filter(|i| i.content.matches(query))
             .map(|i| i.id)
             .collect()
     }
-    pub fn clear(&mut self) {
+    pub(crate) fn clear(&mut self) {
         self.bytes = 0;
         self.items.clear();
     }

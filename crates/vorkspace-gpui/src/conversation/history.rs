@@ -3,6 +3,14 @@ use super::*;
 
 pub(super) type HistoryAction = Box<dyn FnOnce(&mut Conversation, &mut Context<Conversation>)>;
 
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+pub(super) enum ReadState {
+    #[default]
+    Idle,
+    Reading,
+    Failed,
+}
+
 pub(super) enum InitialHistory {
     Complete(crate::transcript::PreparedHistory),
     Window(
@@ -15,14 +23,67 @@ pub(super) enum InitialRows {
     Window(Box<vorkspace_core::store::IndexedHistoryPage>),
 }
 
+pub(super) struct InitialRead {
+    pub(super) rows: Result<InitialRows, String>,
+    pub(super) settings: Result<Option<Settings>, String>,
+    pub(super) revision: i64,
+}
+
+impl InitialRead {
+    pub(super) fn read(store: &Database, id: i64, paged: bool) -> Self {
+        let store = match locked(store) {
+            Ok(store) => store,
+            Err(error) => {
+                return Self {
+                    rows: Err(error.clone()),
+                    settings: Err(error),
+                    revision: 0,
+                };
+            }
+        };
+        if paged
+            && let Ok(Some(page)) = store.indexed_history_page(id, None, 10)
+            && page.before.is_some()
+        {
+            return Self {
+                revision: page.revision,
+                rows: Ok(InitialRows::Window(Box::new(page))),
+                settings: store.agent_preferences(id),
+            };
+        }
+        match store.load_local_history(id) {
+            Ok(history) => Self {
+                revision: history.revision,
+                rows: Ok(InitialRows::Complete(history.transcript.rows)),
+                settings: history.settings,
+            },
+            Err(error) => Self {
+                revision: 0,
+                rows: Err(error),
+                settings: store.agent_preferences(id),
+            },
+        }
+    }
+}
+
 impl Conversation {
+    pub(super) fn history_loading(&self) -> bool {
+        self.history_read == ReadState::Reading
+    }
+
+    pub(super) fn history_load_failed(&mut self, error: String, cx: &mut Context<Self>) {
+        self.history_read = ReadState::Failed;
+        self.status = error;
+        cx.notify();
+    }
+
     pub(super) fn history_ready(&self) -> bool {
-        self.loaded && !self.history_unloaded && !self.history_partial && !self.loading
+        self.loaded && !self.history_unloaded && !self.history_partial && !self.history_loading()
     }
     pub(crate) fn needs_history_restore(&self) -> bool {
         self.history_unloaded
             || self.history_partial
-            || self.loading
+            || self.history_loading()
             || (!self.loaded && self.summary.has_messages)
     }
     pub(crate) fn defer_history_action(
@@ -31,10 +92,10 @@ impl Conversation {
         cx: &mut Context<Self>,
     ) {
         self.history_actions.push_back(Box::new(action));
-        self.load(cx);
+        self.load_complete(cx);
     }
     pub(super) fn run_history_actions(&mut self, cx: &mut Context<Self>) {
-        while self.history_ready() && !self.stopping && !self.editing_last_turn.pending() {
+        while self.history_ready() && !self.is_stopping() && !self.editing_last_turn.pending() {
             let Some(action) = self.history_actions.pop_front() else {
                 break;
             };
@@ -49,19 +110,9 @@ impl Conversation {
     pub(super) fn enqueue_restored_prompt(&mut self, prompt: String, cx: &mut Context<Self>) {
         // The accepted prompt predates this composer draft. Queue it without
         // taking any files the user attached while history was restoring.
-        let attachments = std::mem::take(&mut self.attachments);
-        self.attachments = std::mem::take(&mut self.settings.attachments);
-        let mode = if self.settings.orchestrator {
-            Some("orchestrator")
-        } else if self.settings.plan {
-            Some("plan")
-        } else if self.settings.operator {
-            Some("operator")
-        } else {
-            None
-        };
-        self.enqueue_follow_up(prompt, mode.map(str::to_owned), cx);
-        self.attachments = attachments;
+        let attachments = std::mem::take(&mut self.settings.attachments);
+        let mode = self.selected_turn_mode();
+        self.enqueue_follow_up(prompt, attachments, mode.map(str::to_owned), cx);
     }
     pub(crate) fn history_loaded(&self) -> bool {
         self.loaded && !self.history_unloaded && !self.history_partial
@@ -69,88 +120,77 @@ impl Conversation {
     pub(crate) fn history_weight(&self, cx: &gpui::App) -> usize {
         self.transcript.read(cx).history_weight()
     }
-    /// Only a settled, saved conversation can lose its reconstructible payload.
-    /// Keep drafts, queued messages and their edits in the live entity, and pin
-    /// their history so row positions remain valid during background saves.
-    pub(crate) fn unload_history(&mut self, cx: &mut Context<Self>) -> bool {
-        if !self.history_loaded()
-            || self.loading
-            || self.busy
-            || self.stopping
-            || self.editing_last_turn.pending()
-            || self
+    /// Keep the histories used by drafts, queued messages and background saves.
+    pub(crate) fn can_unload_history(&self, cx: &gpui::App) -> bool {
+        self.history_loaded()
+            && !self.history_loading()
+            && !self.turn_in_flight()
+            && !self.editing_last_turn.pending()
+            && !self
                 .btw
                 .as_ref()
                 .is_some_and(|sheet| sheet.read(cx).is_open() || sheet.read(cx).is_running())
-            || self.status != "Ready"
-            || self.settings.bot.is_some()
-            || self.account_switching
-            || self.preparing_worktree
-            || self.planning_orchestration
-            || self.orchestration_plan.is_some()
-            || self.orchestration_progress.is_some()
-            || self.settings.usage_limit.is_some()
-            || !self.history_actions.is_empty()
-            || self.controls.is_some()
-            || self.needs_approval()
-            || self.attaching
-            || !self.attachments.is_empty()
-            || !self.input.read(cx).content.is_empty()
-            || self.input.read(cx).is_composing()
-            || self.follow_ups.state.revision != self.follow_ups.persisted
-            || !self.follow_ups.state.messages.is_empty()
-            || self.follow_ups.state.draft.is_some()
-            || self.follow_ups.edit.is_some()
-            || self.follow_ups.sending.is_some()
-            || self.follow_ups.requested.is_some()
-            || self.pending_search.is_some()
-            || self.response_request.is_some()
-            || self.response_menu.is_some()
-        {
+            && self.status == "Ready"
+            && self.settings.bot.is_none()
+            && !self.account_switching
+            && !self.preparing_worktree
+            && !self.planning_orchestration
+            && self.orchestration_plan.is_none()
+            && self.orchestration_progress.is_none()
+            && self.settings.usage_limit.is_none()
+            && self.history_actions.is_empty()
+            && self.controls.is_none()
+            && !self.needs_approval()
+            && !self.attaching
+            && !self.composer_draft.submitting()
+            && self.attachments.is_empty()
+            && self.input.read(cx).content.is_empty()
+            && !self.input.read(cx).is_composing()
+            && self.follow_ups.state.revision == self.follow_ups.persisted
+            && self.follow_ups.state.messages.is_empty()
+            && self.follow_ups.state.draft.is_none()
+            && self.follow_ups.edit.is_none()
+            && self.follow_ups.sending.is_none()
+            && self.follow_ups.requested.is_none()
+            && self.pending_search.is_none()
+            && self.response_request.is_none()
+            && self.response_menu.is_none()
+            && self.transcript.read(cx).can_suspend_history()
+    }
+
+    pub(crate) fn unload_history(&mut self, cx: &mut Context<Self>) -> bool {
+        if !self.can_unload_history(cx) {
             return false;
         }
         let suspended = self
             .transcript
             .update(cx, |view, cx| view.suspend_history(cx));
         self.history_unloaded = suspended;
-        if suspended && self.is_remote() {
-            self.release_remote_snapshot();
-        }
+
         suspended
     }
     /// Restore only the payload. A history cache miss must not replace live
     /// settings, queued state, composer text, attachments or provider controls.
     pub(super) fn reload_history(&mut self, cx: &mut Context<Self>) {
-        if self.is_remote() {
-            self.refresh_remote_snapshot(cx);
+        if self.history_loading() || !self.history_unloaded {
             return;
         }
-        if self.loading || !self.history_unloaded {
-            return;
-        }
-        self.loading = true;
+        self.history_read = history::ReadState::Reading;
         let id = self.summary.id;
         let store = self.store.clone();
         let bot = self.settings.bot.is_some();
         let work = cx.background_executor().spawn(async move {
-            let (history, turns, rev) = {
-                let store = locked(&store)?;
-                (
-                    store.load(id)?,
-                    store.agent_settings(id)?.unwrap_or_default().turns,
-                    store.session_history_revision(id).unwrap_or(0),
-                )
-            };
+            let history = locked(&store)?.load_local_history(id)?;
             Ok::<_, String>((
-                crate::transcript::PreparedHistory::new(history.rows, bot),
-                turns,
-                rev,
+                crate::transcript::PreparedHistory::new(history.transcript.rows, bot),
+                history.settings?.unwrap_or_default().turns,
+                history.revision,
             ))
         });
         cx.spawn(async move |this, cx| {
             let result = work.await;
             let _ = this.update(cx, |this, cx| {
-                this.loading = false;
+                this.history_read = history::ReadState::Idle;
                 match result {
                     Ok((history, turns, rev)) => {
                         this.settings.turns = turns.clone();
@@ -173,9 +213,9 @@ impl Conversation {
                         this.run_history_actions(cx);
                         this.pump_follow_ups(cx);
                     }
-                    Err(error) => this.status = error,
+                    Err(error) => this.history_load_failed(error, cx),
                 }
-                cx.emit(SessionChanged);
+                cx.emit(SessionChanged::Loaded);
                 cx.notify();
             });
         })

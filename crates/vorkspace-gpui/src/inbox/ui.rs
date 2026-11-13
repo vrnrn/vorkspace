@@ -291,14 +291,6 @@ enum CommentStyle {
 }
 
 impl Inbox {
-    fn project_mark(&self, path: &str, side: f32) -> AnyElement {
-        crate::project_settings::project_icon(
-            &self.appearances.get(path).cloned().unwrap_or_default(),
-            &project_name(std::path::Path::new(path)),
-            side,
-        )
-    }
-
     /// A disabled or unconnected source has no items to open, so its page is
     /// only the explanation and the way to connect, across the full width.
     fn unavailable(&self) -> bool {
@@ -327,7 +319,7 @@ impl Inbox {
             .connections
             .get(&self.state.source)
             .is_some_and(|status| status.connected);
-        let items = self.visible_items(cx);
+        let mut items = self.visible_items(cx).peekable();
         let tools = page::toolbar()
             .when(!self.unavailable(), |d| {
                 d.child(
@@ -348,7 +340,6 @@ impl Inbox {
                         })
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.filters_open = !this.filters_open;
-                            this.connections_open = false;
                             cx.notify();
                         })),
                 )
@@ -389,7 +380,7 @@ impl Inbox {
                 format!("Could not load {provider}"),
                 format!("{error}. Check Settings → {provider} or refresh."),
             )
-        } else if self.loading && items.is_empty() {
+        } else if self.loading && items.peek().is_none() {
             (format!("Loading {provider}…"), String::new())
         } else if !connected {
             (
@@ -410,128 +401,7 @@ impl Inbox {
             (format!("No {provider} items"), String::new())
         };
         let rows = items
-            .into_iter()
-            .map(|item| {
-                let key = item.key();
-                let active = self.selected.as_ref() == Some(&key);
-                let unread = self.state.seen.unseen(&item);
-                let sessions = self.related_sessions(&item).len();
-                let tracker = model::is_tracker(&item.provider);
-                let kind = if item.kind == "pr" {
-                    if item.provider == "gitlab" {
-                        "Merge request"
-                    } else {
-                        "Pull request"
-                    }
-                } else {
-                    "Issue"
-                };
-                let source = if tracker && !item.team_name.is_empty() {
-                    item.team_name.clone()
-                } else if !item.repo.is_empty() {
-                    item.repo.clone()
-                } else {
-                    project_name(std::path::Path::new(&item.project_path))
-                };
-                let attention = attention_label(&item.attention_reason);
-                let row_id = format!("inbox-item-{key}");
-                let click_item = item.clone();
-                let middle_item = item.clone();
-                page::row(row_id.clone(), item.title.clone(), active)
-                    .debug_selector(move || row_id.clone())
-                    .role(Role::ListBoxOption)
-                    .aria_selected(active)
-                    .child(
-                        page::meta()
-                            .flex()
-                            .items_center()
-                            .gap(px(4.))
-                            .child(provider_mark(&item.provider))
-                            .child(icon(status_icon(&item), 12.).text_color(status_color(&item)))
-                            .child(div().min_w_0().flex_1().truncate().child(format!(
-                                "{kind} · {}{}",
-                                item.reference(),
-                                if attention.is_empty() {
-                                    String::new()
-                                } else {
-                                    format!(" · {attention}")
-                                }
-                            )))
-                            .when(sessions > 0, |d| {
-                                d.child(
-                                    div()
-                                        .flex()
-                                        .items_center()
-                                        .gap(px(2.))
-                                        .text_color(accent_color())
-                                        .child(
-                                            icon("message-multiple", 12.)
-                                                .text_color(accent_color()),
-                                        )
-                                        .child(sessions.to_string()),
-                                )
-                            })
-                            .child(relative_time(&item.updated_at))
-                            .when(unread, |d| {
-                                d.child(div().size(px(6.)).rounded_full().bg(accent_color()))
-                            }),
-                    )
-                    .child(
-                        page::label()
-                            .mt(px(4.))
-                            .truncate()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child(item.title.clone()),
-                    )
-                    .child(
-                        div()
-                            .mt(px(4.))
-                            .flex()
-                            .items_center()
-                            .gap(px(8.))
-                            .child(
-                                page::meta()
-                                    .min_w_0()
-                                    .flex_1()
-                                    .flex()
-                                    .items_center()
-                                    .gap(px(4.))
-                                    .when(!tracker && !item.project_path.is_empty(), |d| {
-                                        d.child(self.project_mark(&item.project_path, 12.))
-                                    })
-                                    .child(div().min_w_0().truncate().child(source)),
-                            )
-                            .children(
-                                item.labels
-                                    .iter()
-                                    .take(2)
-                                    .map(|label| label_badge(label, true)),
-                            ),
-                    )
-                    .on_mouse_up(
-                        MouseButton::Middle,
-                        cx.listener(move |_, _, _, cx| {
-                            cx.stop_propagation();
-                            cx.emit(Event::OpenTab(Box::new(middle_item.clone())));
-                        }),
-                    )
-                    .on_click(
-                        cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
-                            let modifiers = event.modifiers();
-                            if modifiers.platform || modifiers.control {
-                                cx.emit(Event::OpenTab(Box::new(click_item.clone())));
-                                cx.stop_propagation();
-                                return;
-                            }
-                            this.narrow_detail = true;
-                            this.select(key.clone(), cx);
-                            if this.is_narrow(window) {
-                                window.focus(&this.focus, cx);
-                                cx.notify();
-                            }
-                        }),
-                    )
-            })
+            .map(|item| self.list_row(item, cx))
             .collect::<Vec<_>>();
         div()
             .relative()
@@ -621,25 +491,133 @@ impl Inbox {
             .into_any_element()
     }
 
+    fn list_row(&self, item: &Item, cx: &mut Context<Self>) -> Stateful<Div> {
+        let key = item.detail_key();
+        let active = self.selected.as_ref() == Some(&key);
+        let unread = self.state.seen.unseen(item);
+        let sessions = self.sessions.matching(item).count();
+        let project = self.scoped_project(item).unwrap_or(&item.project_path);
+        let tracker = model::is_tracker(&item.provider);
+        let kind = if item.kind == "pr" {
+            if item.provider == "gitlab" {
+                "Merge request"
+            } else {
+                "Pull request"
+            }
+        } else {
+            "Issue"
+        };
+        let source = if tracker && !item.team_name.is_empty() {
+            item.team_name.clone()
+        } else if !item.repo.is_empty() {
+            item.repo.clone()
+        } else {
+            project_name(std::path::Path::new(project))
+        };
+        let attention = attention_label(&item.attention_reason);
+        let row_id = format!("inbox-item-{key}");
+        let middle_key = key.clone();
+        page::row(row_id.clone(), item.title.clone(), active)
+            .debug_selector(move || row_id.clone())
+            .role(Role::ListBoxOption)
+            .aria_selected(active)
+            .child(
+                page::meta()
+                    .flex()
+                    .items_center()
+                    .gap(px(4.))
+                    .child(provider_mark(&item.provider))
+                    .child(icon(status_icon(item), 12.).text_color(status_color(item)))
+                    .child(div().min_w_0().flex_1().truncate().child(format!(
+                        "{kind} · {}{}",
+                        item.reference(),
+                        if attention.is_empty() {
+                            String::new()
+                        } else {
+                            format!(" · {attention}")
+                        }
+                    )))
+                    .when(sessions > 0, |d| {
+                        d.child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(px(2.))
+                                .text_color(accent_color())
+                                .child(icon("message-multiple", 12.).text_color(accent_color()))
+                                .child(sessions.to_string()),
+                        )
+                    })
+                    .child(relative_time(&item.updated_at))
+                    .when(unread, |d| {
+                        d.child(div().size(px(6.)).rounded_full().bg(accent_color()))
+                    }),
+            )
+            .child(
+                page::label()
+                    .mt(px(4.))
+                    .truncate()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(item.title.clone()),
+            )
+            .child(
+                div()
+                    .mt(px(4.))
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .child(
+                        page::meta()
+                            .min_w_0()
+                            .flex_1()
+                            .flex()
+                            .items_center()
+                            .gap(px(4.))
+                            .when(!tracker && !project.is_empty(), |d| {
+                                d.child(crate::project_mark::project_icon(project, 12.))
+                            })
+                            .child(div().min_w_0().truncate().child(source)),
+                    )
+                    .children(
+                        item.labels
+                            .iter()
+                            .take(2)
+                            .map(|label| label_badge(label, true)),
+                    ),
+            )
+            .on_mouse_up(
+                MouseButton::Middle,
+                cx.listener(move |this, _, _, cx| {
+                    cx.stop_propagation();
+                    if let Some(item) = this.item_in_list(&middle_key) {
+                        cx.emit(Event::OpenTab(Box::new(item)));
+                    }
+                }),
+            )
+            .on_click(
+                cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
+                    let modifiers = event.modifiers();
+                    if modifiers.platform || modifiers.control {
+                        if let Some(item) = this.item_in_list(&key) {
+                            cx.emit(Event::OpenTab(Box::new(item)));
+                        }
+                        cx.stop_propagation();
+                        return;
+                    }
+                    this.narrow_detail = true;
+                    this.select(key.clone(), cx);
+                    if this.is_narrow(window) {
+                        window.focus(&this.focus, cx);
+                        cx.notify();
+                    }
+                }),
+            )
+    }
+
     fn back_to_list(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.narrow_detail = false;
         window.focus(&self.search.focus_handle(cx), cx);
         cx.notify();
-    }
-    fn related_sessions(&self, item: &Item) -> Vec<Session> {
-        let work_item = item.work_item();
-        self.sessions
-            .iter()
-            .filter(|s| {
-                s.work_item.as_ref().is_some_and(|work| {
-                    (!work.url.is_empty() && work.url == work_item.url)
-                        || (work.kind == work_item.kind
-                            && work.number == work_item.number
-                            && work.repo.eq_ignore_ascii_case(&work_item.repo))
-                })
-            })
-            .cloned()
-            .collect()
     }
 }
 
@@ -648,9 +626,9 @@ impl gpui::Render for Inbox {
         let narrow = self.is_narrow(window);
         let pinned = self.pinned_item.is_some();
         let showing_detail = pinned || (narrow && self.narrow_detail && self.item().is_some());
-        if self.focus_comment && (!narrow || showing_detail) {
-            self.focus_comment = false;
-            window.focus(&self.comment.focus_handle(cx), cx);
+        if self.composer.focus_comment && (!narrow || showing_detail) {
+            self.composer.focus_comment = false;
+            window.focus(&self.composer.comment.focus_handle(cx), cx);
         }
         div()
             .id("inbox-view")
@@ -661,21 +639,21 @@ impl gpui::Render for Inbox {
             .size_full()
             .flex()
             .flex_col()
-            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
-                if event.keystroke.key == "escape" {
-                    if this.connect_provider.is_some() && !this.connecting {
-                        this.connect_provider = None;
-                    } else if this.confirm_action.is_some() && !this.acting {
-                        this.confirm_action = None;
-                    } else if this.filters_open
-                        || this.connections_open
-                        || this.project_picker
-                        || this.action_menu
-                    {
+            .on_action(
+                cx.listener(|this, _: &vorkspace_ui::actions::DismissMenu, window, cx| {
+                    if this.connect.provider.is_some() {
+                        if !this.connect.connecting {
+                            this.dismiss_connection(cx);
+                            window.focus(&this.focus, cx);
+                        }
+                    } else if this.actions.confirm_action.is_some() {
+                        if !this.actions.acting {
+                            this.actions.confirm_action = None;
+                        }
+                    } else if this.filters_open || this.start.project_picker || this.actions.menu {
                         this.filters_open = false;
-                        this.connections_open = false;
-                        this.project_picker = false;
-                        this.action_menu = false;
+                        this.start.project_picker = false;
+                        this.actions.menu = false;
                     } else if this.pinned_item.is_none()
                         && this.is_narrow(window)
                         && this.narrow_detail
@@ -687,8 +665,8 @@ impl gpui::Render for Inbox {
                     }
                     cx.stop_propagation();
                     cx.notify();
-                }
-            }))
+                }),
+            )
             .on_mouse_move(
                 cx.listener(|this, event: &gpui::MouseMoveEvent, window, cx| {
                     if let Some((start, width)) = this.resize_start {
@@ -761,13 +739,14 @@ impl gpui::Render for Inbox {
             )
             .when_some(self.error.clone(), |d, text| d.child(error(text)))
             .when(self.filters_open, |d| d.child(self.filters_menu(cx)))
-            .when(self.connections_open, |d| d.child(self.connection_menu(cx)))
-            .when(self.project_picker, |d| d.child(self.project_menu(cx)))
-            .when(self.action_menu, |d| d.child(self.action_menu_view(cx)))
-            .when(self.connect_provider.is_some(), |d| {
+            .when(self.start.project_picker, |d| {
+                d.child(self.project_menu(cx))
+            })
+            .when(self.actions.menu, |d| d.child(self.action_menu_view(cx)))
+            .when(self.connect.provider.is_some(), |d| {
                 d.child(self.connection_dialog(cx))
             })
-            .when(self.confirm_action.is_some(), |d| {
+            .when(self.actions.confirm_action.is_some(), |d| {
                 d.child(self.action_confirmation(cx))
             })
     }

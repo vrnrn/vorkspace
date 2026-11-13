@@ -1,4 +1,5 @@
 use super::{SettingsView, widgets::secondary_button};
+
 use gpui::{AnyElement, Context, div, prelude::*, px};
 use vorkspace_helper::{DictationPhase, word_rules};
 use vorkspace_ui::radius;
@@ -35,73 +36,9 @@ impl SettingsView {
                 }))],
         ));
         if self.prefs.dictation_enabled {
-            let status = crate::background_helper::get(cx)
-                .map(|s| s.read(cx).dictation_status.clone())
-                .unwrap_or_default();
-            let action = match status.phase {
-                DictationPhase::Microphone => Some("Allow microphone"),
-                DictationPhase::Accessibility => Some("Open Accessibility Settings"),
-                DictationPhase::Model => Some("Download language"),
-                DictationPhase::Error | DictationPhase::Off => Some("Try again"),
-                _ => None,
-            };
-            rows.push(
-                self.row(
-                    Some("dictation-status"),
-                    false,
-                    "Speech recognition",
-                    Some(if status.message.is_empty() {
-                        "Connecting to the background helper…".into()
-                    } else {
-                        status.message.into()
-                    }),
-                    action
-                        .into_iter()
-                        .map(|label| {
-                            secondary_button("dictation-setup", label, false, false)
-                                .child(label)
-                                .on_click(|_, _, cx| crate::background_helper::dictation_setup(cx))
-                                .into_any_element()
-                        })
-                        .collect(),
-                ),
-            );
+            rows.push(self.dictation_status_row(cx));
         }
-        let mut options = vec![
-            ("system".into(), "System default".into(), None),
-            ("builtin".into(), "Built-in microphone".into(), None),
-        ];
-        #[cfg(not(test))]
-        options.extend(
-            vorkspace_helper::input_devices()
-                .into_iter()
-                .map(|device| (format!("uid:{}", device.uid), device.name.into(), None)),
-        );
-        if !options
-            .iter()
-            .any(|(id, _, _)| id == &self.prefs.dictation_microphone)
-        {
-            options.push((
-                self.prefs.dictation_microphone.clone(),
-                "Selected microphone (unavailable)".into(),
-                None,
-            ));
-        }
-        rows.push(self.row(
-            Some("dictation-microphone"),
-            false,
-            "Microphone",
-            Some("Applies to the next dictation.".into()),
-            vec![self.select(
-                "dictation-microphone",
-                "Dictation microphone",
-                &self.prefs.dictation_microphone,
-                options,
-                Some(240.),
-                cx,
-                |this, value, cx| this.update(cx, |p| p.dictation_microphone = value),
-            )],
-        ));
+        rows.push(self.dictation_microphone_row(cx));
         let changed =
             self.dictation_words_input.read(cx).content.as_ref() != self.prefs.dictation_words;
         let description = self.dictation_words_error.clone().unwrap_or_else(||
@@ -150,6 +87,76 @@ impl SettingsView {
         ));
 
         self.group(Some("dictation"), false, "Dictation", None, None, rows)
+    }
+
+    fn dictation_microphone_row(&self, cx: &mut Context<Self>) -> AnyElement {
+        let mut options = vec![
+            ("system".into(), "System default".into(), None),
+            ("builtin".into(), "Built-in microphone".into(), None),
+        ];
+        #[cfg(not(test))]
+        options.extend(
+            vorkspace_helper::input_devices()
+                .into_iter()
+                .map(|device| (format!("uid:{}", device.uid), device.name.into(), None)),
+        );
+        if !options
+            .iter()
+            .any(|(id, _, _)| id == &self.prefs.dictation_microphone)
+        {
+            options.push((
+                self.prefs.dictation_microphone.clone(),
+                "Selected microphone (unavailable)".into(),
+                None,
+            ));
+        }
+        self.row(
+            Some("dictation-microphone"),
+            false,
+            "Microphone",
+            Some("Applies to the next dictation.".into()),
+            vec![self.select(
+                "dictation-microphone",
+                "Dictation microphone",
+                &self.prefs.dictation_microphone,
+                options,
+                Some(240.),
+                cx,
+                |this, value, cx| this.update(cx, |p| p.dictation_microphone = value),
+            )],
+        )
+    }
+
+    fn dictation_status_row(&self, cx: &mut Context<Self>) -> AnyElement {
+        let status = crate::background_helper::get(cx)
+            .map(|s| s.read(cx).dictation_status.clone())
+            .unwrap_or_default();
+        let action = match status.phase {
+            DictationPhase::Microphone => Some("Allow microphone"),
+            DictationPhase::Accessibility => Some("Open Accessibility Settings"),
+            DictationPhase::Model => Some("Download language"),
+            DictationPhase::Error | DictationPhase::Off => Some("Try again"),
+            _ => None,
+        };
+        self.row(
+            Some("dictation-status"),
+            false,
+            "Speech recognition",
+            Some(if status.message.is_empty() {
+                "Connecting to the background helper…".into()
+            } else {
+                status.message.into()
+            }),
+            action
+                .into_iter()
+                .map(|label| {
+                    secondary_button("dictation-setup", label, false, false)
+                        .child(label)
+                        .on_click(|_, _, cx| crate::background_helper::dictation_setup(cx))
+                        .into_any_element()
+                })
+                .collect(),
+        )
     }
 }
 
@@ -227,7 +234,7 @@ mod tests {
                     theme: appearance.into(),
                     ..Default::default()
                 };
-                vorkspace_ui::theme::configure(&prefs, light, false);
+                vorkspace_ui::theme::configure(&prefs, light);
                 let mut cx = gpui::HeadlessAppContext::with_platform(
                     Arc::new(gpui_apple::AppleTextSystem::new()),
                     Arc::new(crate::assets::Assets),

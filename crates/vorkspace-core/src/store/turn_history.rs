@@ -72,12 +72,7 @@ impl Store {
         let Some(current) = self.bot_session(expected.id)? else {
             return Ok(false);
         };
-        let settings = if self.shared.is_some() {
-            self.shared_agent_preferences(expected.id)?
-        } else {
-            self.agent_settings(expected.id)?
-        }
-        .unwrap_or_default();
+        let settings = { self.agent_preferences(expected.id)? }.unwrap_or_default();
         Ok(current.provider == expected.provider
             && current.provider_id == expected.provider_id
             && current.cwd == expected.cwd
@@ -109,16 +104,13 @@ impl Store {
     }
 
     pub fn load_turn_history(&self, id: i64) -> Result<(Transcript, Option<TurnHistory>), String> {
-        if self.shared.is_none() {
-            return Ok((self.load(id)?, None));
-        }
         self.shared_history_schema()?;
         let tx = self
             .conn
             .unchecked_transaction()
             .map_err(|e| e.to_string())?;
         let version = self.shared_turn_version(id)?;
-        let transcript = self.shared_load(id)?;
+        let transcript = self.load(id)?;
         tx.commit().map_err(|e| e.to_string())?;
         let writer = TurnHistory {
             session: id,
@@ -149,17 +141,21 @@ impl Store {
         }
     }
 
+    /// Merge a settled receipt through its storage owner. A shared writer also
+    /// fences numeric turn offsets against its original history baseline.
     pub fn save_turn_info(
         &self,
         id: i64,
         at: usize,
         info: crate::agent::TurnInfo,
-        writer: &mut TurnHistory,
+        writer: Option<&mut TurnHistory>,
     ) -> Result<bool, String> {
-        if writer.session != id {
+        if writer.as_ref().is_some_and(|writer| writer.session != id) {
             return Err("Turn history belongs to another conversation".into());
         }
-        self.shared_save_turns(id, &[(at, info)].into(), Some(writer))
+        {
+            self.shared_save_turns(id, &[(at, info)].into(), writer)
+        }
     }
 
     /// Publish the competing version without changing the winner's transcript,
@@ -199,7 +195,8 @@ impl Store {
             expected.map(|(binding, _)| binding),
             expected.map(|(_, rev)| rev),
         ) {
-            if let Some(shared) = &self.shared {
+            {
+                let shared = &self.shared;
                 let mut all = shared.pending_turn_recoveries.borrow_mut();
                 let versions = all.entry(id).or_default();
                 if !versions.iter().any(|pending| pending.version.id == attempt) {
@@ -220,9 +217,7 @@ impl Store {
     }
 
     pub fn retry_turn_overlap(&self, id: i64, attempt: &str) -> Result<(), String> {
-        let Some(shared) = &self.shared else {
-            return Err("This recovery is unavailable".into());
-        };
+        let shared = &self.shared;
         let mut all = shared.pending_turn_recoveries.borrow_mut();
         let versions = all.get_mut(&id).ok_or("This recovery is unavailable")?;
         let at = versions
@@ -292,18 +287,14 @@ impl Store {
     pub fn recovered_turns(&self, id: i64) -> Result<Vec<RecoveredTurn>, String> {
         let mut pending = self
             .shared
-            .as_ref()
-            .and_then(|shared| {
-                shared
-                    .pending_turn_recoveries
-                    .borrow()
-                    .get(&id)
-                    .map(|entries| {
-                        entries
-                            .iter()
-                            .map(|entry| entry.version.clone())
-                            .collect::<Vec<_>>()
-                    })
+            .pending_turn_recoveries
+            .borrow()
+            .get(&id)
+            .map(|entries| {
+                entries
+                    .iter()
+                    .map(|entry| entry.version.clone())
+                    .collect::<Vec<_>>()
             })
             .unwrap_or_default();
         let saved = self.saved_turn_recoveries(id);
@@ -322,8 +313,7 @@ impl Store {
     }
 
     fn saved_turn_recoveries(&self, id: i64) -> Result<Vec<RecoveredTurn>, String> {
-        if self.shared.is_none() || !shared::has_table(&self.conn, "conversation_turn_recoveries")?
-        {
+        if !sessions::has_table(&self.conn, "conversation_turn_recoveries")? {
             return Ok(Vec::new());
         }
         let mut query = self.conn.prepare(
@@ -343,7 +333,8 @@ impl Store {
     }
 
     pub fn read_recovered_turn(&self, id: i64, attempt: &str) -> Result<Option<Vec<Row>>, String> {
-        if let Some(shared) = &self.shared {
+        {
+            let shared = &self.shared;
             let all = shared.pending_turn_recoveries.borrow();
             if let Some(pending) = all
                 .get(&id)
@@ -352,8 +343,7 @@ impl Store {
                 return Ok(Some(pending.rows.clone()));
             }
         }
-        if self.shared.is_none() || !shared::has_table(&self.conn, "conversation_turn_recoveries")?
-        {
+        if !sessions::has_table(&self.conn, "conversation_turn_recoveries")? {
             return Ok(None);
         }
         let raw: Option<String> = self.conn.query_row(

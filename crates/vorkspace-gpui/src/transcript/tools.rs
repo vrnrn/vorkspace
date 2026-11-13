@@ -68,72 +68,7 @@ impl TranscriptView {
         }
         let identity = scope.map_or_else(|| start.to_string(), |scope| format!("{start}:{scope}"));
         if tool.is_compaction() {
-            let running = tool.state == ToolState::Running;
-            let failed = tool.state == ToolState::Failed;
-            let label = tool.summary().0;
-            return div()
-                .id(gpui::SharedString::from(format!("tool:{identity}")))
-                .debug_selector(move || format!("tool-{start}"))
-                .role(Role::Group)
-                .aria_label(label.clone())
-                .flex()
-                .w_full()
-                .min_w_0()
-                .items_center()
-                .gap_2()
-                .py_1()
-                .line_height(px(20.))
-                .text_color(if failed {
-                    vorkspace_ui::theme::danger()
-                } else {
-                    content(0.55)
-                })
-                .child(if running {
-                    div()
-                        .size(px(14.))
-                        .flex_shrink_0()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .child(
-                            vorkspace_ui::session_mark::spinner_dots(0).with_animation(
-                                gpui::SharedString::from(format!("compaction-loader:{identity}")),
-                                Animation::new(std::time::Duration::from_millis(1_200))
-                                    .repeat()
-                                    .with_max_fps(30.),
-                                |_, phase| {
-                                    vorkspace_ui::session_mark::spinner_dots(
-                                        (phase * 1_200.) as u64,
-                                    )
-                                },
-                            ),
-                        )
-                        .into_any_element()
-                } else {
-                    let glyph = match tool.state {
-                        ToolState::Completed => "check",
-                        ToolState::Failed => "close",
-                        _ => "minus",
-                    };
-                    icon(glyph, 14.)
-                        .text_color(if failed {
-                            vorkspace_ui::theme::danger()
-                        } else {
-                            content(0.45)
-                        })
-                        .into_any_element()
-                })
-                .child(
-                    div()
-                        .min_w_0()
-                        .truncate()
-                        .child(if running && self.visible {
-                            crate::activity::shimmer(label, self.started_at.elapsed().as_secs_f32())
-                        } else {
-                            div().child(label).into_any_element()
-                        }),
-                )
-                .into_any_element();
+            return self.compaction_tool(tool, start, identity);
         }
         let shown = tool.presentation_in(self.file_link_base.as_deref());
         let failed = matches!(tool.state, ToolState::Failed | ToolState::Cancelled);
@@ -240,7 +175,7 @@ impl TranscriptView {
             .gap_1p5()
             .py_1()
             .line_height(px(20.))
-            // React's activity rows are always bare: no status glyph, only
+            // Activity rows are always bare: no status glyph, only
             // a failure stays marked.
             .when(shown.action != "Run", |d| {
                 d.child(
@@ -275,41 +210,7 @@ impl TranscriptView {
                             content(0.7)
                         })
                         .when(is_search, |d| {
-                            let patterns = shown.search_patterns();
-                            let hidden = patterns.len().saturating_sub(2);
-                            d.children(patterns.iter().take(2).enumerate().map(
-                                |(index, pattern)| {
-                                    search_pill()
-                                        .debug_selector(move || {
-                                            format!("tool-search-pill-{start}-{index}")
-                                        })
-                                        .child(
-                                            div().min_w_0().truncate().child((*pattern).to_owned()),
-                                        )
-                                },
-                            ))
-                            .when(hidden > 0, |d| {
-                                d.child(
-                                    search_pill()
-                                        .id(gpui::SharedString::from(format!(
-                                            "tool-search-more:{identity}"
-                                        )))
-                                        .debug_selector(move || format!("tool-search-more-{start}"))
-                                        .flex_shrink_0()
-                                        .bg(content(0.))
-                                        .border_color(content(0.12))
-                                        .text_color(if failed {
-                                            vorkspace_ui::theme::danger()
-                                        } else {
-                                            content(0.5)
-                                        })
-                                        .aria_label(format!(
-                                            "{hidden} more patterns: {}",
-                                            patterns[2..].join(", ")
-                                        ))
-                                        .child(format!("+{hidden}")),
-                                )
-                            })
+                            Self::tool_search_target(d, &shown, start, &identity, failed)
                         })
                         .when(is_file, |d| {
                             d.rounded(px(radius::SMALL)).px_1().bg(content(0.06)).child(
@@ -356,99 +257,14 @@ impl TranscriptView {
                             )
                         })
                         .when(chain, |d| {
-                            let hidden = chips.len().saturating_sub(3);
-                            let rest: Vec<_> = chips
-                                .iter()
-                                .skip(3)
-                                .map(|(_, label, _)| label.clone())
-                                .collect();
-                            d.gap_1p5()
-                                .when_some(shown.description.clone(), |d, description| {
-                                    d.child(
-                                        div()
-                                            .min_w(px(64.))
-                                            .flex_shrink(1.)
-                                            .truncate()
-                                            .child(description),
-                                    )
-                                })
-                                .children(chips.into_iter().take(3).enumerate().map(
-                                    |(index, (action, label, path))| {
-                                        search_pill()
-                                            .id(gpui::SharedString::from(format!(
-                                                "tool-step-chip:{identity}:{index}"
-                                            )))
-                                            .debug_selector(move || {
-                                                format!("tool-step-chip-{start}-{index}")
-                                            })
-                                            .max_w(px(200.))
-                                            .flex_shrink(1.)
-                                            .font_family(vorkspace_ui::fonts::FIXED_FONT)
-                                            .text_size(px(12.))
-                                            .gap_1()
-                                            .px_1p5()
-                                            .when(matches!(action, "Read" | "List"), |d| {
-                                                d.child(if action == "List" {
-                                                    icon("folder", 14.).into_any_element()
-                                                } else {
-                                                    crate::activity::file_icon(&label, 14.)
-                                                })
-                                            })
-                                            .when(action == "Find", |d| {
-                                                d.child(
-                                                    icon("search", 12.)
-                                                        .text_color(content(0.45))
-                                                        .flex_shrink_0(),
-                                                )
-                                            })
-                                            .child(div().min_w_0().truncate().child(label.clone()))
-                                            .when_some(path, |d, path| {
-                                                d.role(Role::Button)
-                                                    .aria_label(format!("Open {path}"))
-                                                    .cursor_pointer()
-                                                    .hover(|style| {
-                                                        style.text_color(
-                                                            vorkspace_ui::theme::accent_color(),
-                                                        )
-                                                    })
-                                                    .on_click(move |_, window, cx| {
-                                                        cx.stop_propagation();
-                                                        window.dispatch_action(
-                                                            Box::new(crate::file_link::OpenPath(
-                                                                path.clone(),
-                                                            )),
-                                                            cx,
-                                                        );
-                                                    })
-                                            })
-                                    },
-                                ))
-                                .when(hidden > 0, |d| {
-                                    d.child(
-                                        search_pill()
-                                            .id(gpui::SharedString::from(format!(
-                                                "tool-step-more:{identity}"
-                                            )))
-                                            .debug_selector(move || {
-                                                format!("tool-step-more-{start}")
-                                            })
-                                            .flex_shrink_0()
-                                            .font_family(vorkspace_ui::fonts::FIXED_FONT)
-                                            .text_size(px(12.))
-                                            .bg(content(0.))
-                                            .border_color(content(0.12))
-                                            .text_color(if failed {
-                                                vorkspace_ui::theme::danger()
-                                            } else {
-                                                content(0.5)
-                                            })
-                                            .aria_label(format!(
-                                                "{hidden} more steps: {}",
-                                                rest.join(", ")
-                                            ))
-                                            .child(format!("+{hidden}")),
-                                    )
-                                })
+                            Self::tool_chain_target(
+                                d,
+                                chips,
+                                &shown.description,
+                                start,
+                                &identity,
+                                failed,
+                            )
                         }),
                 ),
             )
@@ -501,72 +317,7 @@ impl TranscriptView {
             .flex_col()
             .child(summary)
             .when(chain && error_open, |d| {
-                d.child(
-                    div()
-                        .debug_selector(move || format!("tool-steps-{start}"))
-                        .min_w_0()
-                        .pb_2()
-                        .flex()
-                        .flex_col()
-                        .font_family(vorkspace_ui::fonts::FIXED_FONT)
-                        .text_size(px(12.))
-                        .line_height(px(20.))
-                        .children(steps.into_iter().enumerate().map(
-                            |(index, (op, command, path))| {
-                                div()
-                                    .id(gpui::SharedString::from(format!(
-                                        "tool-step:{identity}:{index}"
-                                    )))
-                                    .debug_selector(move || format!("tool-step-{start}-{index}"))
-                                    .flex()
-                                    .min_w_0()
-                                    .gap_2()
-                                    .child(
-                                        div()
-                                            .w(px(16.))
-                                            .flex_shrink_0()
-                                            .flex()
-                                            .justify_end()
-                                            .text_color(content(0.3))
-                                            .child(op.unwrap_or("")),
-                                    )
-                                    .child(
-                                        div()
-                                            .min_w_0()
-                                            .flex_1()
-                                            .debug_selector(move || {
-                                                format!("tool-step-command-{start}-{index}")
-                                            })
-                                            .text_color(content(0.6))
-                                            .child(gpui::Text::new(
-                                                gpui::SharedString::from(format!(
-                                                    "tool-step-command:{identity}:{index}"
-                                                ))
-                                                .into(),
-                                                command.into(),
-                                            )),
-                                    )
-                                    .when_some(path, |d, path| {
-                                        d.role(Role::Button)
-                                            .aria_label(format!("Open {path}"))
-                                            .cursor_pointer()
-                                            .hover(|style| {
-                                                style
-                                                    .text_color(vorkspace_ui::theme::accent_color())
-                                            })
-                                            .on_click(move |_, window, cx| {
-                                                cx.stop_propagation();
-                                                window.dispatch_action(
-                                                    Box::new(crate::file_link::OpenPath(
-                                                        path.clone(),
-                                                    )),
-                                                    cx,
-                                                );
-                                            })
-                                    })
-                            },
-                        )),
-                )
+                Self::tool_command_steps(d, steps, start, &identity)
             })
             .when(has_error && error_open, |d| {
                 d.child(
@@ -581,6 +332,277 @@ impl TranscriptView {
                 )
             })
             .into_any_element()
+    }
+
+    fn compaction_tool(&self, tool: ToolCall, start: usize, identity: String) -> AnyElement {
+        let running = tool.state == ToolState::Running;
+        let failed = tool.state == ToolState::Failed;
+        let label = tool.summary().0;
+        div()
+            .id(gpui::SharedString::from(format!("tool:{identity}")))
+            .debug_selector(move || format!("tool-{start}"))
+            .role(Role::Group)
+            .aria_label(label.clone())
+            .flex()
+            .w_full()
+            .min_w_0()
+            .items_center()
+            .gap_2()
+            .py_1()
+            .line_height(px(20.))
+            .text_color(if failed {
+                vorkspace_ui::theme::danger()
+            } else {
+                content(0.55)
+            })
+            .child(if running {
+                div()
+                    .size(px(14.))
+                    .flex_shrink_0()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(
+                        vorkspace_ui::session_mark::spinner_dots(0).with_animation(
+                            gpui::SharedString::from(format!("compaction-loader:{identity}")),
+                            Animation::new(std::time::Duration::from_millis(1_200))
+                                .repeat()
+                                .with_max_fps(30.),
+                            |_, phase| {
+                                vorkspace_ui::session_mark::spinner_dots((phase * 1_200.) as u64)
+                            },
+                        ),
+                    )
+                    .into_any_element()
+            } else {
+                let glyph = match tool.state {
+                    ToolState::Completed => "check",
+                    ToolState::Failed => "close",
+                    _ => "minus",
+                };
+                icon(glyph, 14.)
+                    .text_color(if failed {
+                        vorkspace_ui::theme::danger()
+                    } else {
+                        content(0.45)
+                    })
+                    .into_any_element()
+            })
+            .child(
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .child(if running && self.visible {
+                        crate::activity::shimmer(label, self.started_at.elapsed().as_secs_f32())
+                    } else {
+                        div().child(label).into_any_element()
+                    }),
+            )
+            .into_any_element()
+    }
+
+    fn tool_chain_target(
+        d: gpui::Stateful<Div>,
+        chips: Vec<(&'static str, String, Option<String>)>,
+        description: &Option<String>,
+        start: usize,
+        identity: &str,
+        failed: bool,
+    ) -> gpui::Stateful<Div> {
+        let hidden = chips.len().saturating_sub(3);
+        let rest: Vec<_> = chips
+            .iter()
+            .skip(3)
+            .map(|(_, label, _)| label.clone())
+            .collect();
+        d.gap_1p5()
+            .when_some(description.clone(), |d, description| {
+                d.child(
+                    div()
+                        .min_w(px(64.))
+                        .flex_shrink(1.)
+                        .truncate()
+                        .child(description),
+                )
+            })
+            .children(chips.into_iter().take(3).enumerate().map(
+                |(index, (action, label, path))| {
+                    search_pill()
+                        .id(gpui::SharedString::from(format!(
+                            "tool-step-chip:{identity}:{index}"
+                        )))
+                        .debug_selector(move || format!("tool-step-chip-{start}-{index}"))
+                        .max_w(px(200.))
+                        .flex_shrink(1.)
+                        .font_family(vorkspace_ui::fonts::FIXED_FONT)
+                        .text_size(px(12.))
+                        .gap_1()
+                        .px_1p5()
+                        .when(matches!(action, "Read" | "List"), |d| {
+                            d.child(if action == "List" {
+                                icon("folder", 14.).into_any_element()
+                            } else {
+                                crate::activity::file_icon(&label, 14.)
+                            })
+                        })
+                        .when(action == "Find", |d| {
+                            d.child(
+                                icon("search", 12.)
+                                    .text_color(content(0.45))
+                                    .flex_shrink_0(),
+                            )
+                        })
+                        .child(div().min_w_0().truncate().child(label.clone()))
+                        .when_some(path, |d, path| {
+                            d.role(Role::Button)
+                                .aria_label(format!("Open {path}"))
+                                .cursor_pointer()
+                                .hover(|style| {
+                                    style.text_color(vorkspace_ui::theme::accent_color())
+                                })
+                                .on_click(move |_, window, cx| {
+                                    cx.stop_propagation();
+                                    window.dispatch_action(
+                                        Box::new(crate::file_link::OpenPath(path.clone())),
+                                        cx,
+                                    );
+                                })
+                        })
+                },
+            ))
+            .when(hidden > 0, |d| {
+                d.child(
+                    search_pill()
+                        .id(gpui::SharedString::from(format!(
+                            "tool-step-more:{identity}"
+                        )))
+                        .debug_selector(move || format!("tool-step-more-{start}"))
+                        .flex_shrink_0()
+                        .font_family(vorkspace_ui::fonts::FIXED_FONT)
+                        .text_size(px(12.))
+                        .bg(content(0.))
+                        .border_color(content(0.12))
+                        .text_color(if failed {
+                            vorkspace_ui::theme::danger()
+                        } else {
+                            content(0.5)
+                        })
+                        .aria_label(format!("{hidden} more steps: {}", rest.join(", ")))
+                        .child(format!("+{hidden}")),
+                )
+            })
+    }
+
+    fn tool_search_target(
+        d: gpui::Stateful<Div>,
+        shown: &vorkspace_core::tool::ToolPresentation,
+        start: usize,
+        identity: &str,
+        failed: bool,
+    ) -> gpui::Stateful<Div> {
+        let patterns = shown.search_patterns();
+        let hidden = patterns.len().saturating_sub(2);
+        d.children(patterns.iter().take(2).enumerate().map(|(index, pattern)| {
+            search_pill()
+                .debug_selector(move || format!("tool-search-pill-{start}-{index}"))
+                .child(div().min_w_0().truncate().child((*pattern).to_owned()))
+        }))
+        .when(hidden > 0, |d| {
+            d.child(
+                search_pill()
+                    .id(gpui::SharedString::from(format!(
+                        "tool-search-more:{identity}"
+                    )))
+                    .debug_selector(move || format!("tool-search-more-{start}"))
+                    .flex_shrink_0()
+                    .bg(content(0.))
+                    .border_color(content(0.12))
+                    .text_color(if failed {
+                        vorkspace_ui::theme::danger()
+                    } else {
+                        content(0.5)
+                    })
+                    .aria_label(format!(
+                        "{hidden} more patterns: {}",
+                        patterns[2..].join(", ")
+                    ))
+                    .child(format!("+{hidden}")),
+            )
+        })
+    }
+
+    fn tool_command_steps(
+        d: Div,
+        steps: Vec<(Option<&'static str>, String, Option<String>)>,
+        start: usize,
+        identity: &str,
+    ) -> Div {
+        d.child(
+            div()
+                .debug_selector(move || format!("tool-steps-{start}"))
+                .min_w_0()
+                .pb_2()
+                .flex()
+                .flex_col()
+                .font_family(vorkspace_ui::fonts::FIXED_FONT)
+                .text_size(px(12.))
+                .line_height(px(20.))
+                .children(
+                    steps
+                        .into_iter()
+                        .enumerate()
+                        .map(|(index, (op, command, path))| {
+                            div()
+                                .id(gpui::SharedString::from(format!(
+                                    "tool-step:{identity}:{index}"
+                                )))
+                                .debug_selector(move || format!("tool-step-{start}-{index}"))
+                                .flex()
+                                .min_w_0()
+                                .gap_2()
+                                .child(
+                                    div()
+                                        .w(px(16.))
+                                        .flex_shrink_0()
+                                        .flex()
+                                        .justify_end()
+                                        .text_color(content(0.3))
+                                        .child(op.unwrap_or("")),
+                                )
+                                .child(
+                                    div()
+                                        .min_w_0()
+                                        .flex_1()
+                                        .debug_selector(move || {
+                                            format!("tool-step-command-{start}-{index}")
+                                        })
+                                        .text_color(content(0.6))
+                                        .child(gpui::Text::new(
+                                            gpui::SharedString::from(format!(
+                                                "tool-step-command:{identity}:{index}"
+                                            ))
+                                            .into(),
+                                            command.into(),
+                                        )),
+                                )
+                                .when_some(path, |d, path| {
+                                    d.role(Role::Button)
+                                        .aria_label(format!("Open {path}"))
+                                        .cursor_pointer()
+                                        .hover(|style| {
+                                            style.text_color(vorkspace_ui::theme::accent_color())
+                                        })
+                                        .on_click(move |_, window, cx| {
+                                            cx.stop_propagation();
+                                            window.dispatch_action(
+                                                Box::new(crate::file_link::OpenPath(path.clone())),
+                                                cx,
+                                            );
+                                        })
+                                })
+                        }),
+                ),
+        )
     }
 }
 

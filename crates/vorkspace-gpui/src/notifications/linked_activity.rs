@@ -52,13 +52,84 @@ impl LinkedActivity {
         self.can_delete = can_delete;
         cx.notify();
     }
-    /// Archive/delete callbacks acknowledge only after successful completion.
-    pub(crate) fn finish_cleanup(&mut self, succeeded: bool, cx: &mut Context<Self>) {
+    pub(crate) fn finish_cleanup(&mut self, cx: &mut Context<Self>) {
         self.cleanup = None;
-        if succeeded && let Some(card) = &self.card {
-            cx.emit(LinkedActivityEvent::Acknowledge(card.session));
-        }
         cx.notify();
+    }
+    fn cleanup_actions(
+        &self,
+        terminal: &'static str,
+        session: i64,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
+        let busy = self.cleanup.is_some();
+        div()
+            .px(px(12.))
+            .py(px(10.))
+            .border_t_1()
+            .border_color(content(0.1))
+            .child(
+                div()
+                    .text_size(px(11.))
+                    .text_color(content(0.75))
+                    .child(format!("{terminal}   Clean up this session")),
+            )
+            .child(
+                div()
+                    .mt(px(8.))
+                    .flex()
+                    .gap(px(6.))
+                    .child(
+                        div()
+                            .id("archive-linked-session")
+                            .role(Role::Button)
+                            .map(vorkspace_ui::theme::tab_reachable)
+                            .rounded(px(radius::CONTROL))
+                            .px(px(8.))
+                            .py(px(4.))
+                            .bg(content(0.1))
+                            .text_size(px(11.))
+                            .opacity(if busy || !self.can_archive { 0.4 } else { 1. })
+                            .when(!busy && self.can_archive, |d| {
+                                d.cursor_pointer()
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.cleanup = Some(Cleanup::Archive);
+                                        cx.emit(LinkedActivityEvent::Archive(session));
+                                        cx.notify();
+                                    }))
+                            })
+                            .child(if self.cleanup == Some(Cleanup::Archive) {
+                                "Archiving…"
+                            } else {
+                                "Archive session"
+                            }),
+                    )
+                    .child(
+                        div()
+                            .id("delete-linked-session")
+                            .role(Role::Button)
+                            .map(vorkspace_ui::theme::tab_reachable)
+                            .rounded(px(radius::CONTROL))
+                            .px(px(8.))
+                            .py(px(4.))
+                            .text_size(px(11.))
+                            .text_color(vorkspace_ui::theme::danger())
+                            .opacity(if busy || !self.can_delete { 0.4 } else { 1. })
+                            .when(!busy && self.can_delete, |d| {
+                                d.cursor_pointer()
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.cleanup = Some(Cleanup::Delete);
+                                        cx.emit(LinkedActivityEvent::Delete(session));
+                                        cx.notify();
+                                    }))
+                            })
+                            .child(if self.cleanup == Some(Cleanup::Delete) {
+                                "Deleting…"
+                            } else {
+                                "Delete…"
+                            }),
+                    ),
+            )
     }
 }
 impl Render for LinkedActivity {
@@ -245,78 +316,7 @@ impl Render for LinkedActivity {
             );
         }
         if let Some(terminal) = card.terminal_label() {
-            let busy = self.cleanup.is_some();
-            body = body.child(
-                div()
-                    .px(px(12.))
-                    .py(px(10.))
-                    .border_t_1()
-                    .border_color(content(0.1))
-                    .child(
-                        div()
-                            .text_size(px(11.))
-                            .text_color(content(0.75))
-                            .child(format!("{terminal}   Clean up this session")),
-                    )
-                    .child(
-                        div()
-                            .mt(px(8.))
-                            .flex()
-                            .gap(px(6.))
-                            .child(
-                                div()
-                                    .id("archive-linked-session")
-                                    .role(Role::Button)
-                                    .map(vorkspace_ui::theme::tab_reachable)
-                                    .rounded(px(radius::CONTROL))
-                                    .px(px(8.))
-                                    .py(px(4.))
-                                    .bg(content(0.1))
-                                    .text_size(px(11.))
-                                    .opacity(if busy || !self.can_archive { 0.4 } else { 1. })
-                                    .when(!busy && self.can_archive, |d| {
-                                        d.cursor_pointer().on_click(cx.listener(
-                                            move |this, _, _, cx| {
-                                                this.cleanup = Some(Cleanup::Archive);
-                                                cx.emit(LinkedActivityEvent::Archive(session));
-                                                cx.notify();
-                                            },
-                                        ))
-                                    })
-                                    .child(if self.cleanup == Some(Cleanup::Archive) {
-                                        "Archiving…"
-                                    } else {
-                                        "Archive session"
-                                    }),
-                            )
-                            .child(
-                                div()
-                                    .id("delete-linked-session")
-                                    .role(Role::Button)
-                                    .map(vorkspace_ui::theme::tab_reachable)
-                                    .rounded(px(radius::CONTROL))
-                                    .px(px(8.))
-                                    .py(px(4.))
-                                    .text_size(px(11.))
-                                    .text_color(vorkspace_ui::theme::danger())
-                                    .opacity(if busy || !self.can_delete { 0.4 } else { 1. })
-                                    .when(!busy && self.can_delete, |d| {
-                                        d.cursor_pointer().on_click(cx.listener(
-                                            move |this, _, _, cx| {
-                                                this.cleanup = Some(Cleanup::Delete);
-                                                cx.emit(LinkedActivityEvent::Delete(session));
-                                                cx.notify();
-                                            },
-                                        ))
-                                    })
-                                    .child(if self.cleanup == Some(Cleanup::Delete) {
-                                        "Deleting…"
-                                    } else {
-                                        "Delete…"
-                                    }),
-                            ),
-                    ),
-            );
+            body = body.child(self.cleanup_actions(terminal, session, cx));
         }
         body = body.child(
             div()

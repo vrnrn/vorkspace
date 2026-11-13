@@ -1,4 +1,5 @@
 use super::*;
+use crate::shell_env::path_to_js;
 use std::path::PathBuf;
 
 fn tmp() -> tempfile::TempDir {
@@ -67,6 +68,96 @@ fn file(dir: &Path, relative: &str) -> ChangedFile {
 }
 
 #[test]
+fn plain_folders_observe_checkout_creation_and_removal() {
+    let dir = tmp();
+    let root = dir.path();
+    let nested = root.join("nested");
+    std::fs::create_dir(&nested).unwrap();
+    std::fs::write(nested.join("notes.txt"), "draft\n").unwrap();
+    let missing = DiffSnapshot::read(&nested).unwrap();
+    assert_eq!(missing.index, DiffIndex::default());
+    assert_eq!(missing.local_head, Some(LocalHead::Missing));
+    assert!(missing.versions.unwrap().is_empty());
+    assert!(missing.stamp.is_none());
+    assert_eq!(diff_files(&nested).unwrap(), DiffIndex::default());
+
+    assert!(init_git(root, "main"));
+    let created = DiffSnapshot::observe(&nested, missing.stamp)
+        .unwrap()
+        .unwrap();
+    assert_eq!(created.local_head, Some(LocalHead::Attached("main".into())));
+    assert_eq!(created.index.head, None);
+    assert_eq!(created.index.files.len(), 1);
+    assert_eq!(created.index.files[0].relative, "notes.txt");
+    assert!(created.stamp.is_some());
+    assert!(DiffSnapshot::observe(&nested, created.stamp)
+        .unwrap()
+        .is_none());
+
+    std::fs::remove_dir_all(root.join(".git")).unwrap();
+    let removed = DiffSnapshot::observe(&nested, created.stamp)
+        .unwrap()
+        .unwrap();
+    assert_eq!(removed.index, DiffIndex::default());
+    assert_eq!(removed.local_head, Some(LocalHead::Missing));
+    assert!(removed.versions.unwrap().is_empty());
+    assert!(removed.stamp.is_none());
+}
+
+#[test]
+fn nested_checkout_detects_same_count_edits_and_preserves_literal_paths() {
+    let dir = tmp();
+    let root = dir.path();
+    let nested = root.join("sub");
+    std::fs::create_dir(&nested).unwrap();
+    let name = " draft => report [a].txt ";
+    let tracked = format!("sub/{name}");
+    assert!(init_git_commit(root, &[(&tracked, "base\n")]));
+    let path = nested.join(name);
+    std::fs::write(&path, "edit one\n").unwrap();
+    let before = DiffSnapshot::read(&nested).unwrap().stamp;
+    assert!(before.is_some());
+    assert!(DiffSnapshot::observe(&nested, before).unwrap().is_none());
+    assert_eq!(file(&nested, name).relative, name);
+
+    std::fs::write(&path, "edit two\n").unwrap();
+    std::fs::File::open(&path)
+        .unwrap()
+        .set_modified(SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(60))
+        .unwrap();
+    let edited = DiffSnapshot::read(&nested).unwrap().stamp;
+    assert!(edited.is_some() && edited != before);
+    assert_eq!(
+        file_diff(&nested, name, false).unwrap().current,
+        "edit two\n"
+    );
+    stage_file(&nested, name).unwrap();
+    assert!(file(&nested, name).staged);
+    assert!(DiffSnapshot::read(&nested).unwrap().stamp != edited);
+}
+
+#[test]
+fn diff_sides_stop_at_the_text_limit_for_disk_files_and_git_blobs() {
+    let dir = tmp();
+    let root = dir.path();
+    assert!(init_git_commit(root, &[("large.txt", "base\n")]));
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(root.join("large.txt"))
+        .unwrap()
+        .set_len(MAX_TEXT_FILE_BYTES + 1)
+        .unwrap();
+    let review = WorktreeReview::open(root).unwrap();
+    let worktree = review.file("large.txt", false).unwrap();
+    assert!(worktree.too_large);
+    assert!(worktree.current.is_empty());
+    stage_file(root, "large.txt").unwrap();
+    let staged = review.file("large.txt", true).unwrap();
+    assert!(staged.too_large);
+    assert!(staged.current.is_empty());
+}
+
+#[test]
 fn review_versions_invalidate_only_changed_file_sides() {
     let dir = tmp();
     let root = dir.path();
@@ -78,22 +169,28 @@ fn review_versions_invalidate_only_changed_file_sides() {
     assert!(git(root, &["add", "a.txt"]));
     std::fs::write(root.join("a.txt"), "work1\n").unwrap();
     std::fs::write(root.join("b.txt"), "other\n").unwrap();
-    let first = diff_files(root).unwrap();
-    let versions = file_diff_versions(root, &first).unwrap();
-    assert_eq!(versions, file_diff_versions(root, &first).unwrap());
+    let first = DiffSnapshot::read(root).unwrap();
+    let versions = first.versions.unwrap();
+    assert_eq!(
+        versions,
+        DiffSnapshot::read(root).unwrap().versions.unwrap()
+    );
 
     std::fs::write(root.join("a.txt"), "work2\n").unwrap();
-    let second = diff_files(root).unwrap();
-    assert_eq!(first, second, "line counts cannot detect this edit");
-    let edited = file_diff_versions(root, &second).unwrap();
+    let second = DiffSnapshot::read(root).unwrap();
+    assert_eq!(
+        first.index, second.index,
+        "line counts cannot detect this edit"
+    );
+    let edited = second.versions.unwrap();
     assert_ne!(versions["unstaged:a.txt"], edited["unstaged:a.txt"]);
     assert_eq!(versions["staged:a.txt"], edited["staged:a.txt"]);
     assert_eq!(versions["unstaged:b.txt"], edited["unstaged:b.txt"]);
 
     assert!(git(root, &["add", "a.txt"]));
-    let staged = file_diff_versions(root, &second).unwrap();
+    let staged = DiffSnapshot::read(root).unwrap().versions.unwrap();
     assert_ne!(edited["staged:a.txt"], staged["staged:a.txt"]);
-    assert_ne!(edited["unstaged:a.txt"], staged["unstaged:a.txt"]);
+    assert!(!staged.contains_key("unstaged:a.txt"));
     assert_eq!(edited["unstaged:b.txt"], staged["unstaged:b.txt"]);
 }
 
@@ -107,19 +204,25 @@ fn review_index_revalidates_closed_views_and_subdirectories() {
     let before = diff_files(root).unwrap();
     let added_name = " new\tfile.txt";
     std::fs::write(root.join("src").join(added_name), "new\n").unwrap();
-    let next = review_index(root, Some(&before)).unwrap();
-    assert_eq!(next.files.len(), 2);
-    assert_eq!(next.files[1].additions, before.files[0].additions);
-    let sub = review_index(&root.join("src"), None).unwrap();
-    assert_eq!(sub.files[0].relative, added_name);
-    assert_eq!(sub.files[1].relative, "a.txt");
-    let versions = file_diff_versions(&root.join("src"), &sub).unwrap();
+    let next = WorktreeReview::open(root)
+        .unwrap()
+        .snapshot(Some(&before))
+        .unwrap();
+    assert_eq!(next.index.files.len(), 2);
+    assert_eq!(next.index.files[1].additions, before.files[0].additions);
+    let sub = WorktreeReview::open(&root.join("src"))
+        .unwrap()
+        .snapshot(None)
+        .unwrap();
+    assert_eq!(sub.index.files[0].relative, added_name);
+    assert_eq!(sub.index.files[1].relative, "a.txt");
+    let versions = sub.versions.unwrap();
     assert!(versions.contains_key(&format!("unstaged:{added_name}")));
     assert!(versions.contains_key("unstaged:a.txt"));
     std::fs::remove_file(root.join("src/a.txt")).unwrap();
-    let deleted = review_index(root, None).unwrap();
-    assert_eq!(deleted.files[1].status, "deleted");
-    assert!(file_diff_versions(root, &deleted).is_ok());
+    let deleted = WorktreeReview::open(root).unwrap().snapshot(None).unwrap();
+    assert_eq!(deleted.index.files[1].status, "deleted");
+    assert!(deleted.versions.is_some());
 }
 
 #[test]
@@ -127,21 +230,22 @@ fn review_versions_support_repositories_with_only_untracked_files() {
     let dir = tmp();
     assert!(init_git(dir.path(), "main"));
     std::fs::write(dir.path().join("new.txt"), "new\n").unwrap();
-    let snapshot = review_index(dir.path(), None).unwrap();
-    assert!(file_diff_versions(dir.path(), &snapshot)
+    let snapshot = WorktreeReview::open(dir.path())
         .unwrap()
-        .contains_key("unstaged:new.txt"));
+        .snapshot(None)
+        .unwrap();
+    assert!(snapshot.versions.unwrap().contains_key("unstaged:new.txt"));
 }
 
 #[test]
-fn diff_stats_are_zero_outside_a_repo() {
+fn diff_index_is_empty_outside_a_repo() {
     let dir = tmp();
     std::fs::write(dir.path().join("notes.txt"), "hello\n").unwrap();
-    assert_eq!(diff_stats(dir.path()).unwrap(), DiffStats::default());
+    assert_eq!(index(dir.path()), DiffIndex::default());
 }
 
 #[test]
-fn diff_stats_count_unstaged_and_untracked() {
+fn diff_index_counts_unstaged_and_untracked() {
     let dir = tmp();
     let dir = dir.path();
     assert!(init_git_commit(dir, &[("a.txt", "alpha\nbeta\ngamma\n")]));
@@ -150,21 +254,45 @@ fn diff_stats_count_unstaged_and_untracked() {
     std::fs::write(dir.join("ignored.txt"), "nope\n").unwrap();
     std::fs::write(dir.join(".gitignore"), "ignored.txt\n").unwrap();
     // a.txt: -beta +delta; new.txt: +2; .gitignore: +1 untracked
+    let changes = index(dir);
     assert_eq!(
-        diff_stats(dir).unwrap(),
-        DiffStats {
-            files: 3,
-            additions: 4,
-            deletions: 1
-        }
+        (changes.files.len(), changes.additions, changes.deletions),
+        (3, 4, 1)
     );
 }
 
 #[test]
-fn diff_stats_are_zero_when_clean() {
+fn diff_index_has_no_files_when_clean() {
     let dir = tmp();
     assert!(init_git_commit(dir.path(), &[("a.txt", "alpha\n")]));
-    assert_eq!(diff_stats(dir.path()).unwrap(), DiffStats::default());
+    let changes = index(dir.path());
+    assert_eq!(
+        (changes.files.len(), changes.additions, changes.deletions),
+        (0, 0, 0)
+    );
+}
+
+#[test]
+fn checkout_observation_coalesces_staged_deletion_and_untracked_replacement() {
+    let dir = tmp();
+    let root = dir.path();
+    assert!(init_git_commit(root, &[("draft.txt", "base\n")]));
+    assert!(git(root, &["rm", "--cached", "draft.txt"]));
+    std::fs::write(root.join("draft.txt"), "new\nreplacement\n").unwrap();
+    let observation = DiffSnapshot::read(root).unwrap();
+    let review = WorktreeReview::open(root)
+        .unwrap()
+        .snapshot(Some(&observation.index))
+        .unwrap();
+    assert_eq!(observation.index.files, review.index.files);
+    assert_eq!(review.index.files.len(), 1);
+    let file = &review.index.files[0];
+    assert_eq!(file.status, "untracked");
+    assert!(file.staged && file.unstaged);
+    let versions = review.versions.unwrap();
+    assert!(
+        versions.contains_key("staged:draft.txt") && versions.contains_key("unstaged:draft.txt")
+    );
 }
 
 #[test]
@@ -930,7 +1058,7 @@ fn git_actions_that_need_helpers_use_login_shell_path() {
 }
 
 #[test]
-fn file_diff_reads_each_side_and_flags_binary() {
+fn file_diff_reads_each_side_and_bounds_content() {
     let dir = tmp();
     assert!(init_git_commit(
         dir.path(),
@@ -957,6 +1085,18 @@ fn file_diff_reads_each_side_and_flags_binary() {
     );
     assert!(file_diff(dir.path(), "bin.dat", false).unwrap().binary);
     assert!(file_diff(dir.path(), "../escape", false).is_err());
+    std::fs::File::create(dir.path().join("large.dat"))
+        .unwrap()
+        .set_len(MAX_TEXT_FILE_BYTES + 1)
+        .unwrap();
+    for staged in [false, true] {
+        if staged {
+            stage_file(dir.path(), "large.dat").unwrap();
+        }
+        let large = file_diff(dir.path(), "large.dat", staged).unwrap();
+        assert!(large.too_large);
+        assert!(large.original.is_empty() && large.current.is_empty());
+    }
 
     assert!(git(dir.path(), &["add", "a.txt"]));
     std::fs::write(dir.path().join("a.txt"), "one\nTWO\nthree\n").unwrap();
@@ -969,6 +1109,28 @@ fn file_diff_reads_each_side_and_flags_binary() {
         file_diff(dir.path(), "a.txt", false).unwrap().original,
         "one\nTWO\n"
     );
+}
+
+#[test]
+fn editor_baseline_reads_a_literal_nested_file_and_tracks_its_side() {
+    let dir = tmp();
+    std::fs::create_dir(dir.path().join("src")).unwrap();
+    let relative = "src/[draft].txt";
+    assert!(init_git_commit(dir.path(), &[(relative, "head\n")]));
+    let root = dir.path().join("src");
+    let path = dir.path().join(relative);
+    let read = || editor_baseline(&root, "[draft].txt").unwrap().unwrap();
+    assert_eq!(read(), ("head\n".into(), false));
+    std::fs::write(&path, "index\n").unwrap();
+    assert!(git(dir.path(), &["--literal-pathspecs", "add", relative]));
+    assert_eq!(read(), ("head\n".into(), true));
+    std::fs::write(&path, "disk\n").unwrap();
+    assert_eq!(read(), ("index\n".into(), false));
+    assert!(git(
+        dir.path(),
+        &["--literal-pathspecs", "rm", "--cached", "-f", relative]
+    ));
+    assert_eq!(read(), (String::new(), false));
 }
 
 #[test]
@@ -990,6 +1152,39 @@ fn stage_contents_stages_a_partial_file_only() {
 }
 
 #[test]
+fn commit_review_scopes_sha256_merges_to_the_nested_project_and_first_parent() {
+    let dir = tmp();
+    let root = dir.path();
+    if !git(root, &["init", "--object-format=sha256", "-b", "main"]) {
+        return;
+    }
+    let project = root.join("nested project");
+    let relative = "literal [x].txt";
+    std::fs::create_dir(&project).unwrap();
+    std::fs::write(project.join(relative), "before\n").unwrap();
+    assert!(git(root, &["add", "."]));
+    assert!(git(root, &["commit", "-m", "Base"]));
+    assert!(git(root, &["checkout", "-b", "topic"]));
+    std::fs::write(project.join(relative), "after\n").unwrap();
+    std::fs::write(root.join("outside.txt"), "outside the project\n").unwrap();
+    assert!(git(root, &["add", "."]));
+    assert!(git(root, &["commit", "-m", "Topic"]));
+    assert!(git(root, &["checkout", "main"]));
+    assert!(git(root, &["merge", "--no-ff", "--no-edit", "topic"]));
+
+    let sha = git_stdout(root, &["rev-parse", "HEAD"]).unwrap();
+    assert_eq!(sha.len(), 64);
+    let review = CommitReview::open(&project, &sha).unwrap();
+    let files = review.files().unwrap();
+    assert_eq!(files.len(), 1);
+    assert_eq!(files[0].relative, relative);
+    assert_eq!(files[0].path, path_to_js(&project.join(relative)));
+    let diff = review.file(relative).unwrap();
+    assert_eq!(diff.original, "before\n");
+    assert_eq!(diff.current, "after\n");
+}
+
+#[test]
 fn commit_files_and_diffs_include_the_root_commit() {
     let dir = tmp();
     assert!(init_git_commit(dir.path(), &[("a.txt", "one\n")]));
@@ -998,7 +1193,10 @@ fn commit_files_and_diffs_include_the_root_commit() {
     std::fs::write(dir.path().join("b.txt"), "bee\n").unwrap();
     assert!(git(dir.path(), &["add", "."]) && git(dir.path(), &["commit", "-m", "second"]));
     let head = git_stdout(dir.path(), &["rev-parse", "HEAD"]).unwrap();
-    let files = commit_files(dir.path(), &head).unwrap();
+    let files = CommitReview::open(dir.path(), &head)
+        .unwrap()
+        .files()
+        .unwrap();
     let summary: Vec<_> = files
         .iter()
         .map(|f| {
@@ -1014,16 +1212,29 @@ fn commit_files_and_diffs_include_the_root_commit() {
         summary,
         [("a.txt", "modified", 1, 0), ("b.txt", "added", 1, 0)]
     );
-    let diff = commit_file_diff(dir.path(), &head, "a.txt").unwrap();
+    let diff = CommitReview::open(dir.path(), &head)
+        .unwrap()
+        .file("a.txt")
+        .unwrap();
     assert_eq!(
         (diff.original.as_str(), diff.current.as_str()),
         ("one\n", "one\ntwo\n")
     );
-    let first = commit_file_diff(dir.path(), &root, "a.txt").unwrap();
+    let first = CommitReview::open(dir.path(), &root)
+        .unwrap()
+        .file("a.txt")
+        .unwrap();
     assert_eq!(
         (first.status.as_str(), first.original.as_str()),
         ("added", "")
     );
-    assert_eq!(commit_files(dir.path(), &root).unwrap().len(), 1);
-    assert!(commit_files(dir.path(), "not-a-sha").is_err());
+    assert_eq!(
+        CommitReview::open(dir.path(), &root)
+            .unwrap()
+            .files()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(CommitReview::open(dir.path(), "not-a-sha").is_err());
 }

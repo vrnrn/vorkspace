@@ -15,7 +15,7 @@ fn local_inventory_hides_missing_tabs_but_preserves_current_and_successful_catal
             assert!(!list.enabled(Kind::Codex));
             assert!(matches!(list.tab, ModelTab::Harness(Kind::Codex)));
             // A newer successful discovery wins over a slow missing-CLI probe.
-            list.catalogs.push((Kind::Pi, Vec::new()));
+            list.catalogs.push((Kind::Pi, Default::default()));
             list.tab = ModelTab::Harness(Kind::Pi);
             list.apply_installation_probe(vec![Kind::Pi], cx);
             assert!(list.provider_visible(Kind::Pi));
@@ -88,40 +88,6 @@ fn hidden_models_leave_the_picker_but_the_current_model_stays(cx: &mut gpui::Tes
                 .filter_map(|entry| entry.id)
                 .collect();
             assert_eq!(favorites, ["a", "c"]);
-        });
-    });
-}
-
-#[gpui::test]
-fn remote_model_availability_comes_from_the_host(cx: &mut gpui::TestAppContext) {
-    cx.update(|cx| {
-        let list = cx.new(|cx| {
-            ModelList::new_for(
-                Kind::Codex,
-                None,
-                "remote://env/home/code",
-                Default::default(),
-                cx,
-            )
-            .hide_providers(vec!["claude".into()])
-        });
-        list.update(cx, |list, cx| {
-            list.remote_providers = Some(vec![Kind::Claude]);
-            list.missing = vec![Kind::Codex];
-            list.tab = ModelTab::Harness(Kind::Claude);
-            list.apply_installation_probe(Kind::ALL.to_vec(), cx);
-            assert!(list.hidden.is_empty());
-            assert!(list.provider_visible(Kind::Claude));
-            assert!(list.provider_visible(Kind::Codex));
-            assert!(!list.provider_visible(Kind::Pi));
-            assert!(list.enabled(Kind::Claude));
-            assert!(!list.enabled(Kind::Codex));
-            assert!(!list.enabled(Kind::Antigravity));
-            // Until its host catalog arrives, no local Claude aliases
-            // are advertised as available remote models.
-            let entries = list.entries(cx);
-            assert_eq!(entries.len(), 1);
-            assert_eq!(entries[0].id, None);
         });
     });
 }

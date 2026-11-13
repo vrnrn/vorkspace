@@ -2,7 +2,7 @@
 use super::Store;
 use crate::bot::{
     launch::{CreatedWorktree, Launch, Workspace},
-    merge_roster_value, new_id, overlay_roster_value, Bot, Roster,
+    merge_roster_value, new_id, overlay_roster_value, Roster,
 };
 use serde_json::Value;
 use std::{
@@ -23,11 +23,6 @@ impl Roster {
         if raw.is_some() {
             *roster.storage_baseline.lock().map_err(|e| e.to_string())? =
                 Some(serde_json::to_string(&roster).map_err(|e| e.to_string())?);
-        }
-        if store.uses_vorkspace_schema() {
-            if let Some(preferences) = store.desktop_preferences() {
-                roster.reconcile_desktop(store, preferences)?;
-            }
         }
         let mut ids = HashSet::new();
         roster.bots.retain(|m| {
@@ -201,20 +196,6 @@ impl Launch {
     }
 }
 
-impl Bot {
-    /// Refresh references without discarding native-created documents or launch
-    /// monitoring state. Removed desktop references disappear on the next read.
-    pub fn refresh_work(&mut self, store: &crate::store::Store) -> Result<bool, String> {
-        let Some(session) = self.session_id else {
-            return Ok(false);
-        };
-        let Some((documents, launches)) = store.bot_work(session)? else {
-            return Ok(false);
-        };
-        self.apply_work(documents, launches)
-    }
-}
-
 pub fn root(store: &Store) -> PathBuf {
     store
         .data_dir()
@@ -225,7 +206,7 @@ pub fn root(store: &Store) -> PathBuf {
 
 impl Store {
     /// Unarchived sessions working in `path`.
-    pub fn sessions_using(&self, path: &str) -> Result<Vec<i64>, String> {
+    pub(crate) fn sessions_using(&self, path: &str) -> Result<Vec<i64>, String> {
         self.sessions_using_path(path, crate::files::is_equal_or_inside)
     }
 

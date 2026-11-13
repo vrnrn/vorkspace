@@ -1,6 +1,14 @@
 //! Model and effort choices, and the composer's menus that offer them.
 use super::*;
 
+fn next_settings_revision(current: u64) -> u64 {
+    let wall = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos() as u64;
+    wall.max(current.saturating_add(1))
+}
+
 impl Conversation {
     pub(super) fn refresh_catalog(&mut self, cx: &mut Context<Self>) {
         if cfg!(test) {
@@ -11,33 +19,19 @@ impl Conversation {
         self.catalog_epoch += 1;
         let epoch = self.catalog_epoch;
         let account = self.settings.account.clone();
-        let work = cx.background_executor().spawn({
-            let remote_project = self.is_remote().then(|| self.summary.cwd.clone());
-            async move {
-                if let Some(project) = remote_project {
-                    vorkspace_core::catalog::remote_models(&project, kind.id())
-                } else {
-                    catalog::models_for(kind, &account)
-                }
-            }
-        });
+
+        let work = cx
+            .background_executor()
+            .spawn(async move { catalog::models_for(kind, &account) });
         cx.spawn(async move |this, cx| {
             if let Ok(models) = work.await {
                 let _ = this.update(cx, |this, cx| {
-                    if Kind::from_id(&this.summary.provider) == kind && this.catalog_epoch == epoch
+                    if Kind::from_id(&this.summary.provider) == kind
+                        && this.catalog_epoch == epoch
+                        && !Arc::ptr_eq(&this.catalog, &models)
                     {
                         this.catalog = models;
-                        if this.is_remote() && this.model.is_none() {
-                            this.model = this
-                                .catalog
-                                .iter()
-                                .find(|m| m.default)
-                                .or_else(|| this.catalog.first())
-                                .map(|m| m.id.clone());
-                            this.settings.model = this.model.clone();
-                            this.save_settings(cx);
-                        }
-                        cx.emit(SessionChanged);
+                        cx.emit(SessionChanged::Configuration);
                         cx.notify();
                     }
                 });
@@ -64,7 +58,7 @@ impl Conversation {
         if settings.model.is_some() {
             self.model = settings.model.clone();
         }
-        self.settings = settings;
+        self.replace_settings(settings, cx);
         cx.notify();
     }
     pub(super) fn save_settings(&mut self, cx: &mut Context<Self>) {
@@ -72,36 +66,29 @@ impl Conversation {
             self.defer_history_action(|this, cx| this.save_settings(cx), cx);
             return;
         }
-        self.settings.revision = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos() as u64;
+        self.settings.revision = next_settings_revision(self.settings.revision);
         let mut settings = self.settings.clone();
         settings.model = self.model.clone();
         let store = self.store.clone();
         let id = self.summary.id;
         let provider = self.summary.provider.clone();
-        let remote = self.is_remote();
         let cancelled = self.settings_write_cancel.clone();
         let title = (!self.summary.has_messages).then(|| self.summary.title.clone());
         cx.background_executor()
             .spawn(async move {
-                let saved = locked(&store).and_then(|s| {
+                let _ = locked(&store).and_then(|s| {
                     if cancelled.load(Ordering::Acquire) {
                         return Ok(());
                     }
                     s.configure_agent(id, &provider, &settings)?;
                     if let Some(title) = title
-                        && s.agent_settings(id)?
+                        && s.agent_preferences(id)?
                             .is_some_and(|saved| saved.revision == settings.revision)
                     {
                         s.title(id, &title)?;
                     }
                     Ok(())
                 });
-                if saved.is_ok() && remote && !cancelled.load(Ordering::Acquire) {
-                    let _ = vorkspace_runtime::runtime::remote::configure_saved(store, id);
-                }
             })
             .detach();
     }
@@ -144,9 +131,7 @@ impl Conversation {
             self.settings.model_settings.remove("serviceTier");
         } else if let Some(setting) = id.strip_prefix("model-setting:") {
             if let Ok((key, value)) = serde_json::from_str::<(String, String)>(setting) {
-                if is_effort_key(&key)
-                    && (!self.is_remote() || matches!(key.as_str(), "effort" | "reasoningEffort"))
-                {
+                if is_effort_key(&key) {
                     self.set_effort_choice(&value, cx);
                 }
                 self.settings.model_settings.insert(key, value);
@@ -213,15 +198,13 @@ impl Conversation {
             .retain(|key, _| !is_effort_key(key));
         self.settings.effort = (!effort.is_empty()).then(|| effort.to_owned());
         let provider = self.summary.provider.clone();
-        if cx.has_global::<vorkspace_ui::preferences::Preferences>() {
-            cx.update_global::<vorkspace_ui::preferences::Preferences, _>(|prefs, _| {
-                if effort.is_empty() {
-                    prefs.provider_efforts.remove(&provider);
-                } else {
-                    prefs.provider_efforts.insert(provider, effort.to_owned());
-                }
-            });
-        }
+        crate::preference_writes::remember(cx, |prefs| {
+            if effort.is_empty() {
+                prefs.provider_efforts.remove(&provider);
+            } else {
+                prefs.provider_efforts.insert(provider, effort.to_owned());
+            }
+        });
     }
     pub(super) fn selected_effort(&self) -> Option<&str> {
         self.settings
@@ -342,116 +325,113 @@ impl Conversation {
         if self.editing_last_turn.pending() || self.status == "Preparing handoff…" {
             return false;
         }
-        let changed_model = self.summary.provider != picked.0.id() || self.model != picked.1;
-        if std::env::var_os("VORKSPACE_NATIVE_TRACE").is_some() {
-            eprintln!(
-                "native model session={} provider={} model={:?}",
-                self.summary.id,
-                picked.0.id(),
-                picked.1
+        let provider = picked.0.id();
+        let changes_provider = self.summary.provider != provider;
+        let changed_model = changes_provider || self.model != picked.1;
+        if changes_provider && self.needs_history_restore() {
+            let picked = ModelPicked(picked.0, picked.1.clone());
+            self.defer_history_action(
+                move |this, cx| {
+                    if this.apply_model_pick(&picked, cx) {
+                        remember_model(picked.0, picked.1, cx);
+                    }
+                },
+                cx,
             );
+            return false;
         }
-        if self.summary.provider != picked.0.id() {
-            let reverting = self
-                .settings
-                .pending_provider_switch
-                .as_ref()
-                .is_some_and(|pending| pending.from == picked.0.id());
-            let restored = reverting
-                .then(|| self.settings.pending_provider_switch.clone())
-                .flatten();
-            let changed = locked(&self.store).and_then(|store| {
-                store.change_provider(self.summary.id, picked.0.id())?;
-                if let Some(id) = restored
-                    .as_ref()
-                    .and_then(|pending| pending.provider_id.as_deref())
+
+        let mut next = self.settings.clone();
+        next.model = picked.1.clone();
+        next.effort = preferred_effort(provider, cx);
+        next.fast = false;
+        next.thinking = None;
+        next.service_tier = None;
+        next.model_settings.clear();
+        if changes_provider {
+            next.account = crate::accounts::get(cx)
+                .map(|center| center.read(cx).selected(picked.0, &self.summary.cwd))
+                .unwrap_or_default();
+            let id = self.summary.id;
+            let saved = {
+                let transcript = self.transcript.read(cx).source_rows();
+                if next.pending_provider_switch.is_none()
+                    && (self.responding()
+                        || self.summary.provider_id.is_some()
+                        || transcript.iter().any(|row| row.is_prompt()))
                 {
-                    store.provider_id(self.summary.id, id)?;
-                }
-                Ok(())
-            });
-            if let Err(error) = changed {
-                self.status = error;
-                cx.notify();
-                return false;
-            }
-            if let Some(pending) = restored {
-                self.settings.account = pending.account;
-                self.summary.provider_id = pending.provider_id;
-                self.settings.pending_provider_switch = None;
-                self.settings.handoff = None;
-            } else {
-                let has_history = self.busy
-                    || self
-                        .transcript
-                        .read(cx)
-                        .source_rows()
-                        .iter()
-                        .any(|row| row.is_prompt());
-                if has_history && self.settings.pending_provider_switch.is_none() {
-                    self.settings.pending_provider_switch =
-                        Some(vorkspace_core::agent::ProviderSwitch {
-                            from: self.summary.provider.clone(),
-                            cwd: self.execution_cwd().to_owned(),
-                            model: self.model.clone(),
-                            model_settings: self.settings.model_settings.clone(),
-                            effort: self.settings.effort.clone(),
-                            fast: self.settings.fast,
-                            service_tier: self.settings.service_tier.clone(),
-                            thinking: self.settings.thinking,
-                            skip_outgoing_recap: self.settings.usage_limit.is_some(),
-                            account: self.settings.account.clone(),
-                            provider_id: self.summary.provider_id.clone(),
-                        });
-                }
-                self.settings.account = crate::accounts::get(cx)
-                    .map(|center| center.read(cx).selected(picked.0, &self.summary.cwd))
-                    .unwrap_or_default();
-                self.summary.provider_id = None;
-                if let Some(pending) = &self.settings.pending_provider_switch {
-                    self.settings.handoff = Some(vorkspace_core::agent::Handoff {
-                        from: pending.from.clone(),
-                        brief: vorkspace_core::response::handoff(
-                            self.transcript.read(cx).source_rows(),
-                        ),
+                    next.pending_provider_switch = Some(vorkspace_core::agent::ProviderSwitch {
+                        from: self.summary.provider.clone(),
+                        cwd: self.execution_cwd().to_owned(),
+                        model: self.model.clone(),
+                        model_settings: self.settings.model_settings.clone(),
+                        effort: self.settings.effort.clone(),
+                        fast: self.settings.fast,
+                        service_tier: self.settings.service_tier.clone(),
+                        thinking: self.settings.thinking,
+                        skip_outgoing_recap: self.settings.usage_limit.is_some(),
+                        account: self.settings.account.clone(),
+                        provider_id: self.summary.provider_id.clone(),
                     });
                 }
-            }
-            self.summary.provider = picked.0.id().into();
-            self.completion.update(cx, |completion, cx| {
-                completion.set_provider(picked.0.id(), cx)
-            });
-            self.catalog.clear();
+                next.handoff = None;
+                next.revision = next_settings_revision(next.revision);
+                locked(&self.store).and_then(|store| {
+                    store.select_local_provider(id, &self.summary.provider, picked.0, next)
+                })
+            };
+            let (settings, binding) = match saved {
+                Ok(saved) => saved,
+                Err(error) => {
+                    self.status = error;
+                    cx.notify();
+                    return false;
+                }
+            };
+            next = settings;
+            self.summary.provider_id = binding;
+            self.summary.provider = provider.into();
+            self.completion
+                .update(cx, |completion, cx| completion.set_provider(provider, cx));
+            self.catalog = Default::default();
             if !self.summary.has_messages {
                 self.summary.title = format!("New {} session", picked.0.label());
             }
         }
+        self.replace_settings(next, cx);
         self.model = picked.1.clone();
+        self.resolved_model = None;
         if let Some(context) = &mut self.context {
             context.window = None;
+            let context = *context;
+            let store = self.store.clone();
+            let id = self.summary.id;
+            let account = self.settings.account.id.clone();
+            let thread = self.summary.provider_id.clone();
+            cx.background_executor()
+                .spawn(async move {
+                    let _ = locked(&store).and_then(|s| {
+                        s.save_context_usage_if_owner(
+                            id,
+                            &context,
+                            provider,
+                            &account,
+                            thread.as_deref(),
+                        )
+                    });
+                })
+                .detach();
         }
-        let store = self.store.clone();
-        let id = self.summary.id;
-        let context = self.context;
-        cx.background_executor()
-            .spawn(async move {
-                if let Some(context) = context {
-                    let _ = locked(&store).and_then(|s| s.save_context_usage(id, &context));
-                }
-            })
-            .detach();
-        self.resolved_model = None;
-        self.settings.effort = preferred_effort(&self.summary.provider, cx);
-        self.settings.fast = false;
-        self.settings.thinking = None;
-        self.settings.service_tier = None;
-        self.settings.model_settings.clear();
-        if changed_model && self.settings.usage_limit.is_some() && !self.busy {
+        if changed_model && self.settings.usage_limit.is_some() && !self.responding() {
             self.recover_usage_after_model_change(cx);
         }
         self.refresh_catalog(cx);
-        self.save_settings(cx);
-        cx.emit(SessionChanged);
+        // The local provider and its handoff are already durable. Blanks
+        // also save their descriptive title through the ordinary settings path.
+        if !changes_provider || !self.summary.has_messages {
+            self.save_settings(cx);
+        }
+        cx.emit(SessionChanged::Configuration);
         true
     }
     pub(super) fn menu_is(&self, kind: ComposerMenu) -> bool {
@@ -585,111 +565,7 @@ impl Conversation {
     ) -> (&'static str, Vec<MenuItem>, f32, MenuStyle) {
         let provider = Kind::from_id(&self.summary.provider);
         match kind {
-            ComposerMenu::CompactSettings => {
-                let bot = self.settings.bot.is_some();
-                let draft = !self.summary.has_messages;
-                let enabled = !self.busy && !self.preparing_worktree && self.git.is_some();
-                let mut items = vec![MenuItem::Header(
-                    if bot {
-                        "Bot settings"
-                    } else {
-                        "Session settings"
-                    }
-                    .into(),
-                )];
-                if !bot {
-                    let linked = self.git.as_ref().is_some_and(|s| s.linked)
-                        || self.settings.worktree_cwd.is_some();
-                    let label = if draft && self.settings.new_worktree {
-                        "New worktree"
-                    } else if linked {
-                        "Worktree"
-                    } else {
-                        "Current checkout"
-                    };
-                    items.push(MenuItem::Header(format!("Workspace · {label}").into()));
-                    if draft {
-                        let (_, workspace, _, _) =
-                            self.menu_items(ComposerMenu::Workspace, events, window, cx);
-                        items.extend(workspace.into_iter().filter_map(|item| match item {
-                            MenuItem::Action(mut action) => {
-                                action.disabled |= !enabled;
-                                Some(MenuItem::Action(action))
-                            }
-                            _ => None,
-                        }));
-                    }
-                    if let Some(branch) = if draft && self.settings.new_worktree {
-                        self.settings
-                            .worktree_base
-                            .as_ref()
-                            .or(self.branch.as_ref())
-                    } else {
-                        self.branch.as_ref()
-                    } {
-                        items.push(
-                            MenuAction::new(
-                                "compact:branch",
-                                if draft && self.settings.new_worktree {
-                                    "Worktree base"
-                                } else {
-                                    "Branch"
-                                },
-                            )
-                            .value(
-                                if !(draft && self.settings.new_worktree)
-                                    && self.git.as_ref().is_some_and(|git| git.detached)
-                                {
-                                    format!("detached {branch}")
-                                } else if draft && self.settings.new_worktree {
-                                    crate::git_tools::git_picker::base_label(branch).to_owned()
-                                } else {
-                                    branch.clone()
-                                },
-                            )
-                            .disabled(!enabled)
-                            .into(),
-                        );
-                    }
-                }
-                let (_, model, _, _) = self.menu_items(ComposerMenu::Model, events, window, cx);
-                // Combined mode already contains model options; beside mode must expose them here too.
-                if cx
-                    .try_global::<vorkspace_ui::preferences::Preferences>()
-                    .is_some_and(|p| p.model_controls == "beside")
-                {
-                    items.extend(self.bot_model_options());
-                }
-                items.extend(model);
-                if !bot {
-                    let actions = self
-                        .bot_access_options()
-                        .into_iter()
-                        .filter_map(|item| match item {
-                            MenuItem::Action(action) => Some(*action),
-                            _ => None,
-                        })
-                        .collect();
-                    items.push(
-                        MenuAction::new("compact:access", "Access")
-                            .value(self.settings.access.label())
-                            .submenu(actions)
-                            .into(),
-                    );
-                }
-                if self.editing_last_turn.pending() {
-                    items.push(MenuAction::new("compact:cancel-edit", "Cancel edit").into());
-                }
-                if !bot
-                    && self.status != "Ready"
-                    && !self.busy
-                    && !self.loading
-                    && self.settings.usage_limit.is_none()
-                {
-                    items.push(MenuItem::Note(self.status.clone().into()));
-                }
-                ("Session settings", items, 280., MenuStyle::Settings)
-            }
+            ComposerMenu::CompactSettings => self.compact_settings_items(events, window, cx),
             ComposerMenu::Account => {
                 let items = crate::accounts::get(cx)
                     .map(|center| {
@@ -767,7 +643,7 @@ impl Conversation {
                     MenuStyle::Settings,
                 )
             }
-            // Composer.tsx's plus menu with native mode and attachment actions.
+            // The composer's plus menu with mode and attachment actions.
             ComposerMenu::Add => {
                 let mut items = vec![MenuItem::Header("Add to message".into())];
                 items.extend(
@@ -780,12 +656,10 @@ impl Conversation {
                             .icon_color(tint(YELLOW_300, 0.8))
                             .description("Review a plan before building"),
                         MenuAction::new("operator", "Operator")
-                            .disabled(self.is_remote())
                             .icon("cursor-magic")
                             .icon_color(tint(SKY_300, 0.8))
                             .description("Give this thread access to vorkspace"),
                         MenuAction::new("orchestrator", "Orchestrator")
-                            .disabled(self.is_remote())
                             .icon("share")
                             .icon_color(tint(FUCHSIA_300, 0.65))
                             .badge("v1")
@@ -793,10 +667,7 @@ impl Conversation {
                         MenuAction::new("draft", "Draft")
                             .icon("circle-dashed-hi")
                             .description("Save it without starting the agent")
-                            .disabled(
-                                self.follow_ups.state.draft.is_some()
-                                    || (self.is_remote() && (self.busy || self.stopping)),
-                            ),
+                            .disabled(self.follow_ups.state.draft.is_some()),
                     ]
                     .into_iter()
                     .filter(|action| {
@@ -840,7 +711,6 @@ impl Conversation {
                         cx,
                     )
                     .hide_providers(hidden)
-                    .allow_provider_switch(true)
                 });
                 events.push(cx.subscribe_in(
                     &list,
@@ -892,6 +762,116 @@ impl Conversation {
             }
             ComposerMenu::Setting(ix) => self.bot_setting_menu(ix),
         }
+    }
+    fn compact_settings_items(
+        &self,
+        events: &mut Vec<Subscription>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> (&'static str, Vec<MenuItem>, f32, MenuStyle) {
+        let bot = self.settings.bot.is_some();
+        let draft = !self.summary.has_messages;
+        let enabled = !self.responding() && !self.preparing_worktree && self.git.is_some();
+        let mut items = vec![MenuItem::Header(
+            if bot {
+                "Bot settings"
+            } else {
+                "Session settings"
+            }
+            .into(),
+        )];
+        if !bot {
+            let linked =
+                self.git.as_ref().is_some_and(|s| s.linked) || self.settings.worktree_cwd.is_some();
+            let label = if draft && self.settings.new_worktree {
+                "New worktree"
+            } else if linked {
+                "Worktree"
+            } else {
+                "Current checkout"
+            };
+            items.push(MenuItem::Header(format!("Workspace · {label}").into()));
+            if draft {
+                let (_, workspace, _, _) =
+                    self.menu_items(ComposerMenu::Workspace, events, window, cx);
+                items.extend(workspace.into_iter().filter_map(|item| match item {
+                    MenuItem::Action(mut action) => {
+                        action.disabled |= !enabled;
+                        Some(MenuItem::Action(action))
+                    }
+                    _ => None,
+                }));
+            }
+            if let Some(branch) = if draft && self.settings.new_worktree {
+                self.settings
+                    .worktree_base
+                    .as_ref()
+                    .or(self.branch.as_ref())
+            } else {
+                self.branch.as_ref()
+            } {
+                items.push(
+                    MenuAction::new(
+                        "compact:branch",
+                        if draft && self.settings.new_worktree {
+                            "Worktree base"
+                        } else {
+                            "Branch"
+                        },
+                    )
+                    .value(
+                        if !(draft && self.settings.new_worktree)
+                            && self.git.as_ref().is_some_and(|git| git.detached)
+                        {
+                            format!("detached {branch}")
+                        } else if draft && self.settings.new_worktree {
+                            crate::git_tools::git_picker::base_label(branch).to_owned()
+                        } else {
+                            branch.clone()
+                        },
+                    )
+                    .disabled(!enabled)
+                    .into(),
+                );
+            }
+        }
+        let (_, model, _, _) = self.menu_items(ComposerMenu::Model, events, window, cx);
+        // Combined mode already contains model options; beside mode must expose them here too.
+        if cx
+            .try_global::<vorkspace_ui::preferences::Preferences>()
+            .is_some_and(|p| p.model_controls == "beside")
+        {
+            items.extend(self.bot_model_options());
+        }
+        items.extend(model);
+        if !bot {
+            let actions = self
+                .bot_access_options()
+                .into_iter()
+                .filter_map(|item| match item {
+                    MenuItem::Action(action) => Some(*action),
+                    _ => None,
+                })
+                .collect();
+            items.push(
+                MenuAction::new("compact:access", "Access")
+                    .value(self.settings.access.label())
+                    .submenu(actions)
+                    .into(),
+            );
+        }
+        if self.editing_last_turn.pending() {
+            items.push(MenuAction::new("compact:cancel-edit", "Cancel edit").into());
+        }
+        if !bot
+            && self.status != "Ready"
+            && !self.responding()
+            && !self.history_loading()
+            && self.settings.usage_limit.is_none()
+        {
+            items.push(MenuItem::Note(self.status.clone().into()));
+        }
+        ("Session settings", items, 280., MenuStyle::Settings)
     }
     /// The composer's "+" menu, for captures.
     #[cfg(test)]

@@ -1,18 +1,16 @@
 use super::*;
 impl Conversation {
     pub(super) fn refresh_submission_recovery(&mut self, cx: &mut Context<Self>) {
-        if self.is_remote() || self.reviewing_submission {
+        if self.reviewing_submission {
             return;
         }
         self.submission_recovery_epoch = self.submission_recovery_epoch.wrapping_add(1);
         let epoch = self.submission_recovery_epoch;
         let store = self.store.clone();
         let id = self.summary.id;
-        let work = cx.background_executor().spawn(async move {
-            let store = locked(&store)?;
-            store.recover_local_submissions()?;
-            store.latest_unconfirmed_submission(id)
-        });
+        let work = cx
+            .background_executor()
+            .spawn(async move { locked(&store)?.session_submission_recovery(id) });
         cx.spawn(async move |this, cx| {
             let result = work.await;
             let _ = this.update(cx, |this, cx| {
@@ -52,7 +50,7 @@ impl Conversation {
         let files_pending = self.attaching || !self.pending_attachments.is_empty();
         let occupied =
             self.input.read(cx).has_message_text() || !self.attachments.is_empty() || files_pending;
-        let disabled = self.reviewing_submission || self.busy;
+        let disabled = self.reviewing_submission || self.responding();
         let draft_ready = self.composer_draft.ready_for_replacement();
         let compaction = snapshot.is_none()
             && receipt
@@ -70,7 +68,7 @@ impl Conversation {
             .into_any_element())
     }
     fn review_local_submission(&mut self, restore: bool, cx: &mut Context<Self>) {
-        if self.reviewing_submission || self.busy {
+        if self.reviewing_submission || self.responding() {
             return;
         }
         let Some(receipt) = self.unconfirmed_submission.as_ref() else {

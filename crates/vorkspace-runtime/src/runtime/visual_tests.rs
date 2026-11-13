@@ -72,6 +72,7 @@ for line in sys.stdin:
     let worker = std::thread::spawn(move || {
         run_turn_using(
             TurnInput {
+                composer_origin: None,
                 summary,
                 prompt: "Show a native visual".into(),
                 settings: Settings::default(),
@@ -88,7 +89,13 @@ for line in sys.stdin:
         let update = receive
             .recv_blocking()
             .expect("Runtime closed before its final update");
-        if !update.finished && update.rows.iter().any(|row| row.role == "visual") {
+        if !update.finished()
+            && update
+                .transcript
+                .rows()
+                .iter()
+                .any(|row| row.role == "visual")
+        {
             let saved = locked(&store).unwrap().load(session).unwrap();
             let visual_rows = saved
                 .rows
@@ -114,7 +121,7 @@ for line in sys.stdin:
             live_visual = true;
             std::fs::write(fixture.0.join("saved-observed"), "saved").unwrap();
         }
-        if update.finished {
+        if update.finished() {
             break update.status;
         }
     };

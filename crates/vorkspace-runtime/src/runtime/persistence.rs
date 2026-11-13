@@ -2,60 +2,53 @@
 //! bounded cadence. Delivery receipts and settled turns always flush immediately.
 use super::*;
 use std::time::Instant;
-
 const SHARED_SAVE_INTERVAL: Duration = Duration::from_millis(250);
-
 pub(super) struct PendingSave {
     from: Option<usize>,
     context_dirty: bool,
     last_flush: Instant,
-    interval: Duration,
-    context_owner: Option<(String, String)>,
-    /// Only Bots bind usage to a specific native thread, including detachment.
-    bot_context_owner: Option<Option<String>>,
+    context_owner: Option<ContextOwner>,
     pub(super) writer: Option<vorkspace_core::store::TurnHistory>,
     pub(super) overlap: bool,
 }
-
+struct ContextOwner {
+    provider: String,
+    account: String,
+    thread: Option<String>,
+}
 impl PendingSave {
-    pub(super) fn new(shared: bool, now: Instant) -> Self {
+    pub(super) fn new(now: Instant) -> Self {
         Self {
             from: None,
             context_dirty: false,
             last_flush: now,
-            interval: if shared {
-                SHARED_SAVE_INTERVAL
-            } else {
-                Duration::ZERO
-            },
             context_owner: None,
-            bot_context_owner: None,
             writer: None,
             overlap: false,
         }
     }
-
-    pub(super) fn own_context(&mut self, provider: &str, account: &str) {
-        self.context_owner = Some((provider.into(), account.into()));
+    pub(super) fn own_context(&mut self, provider: &str, account: &str, thread: Option<&str>) {
+        self.context_owner = Some(ContextOwner {
+            provider: provider.into(),
+            account: account.into(),
+            thread: thread.map(str::to_owned),
+        });
     }
-
-    pub(super) fn own_bot_context(&mut self, provider_id: Option<&str>) {
-        self.bot_context_owner = Some(provider_id.map(str::to_owned));
+    pub(super) fn own_context_thread(&mut self, thread: Option<&str>) {
+        if let Some(owner) = &mut self.context_owner {
+            owner.thread = thread.map(str::to_owned);
+        }
     }
-
     pub(super) fn changed(&mut self, row: usize) {
         self.from = Some(self.from.map_or(row, |old| old.min(row)));
     }
-
     pub(super) fn context_changed(&mut self) {
         self.context_dirty = true;
     }
-
     pub(super) fn due(&self, boundary: bool, now: Instant) -> bool {
         (self.from.is_some() || self.context_dirty)
-            && (boundary || now.saturating_duration_since(self.last_flush) >= self.interval)
+            && (boundary || now.saturating_duration_since(self.last_flush) >= SHARED_SAVE_INTERVAL)
     }
-
     pub(super) fn flush(
         &mut self,
         store: &Database,
@@ -72,18 +65,14 @@ impl PendingSave {
             self.write(&mut store, session, from, &transcript.rows[from..], None)?;
         }
         if self.context_dirty {
-            if let Some((provider, account)) = &self.context_owner {
-                if let Some(native_id) = &self.bot_context_owner {
-                    store.save_bot_context_usage_if_owner(
-                        session,
-                        context,
-                        provider,
-                        account,
-                        native_id.as_deref(),
-                    )?;
-                } else {
-                    store.save_context_usage_if_owner(session, context, provider, account)?;
-                }
+            if let Some(owner) = &self.context_owner {
+                store.save_context_usage_if_owner(
+                    session,
+                    context,
+                    &owner.provider,
+                    &owner.account,
+                    owner.thread.as_deref(),
+                )?;
             } else {
                 store.save_context_usage(session, context)?;
             }
@@ -94,7 +83,6 @@ impl PendingSave {
         self.last_flush = now;
         Ok(())
     }
-
     pub(super) fn write(
         &mut self,
         store: &mut Store,
@@ -112,7 +100,6 @@ impl PendingSave {
         }
         Ok(())
     }
-
     pub(super) fn receipt(
         &mut self,
         store: &Database,
@@ -120,17 +107,15 @@ impl PendingSave {
         at: usize,
         info: vorkspace_core::agent::TurnInfo,
     ) -> Result<(), String> {
-        if let Some(writer) = self.writer.as_mut() {
-            self.overlap = !locked(store)?.save_turn_info(session, at, info, writer)?;
-            if self.overlap {
-                return Err("The saved conversation changed during this turn".into());
-            }
-            Ok(())
-        } else {
-            save_turn_receipt(store, session, at, info)
+        if !self.overlap {
+            self.overlap =
+                !locked(store)?.save_turn_info(session, at, info, self.writer.as_mut())?;
         }
+        if self.overlap {
+            return Err("The saved conversation changed during this turn".into());
+        }
+        Ok(())
     }
-
     pub(super) fn accept(
         &mut self,
         store: &Database,
@@ -152,20 +137,6 @@ impl PendingSave {
         self.last_flush = now;
         Ok(())
     }
-}
-
-pub(super) fn save_turn_receipt(
-    store: &Database,
-    session: i64,
-    turn: usize,
-    info: vorkspace_core::agent::TurnInfo,
-) -> Result<(), String> {
-    let store = locked(store)?;
-    // The picker/composer may have changed during the run. Update only its
-    // immutable turn receipts, using the latest settings revision.
-    let mut settings = store.agent_settings(session)?.unwrap_or_default();
-    settings.turns.insert(turn, info);
-    store.save_agent_settings(session, &settings)
 }
 
 #[cfg(test)]

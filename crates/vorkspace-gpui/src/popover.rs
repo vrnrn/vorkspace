@@ -1,7 +1,6 @@
 use vorkspace_ui::radius;
-// Anchored popovers and menus, ported from src/shared/ui/Popover.tsx, its
-// placement math in src/shared/lib/popover.ts, and the row/keyboard model of
-// src/features/files/ui/ExplorerMenu.tsx.
+// Anchored popovers and menus: their placement math and the menus' row and
+// keyboard model.
 use gpui::{
     AnyElement, AnyView, App, Bounds, BoxShadow, Context, CursorStyle, DispatchPhase, Display,
     Element, ElementId, Entity, EventEmitter, FocusHandle, Focusable, GlobalElementId, Hsla,
@@ -268,7 +267,7 @@ impl Anchor {
 
 type Dismiss = Rc<dyn Fn(&mut Window, &mut App)>;
 
-// Popover.tsx / .popover-open: 170ms, cubic-bezier(.16, 1, .3, 1),
+// Opening: 170ms, cubic-bezier(.16, 1, .3, 1),
 // fading and travelling 8px from the resolved anchor side. The whole card
 // moves together so content cannot slide inside its frame. Dismissal is immediate.
 const MENU_IN: f32 = 0.17;
@@ -291,9 +290,8 @@ fn entrance_offset(side: Side, progress: f32) -> Point<Pixels> {
 }
 
 /// A menu, dropdown or flyout drawn above everything else in the window,
-/// placed against its anchor with viewport flipping (Popover.tsx's
-/// placement). The glass frame, 10% border and shadow follow the React
-/// component; the whole card fades and slides from the anchored edge.
+/// placed against its anchor with viewport flipping. It has a glass frame,
+/// 10% border and shadow; the whole card fades and slides from the anchored edge.
 /// Pressing outside it (and outside its anchor)
 /// dismisses it, and that press reaches nothing else.
 #[derive(IntoElement)]
@@ -307,7 +305,7 @@ pub(crate) struct Popover {
     ignore: Vec<AnchorSlot>,
     on_dismiss: Option<Dismiss>,
     consume_outside_press: bool,
-    modal_classic: Option<bool>,
+    modal: bool,
     animate: bool,
     /// A tooltip: solid ink with paper text instead of the glass card.
     tip: bool,
@@ -326,7 +324,7 @@ pub(crate) fn popover(id: impl Into<ElementId>, anchor: Anchor) -> Popover {
         ignore: Vec::new(),
         on_dismiss: None,
         consume_outside_press: true,
-        modal_classic: None,
+        modal: false,
         animate: true,
         tip: false,
         fit: (None, None),
@@ -350,9 +348,9 @@ impl Popover {
         self.animate = false;
         self
     }
-    /// Modal.tsx: 16px corners, a 7% rule and the shared dialog tint.
-    pub(crate) fn modal_surface(mut self, classic: bool) -> Self {
-        self.modal_classic = Some(classic);
+    /// A modal: 16px corners, a 7% rule and the shared dialog tint.
+    pub(crate) fn modal_surface(mut self) -> Self {
+        self.modal = true;
         self
     }
     pub(crate) fn align(mut self, align: Align) -> Self {
@@ -442,17 +440,13 @@ impl Popover {
         let (viewport_width, viewport_height) = (viewport.width, viewport.height);
         let radius = if self.tip {
             vorkspace_ui::fluid::TIP_RADIUS
-        } else if self.modal_classic.is_some() {
+        } else if self.modal {
             radius::MODAL
         } else {
             radius::SURFACE
         };
-        let border = if self.modal_classic.is_some() {
-            0.07
-        } else {
-            0.1
-        };
-        let tint = if self.modal_classic.is_some() {
+        let border = if self.modal { 0.07 } else { 0.1 };
+        let tint = if self.modal {
             let mut fill = vorkspace_ui::theme::pane_fill();
             fill.a = 0.55;
             fill
@@ -699,7 +693,7 @@ pub(crate) fn bind(cx: &mut App) {
     ]);
 }
 
-/// Which React menu a [`Menu`] draws like. Each has its own row metrics.
+/// Which kind of menu a [`Menu`] draws as. Each has its own row metrics.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum MenuStyle {
     /// ExplorerMenu: tab and session context menus, and every submenu.
@@ -1372,64 +1366,7 @@ impl Menu {
             })
             .when(!in_submenu, |d| d.child(self.rows[ix].probe()))
             .when(reorderable, |d| {
-                let grip_selector = action.id.clone();
-                d.child(
-                    div()
-                        .id(("menu-grip", ix))
-                        .debug_selector(move || format!("menu-grip-{grip_selector}"))
-                        .aria_label(format!("Reorder {}", action.label))
-                        .cursor(CursorStyle::OpenHand)
-                        .w(px(20.))
-                        .h(px(24.))
-                        .flex_shrink_0()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .rounded(px(radius::SMALL))
-                        .text_color(content(0.5))
-                        .hover(|s| {
-                            s.bg(vorkspace_ui::fluid::hover(0.08))
-                                .text_color(content(1.))
-                        })
-                        .child(icon("grip-vertical", 12.))
-                        .on_mouse_down(gpui::MouseButton::Left, |_, window, cx| {
-                            window.prevent_default();
-                            cx.stop_propagation();
-                        })
-                        .on_click(|_, _, cx| cx.stop_propagation())
-                        .on_drag(drag, |drag, _, _, cx| cx.new(|_| drag.clone())),
-                )
-                .can_drop(move |value, _, _| {
-                    value
-                        .downcast_ref::<MenuDrag>()
-                        .is_some_and(|drag| drag.menu == menu_id)
-                })
-                .drag_over::<MenuDrag>(move |s, drag, _, _| {
-                    if drag.menu == menu_id {
-                        s.bg(vorkspace_ui::fluid::pressed(0.15))
-                    } else {
-                        s
-                    }
-                })
-                .on_drop(cx.listener(move |this, drag: &MenuDrag, window, cx| {
-                    if drag.menu != cx.entity_id() {
-                        return;
-                    }
-                    let Some(target) = this.action(ix).filter(|a| a.reorderable) else {
-                        return;
-                    };
-                    if target.id == drag.id {
-                        return;
-                    }
-                    let Some(bounds) = this.row_bounds(ix) else {
-                        return;
-                    };
-                    cx.emit(MenuReordered {
-                        source: drag.id.clone(),
-                        target: target.id.clone(),
-                        after: window.mouse_position().y >= bounds.center().y,
-                    });
-                }))
+                Self::reorder_grip(d, ix, action, drag, menu_id, cx)
             })
             .when_some(action.icon, |d, path| {
                 d.child(
@@ -1560,6 +1497,73 @@ impl Menu {
                 }
             }))
             .into_any()
+    }
+    fn reorder_grip(
+        d: gpui::Stateful<gpui::Div>,
+        ix: usize,
+        action: &MenuAction,
+        drag: MenuDrag,
+        menu_id: gpui::EntityId,
+        cx: &mut Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        let grip_selector = action.id.clone();
+        d.child(
+            div()
+                .id(("menu-grip", ix))
+                .debug_selector(move || format!("menu-grip-{grip_selector}"))
+                .aria_label(format!("Reorder {}", action.label))
+                .cursor(CursorStyle::OpenHand)
+                .w(px(20.))
+                .h(px(24.))
+                .flex_shrink_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(radius::SMALL))
+                .text_color(content(0.5))
+                .hover(|s| {
+                    s.bg(vorkspace_ui::fluid::hover(0.08))
+                        .text_color(content(1.))
+                })
+                .child(icon("grip-vertical", 12.))
+                .on_mouse_down(gpui::MouseButton::Left, |_, window, cx| {
+                    window.prevent_default();
+                    cx.stop_propagation();
+                })
+                .on_click(|_, _, cx| cx.stop_propagation())
+                .on_drag(drag, |drag, _, _, cx| cx.new(|_| drag.clone())),
+        )
+        .can_drop(move |value, _, _| {
+            value
+                .downcast_ref::<MenuDrag>()
+                .is_some_and(|drag| drag.menu == menu_id)
+        })
+        .drag_over::<MenuDrag>(move |s, drag, _, _| {
+            if drag.menu == menu_id {
+                s.bg(vorkspace_ui::fluid::pressed(0.15))
+            } else {
+                s
+            }
+        })
+        .on_drop(cx.listener(move |this, drag: &MenuDrag, window, cx| {
+            if drag.menu != cx.entity_id() {
+                return;
+            }
+            let Some(target) = this.action(ix).filter(|a| a.reorderable) else {
+                return;
+            };
+            if target.id == drag.id {
+                return;
+            }
+            let Some(bounds) = this.row_bounds(ix) else {
+                return;
+            };
+            cx.emit(MenuReordered {
+                source: drag.id.clone(),
+                target: target.id.clone(),
+                after: window.mouse_position().y >= bounds.center().y,
+            });
+        }))
     }
     fn row_text(&self, action: &MenuAction, style: MenuStyle) -> impl IntoElement {
         let title = div()

@@ -1,26 +1,6 @@
 use super::*;
 
 impl Shell {
-    pub(super) fn configure_quick_composer(&mut self, cx: &mut Context<Self>) {
-        if let Some(core) = &self.app_core {
-            core.update(cx, |core, cx| {
-                if let Some(receiver) = core.quick_shortcut.configure(&self.workspace.preferences) {
-                    core.quick_shortcut.task = Some(cx.spawn(async move |_, cx| {
-                        while receiver.recv().await.is_ok() {
-                            cx.update(|cx| {
-                                if let Some(target) = workspace_target(cx)
-                                    .and_then(|window| window.downcast::<Shell>())
-                                {
-                                    let _ = target.update(cx, Shell::toggle_quick_composer);
-                                }
-                            });
-                        }
-                    }));
-                }
-            });
-        }
-    }
-
     pub(super) fn quick_window_active(&self, cx: &App) -> bool {
         self.quick
             .window

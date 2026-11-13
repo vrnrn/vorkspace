@@ -1018,6 +1018,11 @@ impl VisualTestContext {
         });
     }
 
+    /// Simulates an assistive client activating a node from the current tree.
+    pub fn simulate_accessibility_action(&mut self, request: accesskit::ActionRequest) {
+        self.update(|window, cx| window.handle_a11y_action(request, cx));
+    }
+
     /// Simulates a change in whether the platform is presenting this window.
     pub fn simulate_visibility_change(&self, visibility: WindowVisibility) {
         self.simulate_window_visibility_change(self.window, visibility);

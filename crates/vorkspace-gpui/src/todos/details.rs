@@ -69,7 +69,7 @@ impl TodoBoardView {
                             px((size.height.as_f32() - height) / 2.),
                         )),
                     )
-                    .modal_surface(true)
+                    .modal_surface()
                     .without_animation()
                     .priority(70)
                     .width(width)

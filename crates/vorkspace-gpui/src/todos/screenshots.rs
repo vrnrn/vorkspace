@@ -23,7 +23,7 @@ impl Render for Surface {
 fn native_todos_capture() {
     let output = PathBuf::from(std::env::var_os("VORKSPACE_PAGES_SCREEN_DIR").unwrap());
     assert!(output.is_absolute() && output.is_dir());
-    let store = Store::open(Path::new(":memory:")).unwrap();
+    let store = Store::test(Path::new(":memory:")).unwrap();
     let board = TodoBoard::Project("/work/fixtures/release-platform".into());
     let prerequisite = store
         .add_todo(&board, "Review the release checklist", TodoStatus::Todo)
@@ -69,7 +69,6 @@ fn native_todos_capture() {
                 ..Default::default()
             },
             false,
-            true,
         );
     });
     for (layout, width) in [("wide", 1200.), ("tile420", 420.)] {
@@ -78,11 +77,14 @@ fn native_todos_capture() {
                 cx.new(|cx| {
                     Surface(cx.new(|cx| {
                         let mut page = TodosPage::new(store.clone(), cx);
-                        page.choices.push(BoardChoice {
-                            board: board.clone(),
-                            label: "Release platform".into(),
-                        });
-                        page.board.update(cx, |view, cx| {
+                        page.set_choices(
+                            vec![BoardChoice {
+                                board: board.clone(),
+                                label: "Release platform".into(),
+                            }],
+                            cx,
+                        );
+                        page.board_for_capture().update(cx, |view, cx| {
                             // Supersede the initial personal-board load.
                             view.generation += 1;
                             view.board = Some(board.clone());
@@ -102,7 +104,7 @@ fn native_todos_capture() {
         window
             .update(&mut cx, |surface, _, cx| {
                 surface.0.update(cx, |page, cx| {
-                    page.board.update(cx, |view, cx| {
+                    page.board_for_capture().update(cx, |view, cx| {
                         view.create_open = true;
                         cx.notify();
                     });
@@ -117,7 +119,7 @@ fn native_todos_capture() {
         window
             .update(&mut cx, |surface, _, cx| {
                 surface.0.update(cx, |page, cx| {
-                    page.board.update(cx, |view, cx| {
+                    page.board_for_capture().update(cx, |view, cx| {
                         view.create_open = false;
                         view.open_details(&detail, cx);
                     });
@@ -132,7 +134,7 @@ fn native_todos_capture() {
         window
             .update(&mut cx, |surface, _, cx| {
                 surface.0.update(cx, |page, cx| {
-                    page.board.update(cx, |view, cx| {
+                    page.board_for_capture().update(cx, |view, cx| {
                         view.detail_editing = true;
                         cx.notify();
                     });

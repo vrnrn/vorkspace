@@ -1,13 +1,12 @@
-//! The working-tree and commit reads behind the unified review, and partial
-//! staging. Ported from fs.rs `git_file_diff_for`, `git_commit_files_for`,
-//! `git_commit_file_diff_for` and `git_stage_contents_for`.
+//! Working-tree and commit reads for unified review, and partial staging.
+use super::status::{Counts, LocalStatus};
 use super::*;
 use crate::shell_env::{expand_home, path_to_js};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
     io::Write,
-    path::Path,
+    path::{Path, PathBuf},
     process::Stdio,
 };
 
@@ -26,327 +25,301 @@ pub struct FileDiff {
     pub too_large: bool,
 }
 
-/// Changed files and counts, without the branch and upstream reads.
-pub fn diff_files(cwd: &Path) -> Result<DiffIndex, String> {
-    if remote_workspace::is_remote(cwd) {
-        return remote_workspace::command("git_diff_files", json!({"cwd":cwd}));
-    }
-    Ok(diff_index_with(&expand_home(cwd), false))
+pub struct DiffSnapshot {
+    pub index: DiffIndex,
+    pub versions: Option<HashMap<String, FileDiffVersion>>,
+    pub stamp: Option<CheckoutStamp>,
+    pub local_head: Option<LocalHead>,
 }
 
-/// Revalidate the review's file list without computing every file's line
-/// counts or querying remotes. Loaded diffs supply their own exact counts.
-pub fn review_index(cwd: &Path, previous: Option<&DiffIndex>) -> Result<DiffIndex, String> {
-    if remote_workspace::is_remote(cwd) {
-        return diff_files(cwd);
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LocalHead {
+    Missing,
+    Attached(String),
+    Detached(Option<String>),
+}
+
+impl DiffSnapshot {
+    pub fn read(cwd: &Path) -> Result<Self, String> {
+        Self::observe(cwd, None)?.ok_or_else(|| "Missing Git observation".into())
     }
-    let root = expand_home(cwd);
-    let status = git_run(
-        &root,
-        &[
-            "status",
-            "--porcelain=v1",
-            "-z",
-            "--untracked-files=all",
-            "--no-renames",
-            "--",
-            ".",
-        ],
-    )
-    .ok_or_else(|| "Could not read Git status".to_string())?;
-    let prefix = git_stdout(&root, &["rev-parse", "--show-prefix"]).unwrap_or_default();
-    let previous: HashMap<_, _> = previous
-        .into_iter()
-        .flat_map(|i| &i.files)
-        .map(|f| (f.relative.as_str(), f))
-        .collect();
-    let mut files = Vec::new();
-    for record in status.split('\0').filter(|r| !r.is_empty()) {
-        let bytes = record.as_bytes();
-        if bytes.len() < 4 {
-            continue;
-        }
-        let Some(relative) = record[3..].strip_prefix(&prefix) else {
-            continue;
-        };
-        let untracked = &bytes[..2] == b"??";
-        let (x, y) = (bytes[0], bytes[1]);
-        let old = previous.get(relative);
-        files.push(ChangedFile {
-            path: path_to_js(&root.join(relative)),
-            relative: relative.to_string(),
-            status: if untracked {
-                "untracked"
-            } else if x == b'D' || y == b'D' {
-                "deleted"
-            } else if x == b'A' {
-                "added"
-            } else {
-                "modified"
+
+    pub fn observe(cwd: &Path, known: Option<CheckoutStamp>) -> Result<Option<Self>, String> {
+        let root = expand_home(cwd);
+        Ok(match observe_status(&root, known)? {
+            StatusObservation::Unchanged => None,
+            StatusObservation::Missing => Some(Self {
+                index: DiffIndex::default(),
+                versions: Some(HashMap::new()),
+                stamp: None,
+                local_head: Some(LocalHead::Missing),
+            }),
+            StatusObservation::Present(status) => {
+                Some(Self::local(&root, status, Counts::Full { sync: true }))
             }
-            .into(),
-            additions: old.map_or(0, |f| f.additions),
-            deletions: old.map_or(0, |f| f.deletions),
-            staged: !untracked && x != b' ',
-            unstaged: untracked || y != b' ',
-        });
+        })
     }
-    files.sort_by(|a, b| a.relative.cmp(&b.relative));
-    Ok(DiffIndex {
-        head: git_stdout(&root, &["rev-parse", "HEAD"]),
-        files,
-        ..Default::default()
+
+    fn local(cwd: &Path, status: LocalStatus, counts: Counts<'_>) -> Self {
+        let index = status.index(cwd, counts);
+        let local_head = match &status.branch {
+            Some(branch) => LocalHead::Attached(branch.clone()),
+            None if index.head.is_some() => LocalHead::Detached(index.branch.clone()),
+            None => LocalHead::Missing,
+        };
+        Self {
+            index,
+            versions: Some(status.versions()),
+            stamp: status.stamp,
+            local_head: Some(local_head),
+        }
+    }
+}
+
+/// Changed files and counts, without the branch and upstream reads.
+pub fn diff_files(cwd: &Path) -> Result<DiffIndex, String> {
+    local_index(cwd, false)
+}
+
+pub(super) fn local_index(cwd: &Path, sync: bool) -> Result<DiffIndex, String> {
+    let root = expand_home(cwd);
+    Ok(match observe_status(&root, None)? {
+        StatusObservation::Present(status) => status.index(&root, Counts::Full { sync }),
+        StatusObservation::Unchanged | StatusObservation::Missing => DiffIndex::default(),
     })
 }
 
-/// The inputs to one diff, without reading its contents. Index object IDs
-/// invalidate only the affected paths; disk metadata also catches edits that
-/// leave Git's status and line counts unchanged.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct FileDiffVersion {
-    index: String,
-    head: Option<String>,
-    disk: Option<DiskVersion>,
+enum StatusObservation {
+    Unchanged,
+    Missing,
+    Present(LocalStatus),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct DiskVersion {
-    len: u64,
-    modified: Option<SystemTime>,
-    created: Option<SystemTime>,
-    identity: (u64, u64, i64, i64),
+fn observe_status(root: &Path, known: Option<CheckoutStamp>) -> Result<StatusObservation, String> {
+    match LocalStatus::output(root) {
+        Some(raw) => LocalStatus::parse(root, None, &raw, known)
+            .map(|status| status.map_or(StatusObservation::Unchanged, StatusObservation::Present)),
+        None if git_is_work_tree(root) => Err("Could not read Git status".into()),
+        None => Ok(StatusObservation::Missing),
+    }
 }
 
-pub fn file_diff_versions(
-    cwd: &Path,
-    snapshot: &DiffIndex,
-) -> Result<HashMap<String, FileDiffVersion>, String> {
-    if remote_workspace::is_remote(cwd) {
-        // The host exposes no index object IDs. Fingerprint the bounded diff
-        // contents so equal line counts cannot hide an external host edit.
-        use sha2::{Digest, Sha256};
-        let mut versions = HashMap::new();
-        for file in &snapshot.files {
-            for staged in [true, false] {
-                if if staged { !file.staged } else { !file.unstaged } {
-                    continue;
-                }
-                let diff = file_diff(cwd, &file.relative, staged)?;
-                let bytes = serde_json::to_vec(&diff).map_err(|error| error.to_string())?;
-                versions.insert(
-                    format!(
-                        "{}:{}",
-                        if staged { "staged" } else { "unstaged" },
-                        file.relative
-                    ),
-                    FileDiffVersion {
-                        index: format!("{:x}", Sha256::digest(bytes)),
-                        head: snapshot.head.clone(),
-                        disk: None,
-                    },
-                );
-            }
-        }
-        return Ok(versions);
-    }
-    let root = expand_home(cwd);
-    let listing = git_run(&root, &["ls-files", "--stage", "-z", "--", "."])
-        .ok_or_else(|| "Could not read Git index versions".to_string())?;
-    let mut index: HashMap<&str, String> = HashMap::new();
-    for record in listing.split('\0') {
-        if let Some((version, path)) = record.split_once('\t') {
-            let entry = index.entry(path).or_default();
-            entry.push_str(version);
-            entry.push('\n');
-        }
-    }
-    let mut versions = HashMap::new();
-    for file in &snapshot.files {
-        let indexed = index
-            .get(file.relative.as_str())
-            .cloned()
-            .unwrap_or_default();
-        if file.staged {
-            versions.insert(
-                format!("staged:{}", file.relative),
-                FileDiffVersion {
-                    index: indexed.clone(),
-                    head: snapshot.head.clone(),
-                    disk: None,
-                },
-            );
-        }
-        if file.unstaged {
-            let disk = match std::fs::metadata(root.join(&file.relative)) {
-                Ok(meta) => Some(DiskVersion {
-                    len: meta.len(),
-                    modified: meta.modified().ok(),
-                    created: meta.created().ok(),
-                    identity: {
-                        use std::os::unix::fs::MetadataExt;
-                        (meta.dev(), meta.ino(), meta.ctime(), meta.ctime_nsec())
-                    },
-                }),
-                Err(error) if error.kind() == ErrorKind::NotFound => None,
-                Err(error) => return Err(error.to_string()),
-            };
-            versions.insert(
-                format!("unstaged:{}", file.relative),
-                FileDiffVersion {
-                    index: indexed,
-                    head: None,
-                    disk,
-                },
-            );
-        }
-    }
-    Ok(versions)
+/// Read a working-copy review against one resolved Git prefix.
+pub struct WorktreeReview {
+    cwd: PathBuf,
+    // The root prefix is empty for a project at the top of the repository.
+    prefix: String,
 }
 
-/// One file's index or HEAD side against its other side. `staged` compares
-/// HEAD with the index; otherwise the index with the working tree.
+impl WorktreeReview {
+    pub fn open(cwd: &Path) -> Result<Self, String> {
+        let cwd = expand_home(cwd);
+        let location = git_output(
+            &cwd,
+            &["rev-parse", "--is-inside-work-tree", "--show-prefix"],
+        )
+        .ok_or("Not a git repository")?;
+        let location = std::str::from_utf8(&location).map_err(|error| error.to_string())?;
+        let prefix = location
+            .strip_prefix("true\n")
+            .and_then(|prefix| prefix.strip_suffix('\n'))
+            .ok_or("Not a Git working copy")?;
+        Ok(Self {
+            cwd,
+            prefix: prefix.to_owned(),
+        })
+    }
+
+    pub fn snapshot(&self, previous: Option<&DiffIndex>) -> Result<DiffSnapshot, String> {
+        Ok(DiffSnapshot::local(
+            &self.cwd,
+            self.local_status()?,
+            Counts::Previous(previous),
+        ))
+    }
+
+    fn local_status(&self) -> Result<LocalStatus, String> {
+        let raw = LocalStatus::output(&self.cwd).ok_or("Could not read Git status")?;
+        LocalStatus::parse(&self.cwd, Some(&self.prefix), &raw, None)?
+            .ok_or_else(|| "Missing Git observation".into())
+    }
+
+    /// One file's index or HEAD side against its other side. `staged` compares
+    /// HEAD with the index; otherwise the index with the working tree.
+    pub fn file(&self, relative: &str, staged: bool) -> Result<FileDiff, String> {
+        let root = &self.cwd;
+        let prefix = &self.prefix;
+        let relative = resolve_repo_path(root, relative)?;
+        let abs = root.join(&relative);
+        let index_spec = format!(":{prefix}{relative}");
+        let (original, current) = if staged {
+            let head_spec = format!("HEAD:{prefix}{relative}");
+            (git_blob(root, &head_spec), git_blob(root, &index_spec))
+        } else {
+            let current = read_worktree_file(root, &relative, MAX_TEXT_FILE_BYTES)
+                .map_err(|error| error.to_string())?;
+            (git_blob(root, &index_spec), current)
+        };
+        Ok(text_diff(
+            path_to_js(&abs),
+            relative,
+            if staged { "added" } else { "untracked" },
+            original,
+            current,
+        ))
+    }
+}
+
 pub fn file_diff(cwd: &Path, relative: &str, staged: bool) -> Result<FileDiff, String> {
-    if remote_workspace::is_remote(cwd) {
-        return remote_workspace::command(
-            "git_file_diff",
-            json!({"cwd":cwd,"relative":relative,"staged":staged}),
-        );
-    }
-    let root = expand_home(cwd);
-    let relative = resolve_repo_path(&root, relative)?;
-    let abs = root.join(&relative);
-    if !git_is_work_tree(&root) {
-        return Err("Not a git repository".into());
-    }
-    let prefix = git_stdout(&root, &["rev-parse", "--show-prefix"]).unwrap_or_default();
-    let index_spec = format!(":{prefix}{relative}");
-    let (original, current) = if staged {
-        let head_spec = format!("HEAD:{prefix}{relative}");
-        (git_blob(&root, &head_spec), git_blob(&root, &index_spec))
-    } else {
-        let current = abs
-            .is_file()
-            .then(|| std::fs::read(&abs).unwrap_or_default());
-        (git_blob(&root, &index_spec), current)
-    };
-    let status = match (original.is_some(), current.is_some()) {
-        (false, true) if staged => "added",
-        (false, true) => "untracked",
-        (true, false) => "deleted",
-        _ => "modified",
-    };
-    Ok(text_diff(
-        path_to_js(&abs),
-        relative,
-        status,
-        original.unwrap_or_default(),
-        current.unwrap_or_default(),
-    ))
+    WorktreeReview::open(cwd)?.file(relative, staged)
 }
 
-/// The files a commit changed, against its first parent (or nothing).
-pub fn commit_files(cwd: &Path, sha: &str) -> Result<Vec<ChangedFile>, String> {
-    if remote_workspace::is_remote(cwd) {
-        return remote_workspace::command("git_commit_files", json!({"cwd":cwd,"sha":sha}));
+/// Read only the Git side an open text editor compares its buffer against.
+pub fn editor_baseline(cwd: &Path, relative: &str) -> Result<Option<(String, bool)>, String> {
+    let checkout = WorktreeReview::open(cwd)?;
+    let root = &checkout.cwd;
+    let prefix = &checkout.prefix;
+    let relative = resolve_repo_path(root, relative)?;
+    let status = git_output(
+        root,
+        &[
+            "--literal-pathspecs",
+            "status",
+            "--porcelain=v1",
+            "-z",
+            "--no-renames",
+            "--untracked-files=all",
+            "--",
+            &relative,
+        ],
+    )
+    .ok_or("Could not read the file's Git status")?;
+    let mut staged = false;
+    let mut unstaged = false;
+    for record in status.split(|&byte| byte == 0) {
+        let [index, disk, b' ', path @ ..] = record else {
+            continue;
+        };
+        if path.strip_prefix(prefix.as_bytes()) != Some(relative.as_bytes()) {
+            continue;
+        }
+        staged |= *index != b' ' && *index != b'?';
+        unstaged |= *disk != b' ';
     }
-    let root = expand_home(cwd);
-    if !git_is_work_tree(&root) {
-        return Err("Not a git repository".into());
+    let staged = staged && !unstaged;
+    let rev = if staged { "HEAD:" } else { ":" };
+    let base = match git_blob(root, &format!("{rev}{prefix}{relative}")) {
+        None => Some(String::new()),
+        Some(FileContents::Bytes(bytes)) if !bytes.contains(&0) => Some(
+            String::from_utf8(bytes)
+                .unwrap_or_else(|error| String::from_utf8_lossy(error.as_bytes()).into_owned()),
+        ),
+        _ => None,
+    };
+    Ok(base.map(|base| (base, staged)))
+}
+
+/// Resolve a commit once before listing its files or reading any of their sides.
+pub struct CommitReview {
+    cwd: PathBuf,
+    sha: String,
+    parent: Option<String>,
+    prefix: String,
+}
+
+impl CommitReview {
+    pub fn open(cwd: &Path, sha: &str) -> Result<Self, String> {
+        let WorktreeReview { cwd, prefix } = WorktreeReview::open(cwd)?;
+
+        let sha = peel_commit(&cwd, sha)?;
+        let parent = git_stdout(&cwd, &["rev-parse", "--verify", &format!("{sha}^")]);
+        Ok(Self {
+            cwd,
+            sha,
+            parent,
+            prefix,
+        })
     }
-    let sha = peel_commit(&root, sha)?;
-    let mut files: HashMap<String, FileAcc> = HashMap::new();
-    let mut statuses: HashMap<String, &'static str> = HashMap::new();
-    let tree = |kind: &str| {
-        git_run(
-            &root,
-            &[
+
+    /// The files a commit changed, against its first parent (or nothing).
+    pub fn files(&self) -> Result<Vec<ChangedFile>, String> {
+        let Self {
+            cwd: root,
+            sha,
+            parent,
+            ..
+        } = self;
+        let mut files: HashMap<String, FileAcc> = HashMap::new();
+        let mut statuses: HashMap<String, &'static str> = HashMap::new();
+        let tree = |kind: &str| {
+            let mut args = vec![
                 "diff-tree",
                 "-z",
                 "--no-commit-id",
                 "-r",
                 "--root",
+                "--relative",
                 "--no-renames",
                 kind,
-                &sha,
-            ],
-        )
-    };
-    if let Some(text) = tree("--numstat") {
-        add_numstat_map(&text, &mut files);
-    }
-    if let Some(names) = tree("--name-status") {
-        add_name_status(&names, &mut statuses);
-    }
-    let mut out = Vec::with_capacity(files.len().max(statuses.len()));
-    let mut seen = HashSet::new();
-    let file = |relative: String, status: &str, additions, deletions| ChangedFile {
-        path: path_to_js(&root.join(&relative)),
-        relative,
-        status: status.to_string(),
-        additions,
-        deletions,
-        staged: false,
-        unstaged: false,
-    };
-    for (relative, acc) in files {
-        seen.insert(relative.clone());
-        let status = statuses.get(&relative).copied().unwrap_or("modified");
-        out.push(file(relative, status, acc.additions, acc.deletions));
-    }
-    for (relative, status) in statuses {
-        if !seen.contains(&relative) {
-            out.push(file(relative, status, 0, 0));
+            ];
+            args.extend(parent.as_deref());
+            args.extend([sha.as_str(), "--", "."]);
+            git_run(root, &args).ok_or("Could not list the commit's changes")
+        };
+        add_numstat_map(&tree("--numstat")?, &mut files);
+        add_name_status(&tree("--name-status")?, &mut statuses);
+        let mut out = Vec::with_capacity(files.len().max(statuses.len()));
+        let mut seen = HashSet::new();
+        let file = |relative: String, status: &str, additions, deletions| ChangedFile {
+            path: path_to_js(&root.join(&relative)),
+            relative,
+            status: status.to_string(),
+            additions,
+            deletions,
+            staged: false,
+            unstaged: false,
+        };
+        for (relative, acc) in files {
+            seen.insert(relative.clone());
+            let status = statuses.get(&relative).copied().unwrap_or("modified");
+            out.push(file(relative, status, acc.additions, acc.deletions));
         }
+        for (relative, status) in statuses {
+            if !seen.contains(&relative) {
+                out.push(file(relative, status, 0, 0));
+            }
+        }
+        out.sort_by(|a, b| a.relative.cmp(&b.relative));
+        Ok(out)
     }
-    out.sort_by(|a, b| a.relative.cmp(&b.relative));
-    Ok(out)
-}
 
-/// One file in a commit against its first parent.
-pub fn commit_file_diff(cwd: &Path, sha: &str, relative: &str) -> Result<FileDiff, String> {
-    if remote_workspace::is_remote(cwd) {
-        return remote_workspace::command(
-            "git_commit_file_diff",
-            json!({"cwd":cwd,"sha":sha,"relative":relative}),
-        );
+    /// One file in a commit against its first parent.
+    pub fn file(&self, relative: &str) -> Result<FileDiff, String> {
+        let Self {
+            cwd: root,
+            sha,
+            parent,
+            prefix,
+        } = self;
+
+        let relative = resolve_repo_path(root, relative)?;
+        let original = parent
+            .as_ref()
+            .and_then(|parent| git_blob(root, &format!("{parent}:{prefix}{relative}")));
+        let current = git_blob(root, &format!("{sha}:{prefix}{relative}"));
+        Ok(text_diff(
+            path_to_js(&root.join(&relative)),
+            relative,
+            "added",
+            original,
+            current,
+        ))
     }
-    let root = expand_home(cwd);
-    let relative = resolve_repo_path(&root, relative)?;
-    if !git_is_work_tree(&root) {
-        return Err("Not a git repository".into());
-    }
-    let sha = peel_commit(&root, sha)?;
-    let parent = git_stdout(&root, &["rev-parse", "--verify", &format!("{sha}^")]);
-    let original = parent
-        .and_then(|parent| git_blob(&root, &format!("{parent}:{relative}")))
-        .unwrap_or_default();
-    let current = git_blob(&root, &format!("{sha}:{relative}")).unwrap_or_default();
-    let status = if original.is_empty() && !current.is_empty() {
-        "added"
-    } else if !original.is_empty() && current.is_empty() {
-        "deleted"
-    } else {
-        "modified"
-    };
-    Ok(text_diff(
-        path_to_js(&root.join(&relative)),
-        relative,
-        status,
-        original,
-        current,
-    ))
 }
 
 /// Writes `contents` as the file's index entry, keeping its mode: stages a
 /// single hunk without touching the working tree.
 pub fn stage_contents(cwd: &Path, relative: &str, contents: &[u8]) -> Result<(), String> {
-    if remote_workspace::is_remote(cwd) {
-        let contents = std::str::from_utf8(contents).map_err(|_| "File is not valid UTF-8.")?;
-        return remote_workspace::command(
-            "git_stage_contents",
-            json!({"cwd":cwd,"relative":relative,"contents":contents}),
-        );
-    }
     let root = expand_home(cwd);
     let relative = resolve_repo_path(&root, relative)?;
     if contents.len() as u64 > MAX_TEXT_FILE_BYTES {
@@ -370,20 +343,32 @@ pub fn stage_contents(cwd: &Path, relative: &str, contents: &[u8]) -> Result<(),
 fn text_diff(
     path: String,
     relative: String,
-    status: &str,
-    original: Vec<u8>,
-    current: Vec<u8>,
+    added: &str,
+    original: Option<FileContents>,
+    current: Option<FileContents>,
 ) -> FileDiff {
+    let status = match (original.is_some(), current.is_some()) {
+        (false, true) => added,
+        (true, false) => "deleted",
+        _ => "modified",
+    };
+    let too_large = [&original, &current]
+        .iter()
+        .any(|side| matches!(side, Some(FileContents::TooLarge)));
+    let bytes = |side| match side {
+        Some(FileContents::Bytes(bytes)) => bytes,
+        _ => Vec::new(),
+    };
+    let (original, current) = (bytes(original), bytes(current));
     let binary = original.contains(&0) || current.contains(&0);
-    let too_large =
-        original.len() as u64 > MAX_TEXT_FILE_BYTES || current.len() as u64 > MAX_TEXT_FILE_BYTES;
     let (original, current) = if binary || too_large {
         (String::new(), String::new())
     } else {
-        (
-            String::from_utf8_lossy(&original).into_owned(),
-            String::from_utf8_lossy(&current).into_owned(),
-        )
+        let decode = |bytes| {
+            String::from_utf8(bytes)
+                .unwrap_or_else(|error| String::from_utf8_lossy(error.as_bytes()).into_owned())
+        };
+        (decode(original), decode(current))
     };
     FileDiff {
         path,
@@ -395,12 +380,22 @@ fn text_diff(
         too_large,
     }
 }
-fn git_blob(root: &Path, spec: &str) -> Option<Vec<u8>> {
-    git_output(root, &["cat-file", "-p", spec])
+fn git_blob(root: &Path, spec: &str) -> Option<FileContents> {
+    let (bytes, truncated) = git_output_capped(
+        root,
+        &["cat-file", "-p", spec],
+        MAX_TEXT_FILE_BYTES as usize,
+        None,
+    )?;
+    Some(if truncated {
+        FileContents::TooLarge
+    } else {
+        FileContents::Bytes(bytes)
+    })
 }
 fn peel_commit(root: &Path, spec: &str) -> Result<String, String> {
     let spec = spec.trim();
-    if spec.len() < 4 || spec.len() > 40 || !spec.bytes().all(|b| b.is_ascii_hexdigit()) {
+    if !(4..=64).contains(&spec.len()) || !spec.bytes().all(|b| b.is_ascii_hexdigit()) {
         return Err("Invalid commit".into());
     }
     git_stdout(
@@ -410,7 +405,10 @@ fn peel_commit(root: &Path, spec: &str) -> Result<String, String> {
     .ok_or_else(|| "Unknown commit".into())
 }
 fn index_mode(root: &Path, relative: &str) -> Option<String> {
-    let out = git_run(root, &["ls-files", "--stage", "--", relative])?;
+    let out = git_run(
+        root,
+        &["--literal-pathspecs", "ls-files", "--stage", "--", relative],
+    )?;
     let mode = out.lines().next()?.split_whitespace().next()?;
     (mode.len() == 6 && mode.bytes().all(|b| b.is_ascii_digit())).then(|| mode.to_string())
 }
@@ -426,7 +424,6 @@ fn hash_object(root: &Path, relative: &str, contents: &[u8]) -> Result<String, S
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    crate::process::configure_child(&mut command);
     let mut child = command.spawn().map_err(|e| e.to_string())?;
     let mut stdin = child
         .stdin

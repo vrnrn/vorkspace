@@ -40,8 +40,8 @@ vendor/gpui-pre-apple contains gpui-pre-apple 0.3.9 (Zed snapshot
 93d745668805029476e6d7fbb19652116fed51de), copyright Zed Industries,
 licensed under Apache-2.0 (license included). Local modifications include
 source-over alpha blending, backdrop blur, edge fades, text reveal, rounded
-clipping, project-background compositing, shadow clipping, and font-weight
-matching in the text system.
+clipping, project-background compositing, shadow clipping, font-weight
+matching, and bidirectional glyph-offset traversal.
 Source: https://github.com/zed-industries/zed/tree/93d745668805029476e6d7fbb19652116fed51de/crates/gpui_apple
 License text: vendor/gpui-pre-apple/LICENSE-APACHE
 
@@ -56,8 +56,16 @@ are removed.
 The local macOS cursor bridge publishes hit-test requests synchronously while the
 GPUI view owns the pointer, and restores the stored style through AppKit cursor
 rectangles.
-The vendored manifests omit the unused zed-scap dependency and its feature links.
+The local text-input bridge honors AppKit's optional actual range and returned
+substring ownership. Pasteboard images reuse the bytes already copied from Cocoa.
+The AppKit delegate reports reopen handling and releases menu state before
+dispatching actions and validation callbacks.
+The vendored manifests omit the unused zed-scap dependency and its feature links,
+and the macOS ScreenCaptureKit source is removed.
 The gpui-pre build script rejects screen-capture builds pending license review.
+Unused benchmark support, the randomized element tree, spring animations,
+default colors, container queries, the CoreVideo surface element and style
+reflection are removed.
 Font fallback and text tests use the underlying Lilex family directly.
 The retained framework code remains Apache-2.0.
 Unused upstream examples and their demo assets are omitted, together with four

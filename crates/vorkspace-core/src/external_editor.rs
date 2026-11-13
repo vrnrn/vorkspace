@@ -114,9 +114,7 @@ pub fn installed() -> Vec<ExternalEditor> {
 /// Opens the folder `cwd` in the editor `editor_id`. Blocking, like [`installed`].
 pub fn open(editor_id: &str, cwd: &str) -> Result<(), String> {
     let editor = definition(editor_id).ok_or_else(|| "Unknown external editor.".to_string())?;
-    if cwd.starts_with("remote://") {
-        return Err("Remote folders stay on their host machine.".into());
-    }
+
     let cwd = expand_home(Path::new(cwd));
     if !cwd.is_dir() {
         return Err(format!("{} is not a folder.", cwd.display()));
@@ -187,11 +185,7 @@ mod tests {
     }
 
     #[test]
-    fn remote_and_missing_folders_are_rejected_before_launch() {
-        assert_eq!(
-            open("vscode", "remote://host/project").unwrap_err(),
-            "Remote folders stay on their host machine."
-        );
+    fn missing_folders_are_rejected_before_launch() {
         assert!(open("vscode", "").unwrap_err().contains("not a folder"));
     }
 

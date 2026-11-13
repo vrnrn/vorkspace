@@ -5,7 +5,7 @@ fn bot_usage_notice_renders_model_recovery_without_duplicate_hover_styles(
     cx: &mut gpui::TestAppContext,
 ) {
     let store = Arc::new(std::sync::Mutex::new(
-        vorkspace_core::store::Store::open(Path::new(":memory:")).unwrap(),
+        vorkspace_core::store::Store::test(Path::new(":memory:")).unwrap(),
     ));
     let summary = locked(&store).unwrap().create("codex", "/fixture").unwrap();
     let view = cx.new(|cx| Conversation::new(summary, store, cx));
@@ -21,7 +21,7 @@ fn account_recovery_uses_the_terminal_limit_without_reviving_an_older_failure(
 ) {
     use vorkspace_core::transcript::Row;
     let store = Arc::new(std::sync::Mutex::new(
-        vorkspace_core::store::Store::open(Path::new(":memory:")).unwrap(),
+        vorkspace_core::store::Store::test(Path::new(":memory:")).unwrap(),
     ));
     let summary = locked(&store)
         .unwrap()
@@ -65,7 +65,7 @@ fn claude_limit_code_opens_recovery_and_preserves_the_reported_reset(
     cx: &mut gpui::TestAppContext,
 ) {
     let store = Arc::new(std::sync::Mutex::new(
-        vorkspace_core::store::Store::open(Path::new(":memory:")).unwrap(),
+        vorkspace_core::store::Store::test(Path::new(":memory:")).unwrap(),
     ));
     let summary = locked(&store)
         .unwrap()
@@ -90,7 +90,7 @@ fn claude_limit_code_opens_recovery_and_preserves_the_reported_reset(
 #[gpui::test]
 fn usage_banner_matches_the_composer_and_can_arm_cancel_and_dismiss(cx: &mut gpui::TestAppContext) {
     let store = Arc::new(std::sync::Mutex::new(
-        vorkspace_core::store::Store::open(Path::new(":memory:")).unwrap(),
+        vorkspace_core::store::Store::test(Path::new(":memory:")).unwrap(),
     ));
     let mut summary = locked(&store)
         .unwrap()
@@ -172,7 +172,7 @@ fn usage_banner_matches_the_composer_and_can_arm_cancel_and_dismiss(cx: &mut gpu
     );
 
     // Unknown or elapsed reset times keep a manual Resume control and the
-    // same right-aligned actions, as in React's composer variant.
+    // same right-aligned actions in the composer variant.
     for resets_at in [None, Some(usage::now_ms() - 1_000)] {
         window
             .update(visual, |v, _, cx| {
@@ -202,7 +202,7 @@ fn failed_account_transfer_preserves_the_original_account_and_resume_binding(
 ) {
     let directory = tempfile::tempdir().unwrap();
     let store = Arc::new(std::sync::Mutex::new(
-        vorkspace_core::store::Store::open(Path::new(":memory:")).unwrap(),
+        vorkspace_core::store::Store::test(Path::new(":memory:")).unwrap(),
     ));
     let mut summary = locked(&store).unwrap().create("codex", "/fixture").unwrap();
     locked(&store)
@@ -238,7 +238,7 @@ fn failed_account_transfer_preserves_the_original_account_and_resume_binding(
         assert!(view.settings.pending_provider_switch.is_none());
         assert!(view.settings.usage_limit.is_some());
         assert!(view.status.starts_with("Could not switch accounts:"));
-        assert!(!view.busy);
+        assert!(!view.responding());
     });
     let summaries = locked(&store).unwrap().sessions().unwrap();
     assert_eq!(
@@ -257,13 +257,14 @@ fn subscription_limits_persist_and_release_a_bot_only_once_when_armed(
     cx: &mut gpui::TestAppContext,
 ) {
     let store = Arc::new(std::sync::Mutex::new(
-        vorkspace_core::store::Store::open(Path::new(":memory:")).unwrap(),
+        vorkspace_core::store::Store::test(Path::new(":memory:")).unwrap(),
     ));
     let summary = locked(&store).unwrap().create("codex", "/fixture").unwrap();
     let id = summary.id;
     let view = cx.new(|cx| Conversation::new(summary, store.clone(), cx));
     cx.run_until_parked();
     view.update(cx, |v, cx| {
+        assert!(v.usage_watch.is_none());
         v.settings.bot = Some(vorkspace_core::agent::BotContext {
             bot: Default::default(),
             root: "/fixture".into(),
@@ -272,6 +273,7 @@ fn subscription_limits_persist_and_release_a_bot_only_once_when_armed(
         v.status = "Usage limit reached: Fixture subscription exhausted".into();
         v.detect_usage_limit(cx);
         assert!(v.settings.usage_limit.is_some());
+        assert!(v.usage_watch.is_some());
         assert!(v.follow_ups.state.paused);
     });
     cx.run_until_parked();
@@ -292,15 +294,22 @@ fn subscription_limits_persist_and_release_a_bot_only_once_when_armed(
         })
         .detach();
     });
-    view.update(cx, |v, cx| {
+    view.update(cx, |v, _| {
         v.settings.usage_limit.as_mut().unwrap().resets_at = Some(usage::now_ms() - 31_000);
-        v.tick_usage(cx);
+    });
+    cx.executor().advance_clock(Duration::from_secs(30));
+    cx.run_until_parked();
+    view.update(cx, |v, _| {
         assert!(v.settings.usage_limit.is_some());
         v.settings.usage_limit.as_mut().unwrap().resume_at_reset = true;
-        v.tick_usage(cx);
-        assert!(v.settings.usage_limit.is_none());
-        v.tick_usage(cx);
     });
+    cx.executor().advance_clock(Duration::from_secs(30));
+    cx.run_until_parked();
+    view.read_with(cx, |v, _| {
+        assert!(v.settings.usage_limit.is_none());
+        assert!(v.usage_watch.is_none());
+    });
+    cx.executor().advance_clock(Duration::from_secs(30));
     cx.run_until_parked();
     assert_eq!(resumed.get(), 1);
 }

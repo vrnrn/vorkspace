@@ -1,6 +1,6 @@
 #[test]
 fn project_deletion_admission_releases_after_completion() {
-    let mut store = Store::open(std::path::Path::new(":memory:")).unwrap();
+    let mut store = Store::test(std::path::Path::new(":memory:")).unwrap();
     store.begin_project_deletion("/project/").unwrap();
     assert!(store.create("codex", "/project").is_err());
     assert!(store.create("codex", "/project/sub").is_err());
@@ -10,22 +10,9 @@ fn project_deletion_admission_releases_after_completion() {
 }
 
 #[test]
-fn related_settings_publish_atomically_on_native_and_shared_failures() {
+fn related_settings_publish_atomically_on_sidecar_failure() {
     use super::Store;
     let dir = tempfile::tempdir().unwrap();
-    let native = dir.path().join("native.db");
-    let db = Store::open(&native).unwrap();
-    db.save_settings(&[("history", "old"), ("draft", "keep")])
-        .unwrap();
-    db.conn.execute_batch("CREATE TRIGGER reject_draft BEFORE UPDATE ON native_settings WHEN NEW.key='draft' BEGIN SELECT RAISE(ABORT,'injected write failure'); END;").unwrap();
-    assert!(db
-        .save_settings(&[("history", "new"), ("draft", "")])
-        .is_err());
-    drop(db);
-    let db = Store::open(&native).unwrap();
-    assert_eq!(db.setting("history").unwrap().as_deref(), Some("old"));
-    assert_eq!(db.setting("draft").unwrap().as_deref(), Some("keep"));
-
     let path = dir.path().join("shared.db");
     let db = Store::open_vorkspace(&path).unwrap();
     db.save_settings(&[("history", "old"), ("draft", "keep")])
@@ -48,7 +35,7 @@ fn related_settings_publish_atomically_on_native_and_shared_failures() {
 }
 #[test]
 fn removed_worktree_keeps_history_and_requires_reattachment() {
-    let mut store = super::Store::open(std::path::Path::new(":memory:")).unwrap();
+    let mut store = super::Store::test(std::path::Path::new(":memory:")).unwrap();
     let session = store.create("codex", "/project-worktrees/feature").unwrap();
     let settings = crate::agent::Settings {
         worktree_cwd: Some("/project-worktrees/feature".into()),
@@ -92,7 +79,7 @@ fn removed_worktree_keeps_history_and_requires_reattachment() {
 
 #[test]
 fn workspace_membership_reads_main_and_worktree_sessions_without_loading_history() {
-    let store = super::Store::open(std::path::Path::new(":memory:")).unwrap();
+    let store = super::Store::test(std::path::Path::new(":memory:")).unwrap();
     let main = store.create("codex", "/project").unwrap();
     let feature = store.create("claude", "/project").unwrap();
     let corrupt = store.create("codex", "/project").unwrap();
@@ -120,14 +107,14 @@ use super::*;
 fn archive_and_activity_time_survive_restart_without_changing_history() {
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join("native.db");
-    let mut store = Store::open(&path).unwrap();
+    let mut store = Store::test(&path).unwrap();
     let session = store.create("codex", "/project").unwrap();
     assert!(session.updated_at > 0);
     store
         .conn
         .execute(
-            "UPDATE native_sessions SET updated_at=1 WHERE id=?1",
-            [session.id],
+            "UPDATE sessions SET updated_at=1 WHERE id=?1",
+            [store.persisted_session_id(session.id).unwrap()],
         )
         .unwrap();
     let rows = vec![Row {
@@ -142,7 +129,7 @@ fn archive_and_activity_time_survive_restart_without_changing_history() {
     assert!(updated_at > 1);
     store.set_archived(session.id, true).unwrap();
     drop(store);
-    let store = Store::open(&path).unwrap();
+    let store = Store::test(&path).unwrap();
     let saved = &store.sessions().unwrap()[0];
     assert!(saved.archived);
     assert_eq!(
@@ -158,7 +145,7 @@ fn archive_and_activity_time_survive_restart_without_changing_history() {
 fn started_links_and_orchestration_summaries_survive_restart_and_delete() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("s.sqlite3");
-    let store = Store::open(&path).unwrap();
+    let store = Store::test(&path).unwrap();
     let lead = store.create("codex", "/p").unwrap().id;
     let child = store.create("codex", "/p").unwrap().id;
     store.save_started_link(child, lead).unwrap();
@@ -174,7 +161,7 @@ fn started_links_and_orchestration_summaries_survive_restart_and_delete() {
     };
     store.save_orchestration_summary(lead, &summary).unwrap();
     drop(store);
-    let mut store = Store::open(&path).unwrap();
+    let mut store = Store::test(&path).unwrap();
     assert_eq!(store.started_links().unwrap()[&child], lead);
     assert_eq!(store.orchestration_summaries().unwrap()[&lead], summary);
     assert_eq!(summary.tasks[0].label(&summary, false), "Working");
@@ -187,21 +174,24 @@ fn started_links_and_orchestration_summaries_survive_restart_and_delete() {
 fn pins_links_groups_and_reminders_survive_restart_and_delete_clears_them() {
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join("native.db");
-    let mut store = Store::open(&path).unwrap();
+    let store = Store::test(&path).unwrap();
     let keep = store.create("codex", "/project").unwrap();
     let gone = store.create("claude", "/project").unwrap();
     store.set_pinned(&[keep.id], true).unwrap();
     let item = crate::session_groups::parse_github_work_item("https://github.com/acme/app/pull/9")
         .unwrap();
     store.set_work_item(keep.id, Some(&item)).unwrap();
-    let mut groups = crate::session_groups::Groups::default();
-    groups.create_folder(&[keep.id, gone.id], "f".into());
-    groups.pinned_collapsed = true;
-    store.save_groups("/project", &groups).unwrap();
+    store
+        .edit_groups("/project", |groups| {
+            groups.create_folder(&[keep.id, gone.id], "f".into());
+            groups.pinned_collapsed = true;
+            Ok(())
+        })
+        .unwrap();
     store.set_reminders(&[keep.id, gone.id], 100).unwrap();
     store.set_reminders(&[keep.id], 200).unwrap();
     drop(store);
-    let mut store = Store::open(&path).unwrap();
+    let mut store = Store::test(&path).unwrap();
     let saved = store
         .sessions()
         .unwrap()
@@ -210,7 +200,11 @@ fn pins_links_groups_and_reminders_survive_restart_and_delete_clears_them() {
         .unwrap();
     assert!(saved.pinned);
     assert_eq!(saved.work_item, Some(item));
-    assert_eq!(store.groups("/project").unwrap(), groups);
+    let groups = store.groups("/project").unwrap();
+    assert!(groups.pinned_collapsed);
+    assert_eq!(groups.folders.len(), 1);
+    assert_eq!(groups.folders[0].id, "f");
+    assert_eq!(groups.folders[0].session_ids, [keep.id, gone.id]);
     assert_eq!(store.groups("/other").unwrap(), Default::default());
     let snapshot = store.reminders().unwrap();
     let due = store.claim_due_reminders(&snapshot, 150).unwrap();
@@ -232,7 +226,7 @@ fn pins_links_groups_and_reminders_survive_restart_and_delete_clears_them() {
     store.delete(gone.id).unwrap();
     assert_eq!(store.reminders().unwrap().len(), 1);
     assert!(store.sessions().unwrap().iter().all(|s| s.id != gone.id));
-    assert!(store.load(gone.id).unwrap().rows.is_empty());
+    assert!(store.load(gone.id).is_err());
     store.clear_reminders(&[keep.id], None).unwrap();
     assert!(store.reminders().unwrap().is_empty());
     store.set_work_item(keep.id, None).unwrap();
@@ -241,35 +235,10 @@ fn pins_links_groups_and_reminders_survive_restart_and_delete_clears_them() {
     assert!(!saved.pinned && saved.work_item.is_none());
 }
 #[test]
-fn old_native_schema_migrates_idempotently_and_recovers_recorded_times() {
-    let tmp = tempfile::tempdir().unwrap();
-    let path = tmp.path().join("legacy-native.db");
-    let conn = Connection::open(&path).unwrap();
-    conn.execute_batch("CREATE TABLE native_sessions(id INTEGER PRIMARY KEY,title TEXT NOT NULL,provider TEXT NOT NULL,cwd TEXT NOT NULL,provider_id TEXT);
-            CREATE TABLE native_settings(key TEXT PRIMARY KEY,value TEXT NOT NULL);
-            CREATE TABLE native_rows(session_id INTEGER NOT NULL,row_ix INTEGER NOT NULL,role TEXT NOT NULL,body TEXT NOT NULL,first INTEGER NOT NULL,PRIMARY KEY(session_id,row_ix));
-            INSERT INTO native_sessions VALUES(1,'Has a receipt','codex','/project','thread'),(2,'Unknown age','claude','/project',NULL);
-            INSERT INTO native_rows VALUES(1,0,'user','Old prompt',1),(1,1,'assistant','Old answer',1),(2,0,'user','Undated prompt',1);
-            INSERT INTO native_settings VALUES('agent:1','{\"turns\":{\"1\":{\"completed_at\":1700000000000,\"duration_ms\":5000}}}');").unwrap();
-    drop(conn);
-    for _ in 0..2 {
-        let store = Store::open(&path).unwrap();
-        let sessions = store.sessions().unwrap();
-        assert_eq!(sessions[0].updated_at, 1_700_000_000_000);
-        assert_eq!(sessions[1].updated_at, 0, "unknown ages are not invented");
-        assert!(sessions.iter().all(|session| !session.archived));
-        assert_eq!(
-            store.load(1).unwrap().rows[0].sent_at,
-            Some(1_699_999_995_000)
-        );
-        assert_eq!(store.load(2).unwrap().rows[0].sent_at, None);
-    }
-}
-#[test]
 fn send_times_survive_streaming_restart_and_queued_delivery() {
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join("native.db");
-    let mut store = Store::open(&path).unwrap();
+    let mut store = Store::test(&path).unwrap();
     let session = store.create("codex", "/project").unwrap();
     let sent_at = Some(1_700_000_000_000);
     let mut transcript = Transcript::default();
@@ -311,7 +280,7 @@ fn send_times_survive_streaming_restart_and_queued_delivery() {
         });
     roster.save(&store).unwrap();
     drop(store);
-    let store = Store::open(&path).unwrap();
+    let store = Store::test(&path).unwrap();
     let saved = store.load(session.id).unwrap();
     assert_eq!(saved.rows, transcript.rows);
     assert_eq!(saved.rows[answer].sent_at, answer_time);
@@ -324,7 +293,7 @@ fn send_times_survive_streaming_restart_and_queued_delivery() {
 }
 #[test]
 fn delayed_configuration_cannot_restore_an_old_model_or_provider() {
-    let store = Store::open(Path::new(":memory:")).unwrap();
+    let store = Store::test(Path::new(":memory:")).unwrap();
     let session = store.create("codex", "/tmp").unwrap();
     let old = crate::agent::Settings {
         revision: 1,
@@ -353,7 +322,7 @@ fn delayed_configuration_cannot_restore_an_old_model_or_provider() {
 fn wal_restart_preserves_partial_output_and_provider_context() {
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join("native.db");
-    let mut store = Store::open(&path).unwrap();
+    let mut store = Store::test(&path).unwrap();
     let s = store.create("codex", "/tmp").unwrap();
     assert!(!s.has_messages);
     assert!(!store.sessions().unwrap()[0].has_messages);
@@ -365,12 +334,72 @@ fn wal_restart_preserves_partial_output_and_provider_context() {
     store.write_rows(s.id, 0, &t.rows).unwrap();
     store.provider_id(s.id, "thread-1").unwrap();
     drop(store);
-    let store = Store::open(&path).unwrap();
+    let store = Store::test(&path).unwrap();
     assert!(store.sessions().unwrap()[0].has_messages);
     assert_eq!(store.load(s.id).unwrap().rows, t.rows);
     assert_eq!(
         store.sessions().unwrap()[0].provider_id.as_deref(),
         Some("thread-1")
+    );
+}
+
+#[test]
+fn history_recovery_reads_only_the_exact_local_agent_and_keeps_its_binding_snapshot() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("sessions.db");
+    let open = { Store::test };
+    let mut store = open(&path).unwrap();
+    let session = store.create("codex", "/project").unwrap();
+    let mut settings = crate::agent::Settings::default();
+    settings.account.id = "fixture-account".into();
+    store.save_agent_preferences(session.id, &settings).unwrap();
+    store.provider_id(session.id, "original-thread").unwrap();
+    let mut history = crate::transcript::Transcript::default();
+    history.begin("assistant");
+    history.append("Keep the recovered answer");
+    store.write_rows(session.id, 0, &history.rows).unwrap();
+    let unrelated = store.create("claude", "/other-project").unwrap();
+    let table = "sessions";
+    store
+        .conn
+        .execute(
+            &format!("UPDATE {table} SET title=x'FF' WHERE id=?1"),
+            [store.persisted_session_id(unrelated.id).unwrap()],
+        )
+        .unwrap();
+    assert!(
+        store.sessions().is_err(),
+        "the unrelated row cannot be decoded as a sidebar card"
+    );
+
+    let loaded = store.load_local_history(session.id).unwrap();
+    assert_eq!(loaded.transcript.rows, history.rows);
+    assert_eq!(
+        loaded.settings.unwrap().unwrap().account.id,
+        "fixture-account"
+    );
+    assert_eq!(
+        loaded.binding,
+        Some(LocalAgentBinding {
+            provider: "codex".into(),
+            provider_id: Some("original-thread".into()),
+        })
+    );
+    let peer = open(&path).unwrap();
+    peer.provider_id(session.id, "successor-thread").unwrap();
+    assert_eq!(
+        loaded.binding.as_ref().unwrap().provider_id.as_deref(),
+        Some("original-thread")
+    );
+    assert_eq!(
+        store
+            .load_local_history(session.id)
+            .unwrap()
+            .binding
+            .unwrap()
+            .provider_id
+            .as_deref(),
+        Some("successor-thread")
     );
 }
 

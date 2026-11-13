@@ -6,47 +6,33 @@ pub(super) use crate::workspace::AppView;
 
 impl Shell {
     pub(super) fn app_view_open(&self) -> bool {
-        self.active_app_view.is_some() || self.active_terminal_tab.is_some()
+        self.pages.active_app_view.is_some() || self.pages.active_terminal_tab.is_some()
     }
 
-    pub(super) fn app_view_label(&self) -> Option<&'static str> {
-        if self
-            .workspace
-            .active
-            .and_then(|id| self.workspace.app_panes.get(&id))
-            .is_some_and(|p| p.content == crate::workspace::AppPane::Codebase)
-        {
-            return Some("Codebase");
-        }
-        if self.active_terminal_tab.is_some() {
-            return Some("Terminal");
-        }
-        self.active_app_view.map(AppView::label)
-    }
     pub(super) fn leave_app_views(&mut self, cx: &mut Context<Self>) {
-        if let Some(AppView::Connector(provider)) = self.active_app_view
-            && let Some(page) = self.connector_pages.get(&provider)
+        if let Some(AppView::Connector(provider)) = self.pages.active_app_view
+            && let Some(page) = self.pages.connector_pages.get(&provider)
         {
             page.update(cx, |page, cx| page.set_active(false, cx));
         }
-        if self.active_app_view == Some(AppView::Notes)
+        if self.pages.active_app_view == Some(AppView::Notes)
             && let Some(notes) = self
                 .workspace
                 .active
-                .and_then(|id| self.note_tabs.get(&id))
-                .or(self.notes.as_ref())
+                .and_then(|id| self.page_tabs.note_tabs.get(&id))
+                .or(self.page_tabs.notes.as_ref())
         {
             notes.update(cx, |notes, cx| {
                 notes.flush(cx);
                 notes.set_active(false, cx);
             });
         }
-        if let Some(id) = self.active_terminal_tab.take()
-            && let Some(terminal) = self.terminal_tabs.get(&id)
+        if let Some(id) = self.pages.active_terminal_tab.take()
+            && let Some(terminal) = self.pages.terminal_tabs.get(&id)
         {
-            terminal.update(cx, |terminal, _| terminal.visible = false);
+            terminal.update(cx, |terminal, cx| terminal.set_visible(false, cx));
         }
-        self.active_app_view = None;
+        self.pages.active_app_view = None;
         self.invalidate_chrome(cx);
     }
     pub(super) fn close_app_view(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -64,24 +50,24 @@ impl Shell {
         if let Some(pane) = pane {
             self.restore_app_layout_scope(pane, cx);
         }
-        self.selected_sessions.clear();
-        self.selection_anchor = None;
-        self.sidebar_target = None;
-        self.context_selection = false;
+        self.sidebar.selected_sessions.clear();
+        self.sidebar.selection_anchor = None;
+        self.sidebar.target = None;
+        self.sidebar.context_selection = false;
         self.leave_app_search(cx);
         self.close_preview(cx);
         self.close_menu(cx);
-        if self.settings.is_some() {
+        if self.pages.settings.is_some() {
             self.close_settings(window, cx);
         }
         self.navigation_revision += 1;
-        self.review_focused = false;
+        self.review.focused = false;
         self.pending_composer_focus = None;
     }
 
     fn show_app_view(&mut self, view: AppView, window: &mut Window, cx: &mut Context<Self>) {
         self.leave_app_views(cx);
-        self.active_app_view = Some(view);
+        self.pages.active_app_view = Some(view);
         self.admit_app_pane(crate::workspace::AppPane::App(view));
         self.reveal_active_tab(cx);
         self.update_chat_visibility(cx);
@@ -92,34 +78,51 @@ impl Shell {
         cx.notify();
     }
     pub(super) fn focus_app_view(&self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        if let Some(id) = &self.active_terminal_tab {
-            if let Some(terminal) = self.terminal_tabs.get(id) {
+        if let Some(id) = &self.pages.active_terminal_tab {
+            if let Some(terminal) = self.pages.terminal_tabs.get(id) {
                 window.focus(&terminal.focus_handle(cx), cx);
             }
             return true;
         }
         if let Some(id) = self.workspace.active {
             let focus = self
+                .page_tabs
                 .note_tabs
                 .get(&id)
                 .map(|view| view.focus_handle(cx))
-                .or_else(|| self.item_tabs.get(&id).map(|view| view.focus_handle(cx)));
+                .or_else(|| {
+                    self.page_tabs
+                        .item_tabs
+                        .get(&id)
+                        .map(|view| view.focus_handle(cx))
+                });
             if let Some(focus) = focus {
                 window.focus(&focus, cx);
                 return true;
             }
         }
-        let focus = match self.active_app_view {
-            Some(AppView::Notes) => self.notes.as_ref().map(|view| view.focus_handle(cx)),
+        let focus = match self.pages.active_app_view {
+            Some(AppView::Notes) => self
+                .page_tabs
+                .notes
+                .as_ref()
+                .map(|view| view.focus_handle(cx)),
             Some(AppView::Inbox) => None,
             Some(AppView::Connector(provider)) => self
+                .pages
                 .connector_pages
                 .get(&provider)
                 .map(|view| view.focus_handle(cx)),
-            Some(AppView::Automations) => {
-                self.automations.as_ref().map(|view| view.focus_handle(cx))
-            }
-            Some(AppView::Todos) => self.todos_page.as_ref().map(|view| view.focus_handle(cx)),
+            Some(AppView::Automations) => self
+                .pages
+                .automations
+                .as_ref()
+                .map(|view| view.focus_handle(cx)),
+            Some(AppView::Todos) => self
+                .page_tabs
+                .todos_page
+                .as_ref()
+                .map(|view| view.focus_handle(cx)),
             None => return false,
         };
         if let Some(focus) = focus {
@@ -137,17 +140,16 @@ impl Shell {
             window,
             cx,
         );
-        if self.notes.is_none() {
+        if self.page_tabs.notes.is_none() {
             let view = cx.new(|cx| notes::Notes::new(self.store.clone(), cx));
             self.subscribe_notes(&view, window, cx);
-            self.notes = Some(view);
+            self.page_tabs.notes = Some(view);
             self.sync_note_tab_owners(cx);
         }
-        if let Some(notes) = &self.notes {
+        if let Some(notes) = &self.page_tabs.notes {
             let cwd = self.workspace.project.clone();
             let projects = self.workspace.vorkspace_projects();
             notes.update(cx, |notes, cx| {
-                notes.set_appearances(self.workspace.project_appearance.clone(), cx);
                 notes.set_context(cwd, projects, cx);
                 notes.configure_recording(&self.workspace.preferences.hidden_providers, cx);
                 notes.set_active(true, cx);
@@ -167,9 +169,9 @@ impl Shell {
             window,
             cx,
         );
-        if self.todos_page.is_none() {
+        if self.page_tabs.todos_page.is_none() {
             let view = cx.new(|cx| crate::todos::TodosPage::new(self.store.clone(), cx));
-            self.app_view_events.push(cx.subscribe_in(
+            self.pages.view_events.push(cx.subscribe_in(
                 &view,
                 window,
                 |this, _, event: &crate::todos::PageEvent, window, cx| match event {
@@ -180,10 +182,10 @@ impl Shell {
                     ),
                 },
             ));
-            self.todos_page = Some(view);
+            self.page_tabs.todos_page = Some(view);
         }
         let choices = self.todo_board_choices(cx);
-        if let Some(page) = &self.todos_page {
+        if let Some(page) = &self.page_tabs.todos_page {
             page.update(cx, |page, cx| page.set_choices(choices, cx));
         }
         self.show_app_view(AppView::Todos, window, cx);
@@ -216,6 +218,7 @@ impl Shell {
     pub(super) fn open_inbox(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.ensure_background_inbox(window, cx);
         let provider = self
+            .pages
             .inbox
             .as_ref()
             .and_then(|view| Connector::from_id(view.read(cx).saved_source()));
@@ -227,6 +230,7 @@ impl Shell {
     }
     pub(super) fn enabled_connectors(&self, cx: &App) -> Vec<Connector> {
         let preferences = self
+            .pages
             .inbox
             .as_ref()
             .map(|view| view.read(cx).connector_preferences())
@@ -241,7 +245,8 @@ impl Shell {
             .collect()
     }
     pub(super) fn connector_unread(&self, provider: Connector, cx: &App) -> bool {
-        self.inbox
+        self.pages
+            .inbox
             .as_ref()
             .is_some_and(|view| view.read(cx).provider_unread_count(provider.id()) > 0)
     }
@@ -263,13 +268,14 @@ impl Shell {
             window,
             cx,
         );
-        if !self.connector_pages.contains_key(&provider) {
-            let owner = self.inbox.as_ref().unwrap().clone();
+        if !self.pages.connector_pages.contains_key(&provider) {
+            let owner = self.pages.inbox.as_ref().unwrap().clone();
             let view = owner.update(cx, |owner, cx| owner.connector_page(provider.id(), cx));
             self.subscribe_connector(&view, window, cx);
-            self.connector_pages.insert(provider, view);
+            self.pages.connector_pages.insert(provider, view);
         }
-        self.inbox
+        self.pages
+            .inbox
             .as_ref()
             .unwrap()
             .update(cx, |owner, cx| owner.remember_source(provider.id(), cx));
@@ -281,25 +287,29 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.app_view_events.push(cx.subscribe_in(
+        self.pages.view_events.push(cx.subscribe_in(
             view,
             window,
             |this, origin, event: &inbox::Event, window, cx| {
                 if matches!(event, inbox::Event::Close) {
                     let id = this
+                        .page_tabs
                         .item_tabs
                         .iter()
                         .find_map(|(&id, view)| (view == origin).then_some(id))
                         .or_else(|| {
-                            this.connector_pages.iter().find_map(|(provider, view)| {
-                                (view == origin)
-                                    .then(|| {
-                                        this.app_pane_id(&crate::workspace::AppPane::App(
-                                            AppView::Connector(*provider),
-                                        ))
-                                    })
-                                    .flatten()
-                            })
+                            this.pages
+                                .connector_pages
+                                .iter()
+                                .find_map(|(provider, view)| {
+                                    (view == origin)
+                                        .then(|| {
+                                            this.app_pane_id(&crate::workspace::AppPane::App(
+                                                AppView::Connector(*provider),
+                                            ))
+                                        })
+                                        .flatten()
+                                })
                         });
                     if let Some(id) = id {
                         this.close_pane(id, window, cx);
@@ -318,6 +328,7 @@ impl Shell {
     ) {
         match event {
             inbox::Event::Close => {}
+            inbox::Event::ConnectorAvailabilityChanged => self.refresh_pane_visibility(cx),
             inbox::Event::OpenTab(item) => self.open_item_tab(item.as_ref().clone(), window, cx),
             inbox::Event::OpenSession(id) => self.open(*id, window, cx),
             inbox::Event::StartSession { item, prompt, bot } => {
@@ -349,14 +360,10 @@ impl Shell {
                     self.start_inbox_session(item.as_ref().clone(), prompt.clone(), cx);
                 }
             }
-            inbox::Event::ItemsChanged(items) => self.inbox_automation_events(items.clone(), cx),
-            inbox::Event::Activity { projects, changed } => {
-                self.inbox_activity(projects, changed, cx)
-            }
         }
     }
     pub(super) fn ensure_background_inbox(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.inbox.is_none() {
+        if self.pages.inbox.is_none() {
             let projects = self
                 .workspace
                 .vorkspace_projects()
@@ -365,12 +372,26 @@ impl Shell {
                 .collect();
             let cwd = self.workspace.project.clone().into();
             let poll_projects = self.inbox_poll_projects();
-            let view = cx
-                .new(|cx| inbox::Inbox::new(self.store.clone(), projects, cwd, poll_projects, cx));
+            let (links, feed) = self
+                .app_core
+                .as_ref()
+                .expect("registered workspace window")
+                .update(cx, |core, cx| core.inbox_sources(cx));
+            let view = cx.new(|cx| {
+                inbox::Inbox::new(
+                    self.store.clone(),
+                    projects,
+                    cwd,
+                    poll_projects,
+                    (&links, &feed),
+                    cx,
+                )
+            });
             self.subscribe_connector(&view, window, cx);
-            self.app_view_events
+            self.pages
+                .view_events
                 .push(cx.observe(&view, |this, inbox, cx| {
-                    if let Some(automations) = &this.automations {
+                    if let Some(automations) = &this.pages.automations {
                         let connections = inbox
                             .read(cx)
                             .connection_statuses()
@@ -384,10 +405,10 @@ impl Shell {
                     this.sync_settings(cx);
                     cx.notify();
                 }));
-            self.inbox = Some(view);
+            self.pages.inbox = Some(view);
         }
         self.sync_inbox_scope(cx);
-        if let Some(inbox) = &self.inbox {
+        if let Some(inbox) = &self.pages.inbox {
             let bots = self
                 .bots
                 .as_ref()
@@ -406,7 +427,6 @@ impl Shell {
                 .unwrap_or_default();
             inbox.update(cx, |inbox, cx| {
                 inbox.set_bots(bots, cx);
-                inbox.set_appearances(self.workspace.project_appearance.clone(), cx);
             });
         }
     }
@@ -415,13 +435,13 @@ impl Shell {
         self.workspace
             .projects
             .iter()
-            .filter(|p| !p.starts_with("remote://") && self.workspace.is_project_available(p))
+            .filter(|p| self.workspace.is_project_available(p))
             .map(Into::into)
             .collect()
     }
 
     pub(super) fn sync_inbox_scope(&self, cx: &mut Context<Self>) {
-        if let Some(inbox) = &self.inbox {
+        if let Some(inbox) = &self.pages.inbox {
             let visible = self
                 .workspace
                 .vorkspace_projects()
@@ -439,8 +459,8 @@ impl Shell {
         }
     }
     pub(super) fn open_automations(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(service) = self.automation_state.service.clone() else {
-            self.automation_state.open_requested = Some(self.navigation_revision);
+        let Some(service) = self.pages.automation_state.service.clone() else {
+            self.pages.automation_state.open_requested = Some(self.navigation_revision);
             self.initialize_automations(cx);
             return;
         };
@@ -449,12 +469,12 @@ impl Shell {
             window,
             cx,
         );
-        if self.automations.is_none() {
+        if self.pages.automations.is_none() {
             let cwd = self.workspace.project.clone();
             let projects = self.workspace.vorkspace_projects();
             let view = cx.new(|cx| automations::Automations::new(service, cwd, projects, cx));
             view.update(cx, |view, _| view.set_database(self.store.clone()));
-            self.app_view_events.push(cx.subscribe_in(
+            self.pages.view_events.push(cx.subscribe_in(
                 &view,
                 window,
                 |this, _, event: &automations::Event, window, cx| match event {
@@ -476,14 +496,14 @@ impl Shell {
                     }
                 },
             ));
-            self.automations = Some(view);
+            self.pages.automations = Some(view);
         }
-        if let Some(view) = &self.automations {
+        if let Some(view) = &self.pages.automations {
             let cwd = self.workspace.project.clone();
             let projects = self.workspace.vorkspace_projects();
             view.update(cx, |view, cx| {
-                view.set_appearances(self.workspace.project_appearance.clone(), cx);
                 let connections = self
+                    .pages
                     .inbox
                     .as_ref()
                     .map(|inbox| inbox.read(cx).connection_statuses())
@@ -499,20 +519,13 @@ impl Shell {
         self.show_app_view(AppView::Automations, window, cx);
     }
 
-    pub(super) fn note_to_chat(
-        &mut self,
-        note: vorkspace_core::notes::Note,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let cwd = note
-            .source_cwd
-            .clone()
-            .filter(|path| !path.is_empty())
-            .unwrap_or_else(|| self.workspace.project.clone());
-        let kind = self.default_kind();
-        let store = self.store.clone();
-        let settings = vorkspace_core::agent::Settings {
+    fn app_session_defaults(
+        &self,
+        kind: Kind,
+        cwd: &str,
+        cx: &App,
+    ) -> vorkspace_core::agent::Settings {
+        vorkspace_core::agent::Settings {
             model: self
                 .workspace
                 .preferences
@@ -528,11 +541,25 @@ impl Shell {
                 .map(vorkspace_core::agent::AccessMode::from_id)
                 .unwrap_or_default(),
             account: crate::accounts::get(cx)
-                .map(|accounts| accounts.read(cx).selected(kind, &cwd))
+                .map(|accounts| accounts.read(cx).selected(kind, cwd))
                 .unwrap_or_default(),
             ..Default::default()
-        };
-        self.leave_app_views(cx);
+        }
+    }
+
+    pub(super) fn note_to_chat(
+        &mut self,
+        note: vorkspace_core::notes::Note,
+        cx: &mut Context<Self>,
+    ) {
+        let cwd = note
+            .source_cwd
+            .clone()
+            .filter(|path| !path.is_empty())
+            .unwrap_or_else(|| self.workspace.project.clone());
+        let kind = self.default_kind();
+        let store = self.store.clone();
+        let settings = self.app_session_defaults(kind, &cwd, cx);
         self.navigation_revision += 1;
         let revision = self.navigation_revision;
         let mut install = self.session_install(cx);
@@ -575,8 +602,6 @@ impl Shell {
             });
         })
         .detach();
-        self.update_chat_visibility(cx);
-        self.focus_active(window, cx);
     }
 
     fn start_inbox_session(
@@ -591,26 +616,7 @@ impl Shell {
             item.project_path.clone()
         };
         let kind = self.default_kind();
-        let settings = vorkspace_core::agent::Settings {
-            model: self
-                .workspace
-                .preferences
-                .default_models
-                .get(kind.id())
-                .cloned(),
-            effort: crate::conversation::preferred_effort(kind.id(), cx),
-            access: self
-                .workspace
-                .preferences
-                .default_access
-                .as_deref()
-                .map(vorkspace_core::agent::AccessMode::from_id)
-                .unwrap_or_default(),
-            account: crate::accounts::get(cx)
-                .map(|accounts| accounts.read(cx).selected(kind, &cwd))
-                .unwrap_or_default(),
-            ..Default::default()
-        };
+        let settings = self.app_session_defaults(kind, &cwd, cx);
         let store = self.store.clone();
         self.navigation_revision += 1;
         let revision = self.navigation_revision;

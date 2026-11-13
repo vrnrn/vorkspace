@@ -1066,7 +1066,7 @@ fn a_document_and_final_reply_preserve_position_then_glide_up_without_reversing(
             view.streaming(false, cx);
             // Text now streams inline as it does in sessions. Isolate the
             // full-height follow measurement from that independent pacing.
-            view.reveals.get_mut(&3).unwrap().settle(Instant::now());
+            view.reveals.settle_through(view.source.len());
             view.rebuild(3, cx);
             view.entrances.clear();
             view.follow.last_frame = None;
@@ -1685,7 +1685,7 @@ fn empty_and_unrevealed_replacements_do_not_reopen_previous_work(cx: &mut TestAp
                 Some(4),
                 "paced text must be visible before it replaces the current block"
             );
-            view.reveals.get_mut(&5).unwrap().settle(Instant::now());
+            view.reveals.settle_through(view.source.len());
             view.rebuild(5, cx);
             assert_eq!(view.fold_targets[&1], Some(5));
             assert!(

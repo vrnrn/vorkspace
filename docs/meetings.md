@@ -4,6 +4,8 @@ Open **Notes** in the left sidebar and choose an existing note or press **+** ab
 
 **Preview** and **Source** display and edit the note's authored Markdown. Once a recording is attached, **Summary** and **Transcript** appear beside them. These flat tabs underline the active section. The recording's generated summary and transcript remain separate from the authored note body. In **Summary**, **Edit summary** opens its Markdown editor and **View summary** returns to the formatted result.
 
+Notes discovers recordings without a linked note through a catalog of recording IDs, titles and start times. Import preserves the recording's original identity and any pending title. Discovery skips recordings that already have a linked note. Opening a recording loads its full document.
+
 **Copy** and **Add to chat** use the selected section's text without replacing the authored body. Sharing a live transcript waits for capture to finish so provisional speech is not mistaken for the final transcript.
 
 Choose **Mic + system audio** for calls or **Mic only** for an in-person meeting. This choice belongs to the recording and can change between takes. Recording requires macOS 26+, a supported installed Apple speech language and Microphone permission for **vorkspace helper**. System audio also requires Screen & System Audio Recording permission; Mic only neither requests that permission nor creates a system capture. Install the language from Dictation settings first. Capture attaches only system-audio output, never screen frames. Audio is processed in memory and is not retained as a recording. Headphones help avoid the microphone also hearing remote participants through speakers. “Microphone” and “System audio” identify sources, not individual speakers.
@@ -20,7 +22,7 @@ Each Start has a unique run identity and compares the previous durable run under
 
 SQLite owns note titles, authored Markdown, tags and project associations. Its `note_recordings` relation links each note to the recording's existing ID, including an identity reservation before capture starts. A reserved recording link does not by itself create a saved note. Existing visible meeting records are imported into Notes once; subsequent loads preserve note edits. Deletion tombstones prevent later imports or delayed saves from recreating a deleted note.
 
-Recording files remain below the desktop data directory at `meetings/`. Existing records in the earlier `plugins/meetings/data/` location are reopened in place, without moving transcript files. Both locations use the same layout.
+Recording files remain below the desktop data directory at `meetings/`, which uses this layout:
 
 - `recordings/<id>/state.json`, `owner.lock` and `transcript.jsonl` hold recorder metadata and immutable source text.
 - `meetings/<id>.json` holds the editable transcript override, recording document's revision and optional summary. Its legacy title does not override the note's SQLite title.
@@ -47,7 +49,7 @@ Generation runs in a private temporary working directory. Codex requires CLI 0.1
 
 Notes saves authored title, body and tag changes through its SQLite save path. **Transcript** edits the attached recording's text; **Edit summary** edits its generated Markdown. **Save edits** or ⌘S commits attachment edits. Updates validate the saved revision. A late summary cannot overwrite a recording document that changed while analysis ran; provider failures preserve the transcript and any previous summary. Editing the transcript marks an older summary as stale until it is regenerated.
 
-The attachment editor coalesces draft checkpoints and flushes pending input on normal close and Quit. Reopen the note to restore attachment drafts and their edit position. If the saved revision changed elsewhere, the editor preserves the draft text and offers **Discard edits** to reload the saved version. An attachment open for editing in one window is read-only in other windows. After that editor releases it, reopen the note to acquire editing.
+The attachment editor coalesces draft checkpoints and flushes pending input on normal close and Quit. The editor and storage share typed snapshots. A staged edit shares its text buffer and keeps its version separate from the durable checkpoint version, so a failed write can retain the input and retry against the observed slot. Reopen the note to restore attachment drafts and their edit position. **Save edits** can commit a recovered draft directly. If the saved revision changed elsewhere, the editor preserves the draft text and offers **Discard edits** to reload the saved version. An attachment open for editing in one window is read-only in other windows. After that editor releases it, reopen the note to acquire editing.
 
 **Delete** and confirmation remove the note and its finished recording attachment. The recording root is retired under the recorder lock before cleanup, and the durable link between note and recording keeps a deletion tombstone so delayed work cannot republish it.
 

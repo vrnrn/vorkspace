@@ -12,7 +12,7 @@ use url::Url;
 const MAX_LINKS: usize = 8;
 const MAX_CONTEXT_BYTES: usize = 4 * 1024 * 1024;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-pub struct Reference {
+pub(crate) struct Reference {
     pub provider: String,
     pub kind: String,
     pub url: String,
@@ -30,7 +30,7 @@ fn scheme(value: &str) -> bool {
     matches!(
         value.to_ascii_lowercase().as_str(),
         "vorkspace" | "vorkspace-dev"
-    ) || crate::compatibility::key(&value.to_ascii_lowercase()) == "vorkspace"
+    ) || crate::historical::key(&value.to_ascii_lowercase()) == "vorkspace"
 }
 fn links(text: &str) -> Result<Vec<String>, String> {
     let mut found = Vec::new();
@@ -89,7 +89,7 @@ fn positive(value: &str) -> Option<i64> {
         .flatten()
         .filter(|n| *n > 0)
 }
-pub fn parse(value: &str) -> Result<Reference, String> {
+pub(crate) fn parse(value: &str) -> Result<Reference, String> {
     fn invalid() -> String {
         "Invalid ticket context link. Copy it again from the ticket.".into()
     }
@@ -263,11 +263,13 @@ impl Fetch for Service {
             kind: reference.kind.clone(),
             id: reference.key.clone(),
             identifier: reference.key.clone(),
+            url: reference.url.clone(),
             repo: reference.repo.clone(),
             number: reference.number,
             ..Default::default()
         };
-        Ok((self.details(&item)?, self.thread(&item)?))
+        let discussion = self.discussion(&item)?;
+        Ok((discussion.details?, discussion.thread?))
     }
 }
 fn prefix(text: &str, limit: usize) -> (&str, bool) {

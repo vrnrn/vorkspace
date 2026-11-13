@@ -21,7 +21,7 @@ impl Accounts {
                 && s.adding.is_none()
         })
     }
-    /// ProviderSignInPanel.tsx, embedded in the usage popover.
+    /// The provider sign-in panel, embedded in the usage popover.
     pub(crate) fn footer_auth_panel(
         &self,
         kind: Kind,
@@ -133,7 +133,6 @@ impl Accounts {
                     .when(running, |d| {
                         d.child(crate::panel_kit::spinner(
                             "footer-provider-auth-spinner",
-                            "refresh-cw",
                             14.,
                         ))
                     })
@@ -176,7 +175,7 @@ mod tests {
     #[gpui::test]
     fn settings_add_signin_stays_inline_after_completion(cx: &mut gpui::TestAppContext) {
         let store = Arc::new(std::sync::Mutex::new(
-            vorkspace_core::store::Store::open(Path::new(":memory:")).unwrap(),
+            vorkspace_core::store::Store::test(Path::new(":memory:")).unwrap(),
         ));
         let view =
             cx.new(|cx| Accounts::new(PathBuf::from("/fixture"), Book::default(), store, cx));
@@ -201,7 +200,7 @@ mod tests {
     #[gpui::test]
     fn footer_signin_never_opens_a_modal_or_steals_window_focus(cx: &mut gpui::TestAppContext) {
         let store = Arc::new(std::sync::Mutex::new(
-            vorkspace_core::store::Store::open(Path::new(":memory:")).unwrap(),
+            vorkspace_core::store::Store::test(Path::new(":memory:")).unwrap(),
         ));
         let window = cx.update(|cx| {
             cx.open_window(Default::default(), |_, cx| {

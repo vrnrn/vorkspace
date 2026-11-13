@@ -1,12 +1,15 @@
-//! Sidebar.tsx's session actions: pins, renames, GitHub links, reminders,
-//! folders and deletion, and the grouped list they shape.
+//! Session rail actions and the project-scoped folder read model.
 use super::*;
 use chrono::{Local, NaiveDateTime, TimeZone};
-use vorkspace_core::{
-    session_groups::{format_reminder, parse_github_work_item, reminder_at, reminder_presets},
-    store::Reminder,
+use vorkspace_core::session_groups::{
+    FolderDestination, format_reminder, parse_github_work_item, reminder_at, reminder_presets,
 };
 use vorkspace_ui::radius;
+
+mod folders;
+mod metadata;
+pub(super) use folders::FolderIndex;
+use metadata::SessionEdit;
 
 actions!(
     session_groups,
@@ -47,6 +50,18 @@ pub(super) fn local_reminder_label(ms: u64) -> String {
 #[derive(Clone, PartialEq)]
 pub(super) enum RenameTarget {
     Session(i64),
+    NewFolder {
+        anchor: i64,
+        sessions: Vec<i64>,
+        project: String,
+    },
+}
+impl RenameTarget {
+    pub(super) fn anchor(&self) -> i64 {
+        match self {
+            Self::Session(id) | Self::NewFolder { anchor: id, .. } => *id,
+        }
+    }
 }
 pub(super) struct Renaming {
     pub(super) target: RenameTarget,
@@ -67,9 +82,10 @@ impl Shell {
             return;
         }
         let target = if self.sidebar_focus.is_focused(window) {
-            self.sidebar_target.clone()
+            self.sidebar.target.clone()
         } else {
-            self.session_hover
+            self.preview
+                .session_hover
                 .or(self.workspace.active)
                 .map(RenameTarget::Session)
         };
@@ -80,7 +96,7 @@ impl Shell {
         }
     }
     pub(super) fn delete_sidebar_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let ids: Vec<_> = self.selected_sessions.iter().copied().collect();
+        let ids: Vec<_> = self.sidebar.selected_sessions.iter().copied().collect();
         self.request_delete_sessions(ids, window, cx);
     }
 
@@ -93,7 +109,7 @@ impl Shell {
     ) {
         ids.sort_unstable();
         ids.dedup();
-        ids.retain(|id| self.session_summaries.contains_key(id));
+        ids.retain(|id| self.has_session(*id, cx));
         if ids.is_empty() {
             return;
         }
@@ -115,8 +131,7 @@ impl Shell {
                 return;
             }
             let _ = this.update_in(cx, |this, window, cx| {
-                // Numeric IDs may be reused after removal; never apply old consent
-                // to a replacement, even if the selection now looks identical.
+                // A changed conversation list invalidates the confirmed snapshot.
                 if this.session_removal_epoch != removal_epoch {
                     this.error = Some(
                         "The conversation list changed. Please confirm deletion again.".into(),
@@ -131,67 +146,23 @@ impl Shell {
         })
         .detach();
     }
-    pub(super) fn store_write(
-        &mut self,
-        what: &'static str,
-        cx: &mut Context<Self>,
-        write: impl FnOnce(&mut vorkspace_core::store::Store) -> Result<(), String> + Send + 'static,
-    ) {
-        self.write_session_group(what, Vec::new(), cx, write);
-    }
-
-    fn write_session_group(
-        &mut self,
-        what: &'static str,
-        changed: Vec<i64>,
-        cx: &mut Context<Self>,
-        write: impl FnOnce(&mut vorkspace_core::store::Store) -> Result<(), String> + Send + 'static,
-    ) {
-        let store = self.store.clone();
-        self.begin_session_metadata(&changed, cx);
-        let previous = self.group_writes.take();
-        self.group_writes = Some(cx.spawn(async move |this, cx| {
-            if let Some(previous) = previous {
-                previous.await;
-            }
-            let work = cx
-                .background_executor()
-                .spawn(async move { write(&mut *locked(&store)?) });
-            let result = work.await;
-            let _ = this.update(cx, |this, cx| {
-                this.finish_session_metadata(&changed, cx);
-                match result {
-                    Ok(()) => {
-                        for id in changed {
-                            this.publish_session_summary(id, cx);
-                        }
-                    }
-                    Err(error) => {
-                        this.error = Some(format!("Could not {what}: {error}"));
-                        cx.notify();
-                    }
-                }
-            });
-        }));
-    }
-
     /// The sessions in the order the rail shows them, for stepping.
     pub(super) fn sidebar_navigation_ids(&self, cx: &App) -> Vec<i64> {
         self.rail_session_ids(cx)
     }
 
     fn session_menu_ids(&self, id: i64, cx: &App) -> Vec<i64> {
-        if !self.selected_sessions.contains(&id) {
+        if !self.sidebar.selected_sessions.contains(&id) {
             return vec![id];
         }
         self.sidebar_session_ids(cx)
             .into_iter()
-            .filter(|id| self.selected_sessions.contains(id))
+            .filter(|id| self.sidebar.selected_sessions.contains(id))
             .collect()
     }
     pub(super) fn clear_context_selection(&mut self) {
-        if std::mem::take(&mut self.context_selection) {
-            self.selected_sessions.clear();
+        if std::mem::take(&mut self.sidebar.context_selection) {
+            self.sidebar.selected_sessions.clear();
         }
     }
     pub(super) fn select_sidebar_session(
@@ -201,13 +172,14 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.context_selection = false;
+        self.sidebar.context_selection = false;
         self.close_menu(cx);
-        self.sidebar_target = Some(RenameTarget::Session(id));
+        self.sidebar.target = Some(RenameTarget::Session(id));
         let additive = modifiers.control || modifiers.platform;
         if modifiers.shift {
             let visible = self.sidebar_navigation_ids(cx);
             let anchor = self
+                .sidebar
                 .selection_anchor
                 .filter(|id| visible.contains(id))
                 .or(self.workspace.active)
@@ -217,23 +189,25 @@ impl Shell {
                 .position(|s| *s == anchor)
                 .zip(visible.iter().position(|s| *s == id));
             if !additive {
-                self.selected_sessions.clear();
+                self.sidebar.selected_sessions.clear();
             }
             if let Some((a, b)) = range {
-                self.selected_sessions.extend(&visible[a.min(b)..=a.max(b)]);
-                self.selection_anchor = Some(anchor);
+                self.sidebar
+                    .selected_sessions
+                    .extend(&visible[a.min(b)..=a.max(b)]);
+                self.sidebar.selection_anchor = Some(anchor);
             } else {
-                self.selected_sessions.insert(id);
-                self.selection_anchor = Some(id);
+                self.sidebar.selected_sessions.insert(id);
+                self.sidebar.selection_anchor = Some(id);
             }
         } else if additive {
-            self.selection_anchor = Some(id);
-            if !self.selected_sessions.insert(id) {
-                self.selected_sessions.remove(&id);
+            self.sidebar.selection_anchor = Some(id);
+            if !self.sidebar.selected_sessions.insert(id) {
+                self.sidebar.selected_sessions.remove(&id);
             }
         } else {
-            self.selected_sessions.clear();
-            self.selection_anchor = Some(id);
+            self.sidebar.selected_sessions.clear();
+            self.sidebar.selection_anchor = Some(id);
             self.open(id, window, cx);
         }
         if modifiers.shift || additive {
@@ -253,7 +227,11 @@ impl Shell {
             .iter()
             .all(|id| self.session_metadata(*id, cx).summary.archived);
         let mut items = Vec::new();
-        if self.reminders.iter().any(|r| ids.contains(&r.session_id)) {
+        if self
+            .reminders(cx)
+            .iter()
+            .any(|r| ids.contains(&r.session_id))
+        {
             items.push(
                 MenuAction::new("reminder:cancel", "Cancel reminder")
                     .icon("circle-x")
@@ -292,6 +270,7 @@ impl Shell {
                 .into(),
             ]);
         }
+        items.extend(self.session_folder_menu(&ids, &summary.cwd, cx));
         items.extend([MenuAction::new("reminder", "Remind me")
             .icon("clock")
             .submenu(
@@ -324,7 +303,7 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !self.session_summaries.contains_key(&id) {
+        if !self.has_session(id, cx) {
             return;
         }
         let summary = self.session_metadata(id, cx).summary.clone();
@@ -353,24 +332,26 @@ impl Shell {
                 let pinned = !ids
                     .iter()
                     .all(|id| self.session_metadata(*id, cx).summary.pinned);
-                for id in &ids {
-                    if let Some(summary) = self.session_summaries.get_mut(id) {
-                        summary.pinned = pinned;
-                    }
-                    if let Some(view) = self.sessions.get(id) {
-                        view.update(cx, |s, _| s.summary.pinned = pinned);
-                    }
-                }
-                self.write_session_group("pin the session", ids.clone(), cx, move |s| {
-                    s.set_pinned(&ids, pinned)
-                });
+                self.edit_session_metadata(ids, SessionEdit::Pin(pinned), cx);
                 self.invalidate_chrome(cx);
             }
             "rename" => self.start_rename(RenameTarget::Session(id), window, cx),
+            "folder-new" if self.one_folder_project(&ids, &summary.cwd, cx) => self.start_rename(
+                RenameTarget::NewFolder {
+                    anchor: id,
+                    sessions: ids,
+                    project: summary.cwd,
+                },
+                window,
+                cx,
+            ),
+            "folder-unfile" if self.one_folder_project(&ids, &summary.cwd, cx) => {
+                self.move_session_folder(summary.cwd, ids, FolderDestination::Unfiled, cx);
+            }
             "link-work-item" => self.open_link_dialog(id, window, cx),
             "reminder:cancel" => {
                 let occurrences: Vec<_> = self
-                    .reminders
+                    .reminders(cx)
                     .iter()
                     .filter(|reminder| ids.contains(&reminder.session_id))
                     .map(|reminder| (reminder.session_id, reminder.due_at))
@@ -386,16 +367,13 @@ impl Shell {
                 else {
                     return;
                 };
-                self.reminders.retain(|r| !ids.contains(&r.session_id));
-                self.reminders.extend(ids.iter().map(|id| Reminder {
-                    session_id: *id,
-                    due_at,
-                    fired_at: None,
-                }));
-                self.invalidate_chrome(cx);
-                self.store_write("set the reminder", cx, move |s| {
-                    s.set_reminders(&ids, due_at)
-                });
+                self.edit_reminder(
+                    app_core::ReminderEdit::Schedule {
+                        sessions: ids,
+                        due_at,
+                    },
+                    cx,
+                );
             }
             "archive" => {
                 let archived = !ids
@@ -408,7 +386,18 @@ impl Shell {
                 }
             }
             "delete" => self.request_delete_sessions(ids, window, cx),
-            _ => {}
+            _ => {
+                if let Some(folder) = action.strip_prefix("folder-move:")
+                    && self.one_folder_project(&ids, &summary.cwd, cx)
+                {
+                    self.move_session_folder(
+                        summary.cwd,
+                        ids,
+                        FolderDestination::Existing(folder.into()),
+                        cx,
+                    );
+                }
+            }
         }
     }
 
@@ -416,7 +405,7 @@ impl Shell {
     pub(super) fn dismiss_due_reminder(&mut self, id: i64, cx: &mut Context<Self>) {
         let now = vorkspace_core::time::now_ms();
         let Some(due) = self
-            .reminders
+            .reminders(cx)
             .iter()
             .find(|r| r.session_id == id && r.due_at <= now)
             .map(|r| r.due_at)
@@ -424,109 +413,6 @@ impl Shell {
             return;
         };
         self.clear_notification_reminder(id, due, cx);
-    }
-
-    pub(super) fn poll_reminders(&mut self, cx: &mut Context<Self>) {
-        if self.notification_state.reminder_error.is_some()
-            || self.reminder_poll_in_flight
-            || !self.holds_scheduler(cx)
-        {
-            return;
-        }
-        self.reminder_poll_in_flight = true;
-        let before = self.reminders.clone();
-        let known: HashSet<_> = before
-            .iter()
-            .map(|r| r.session_id)
-            .filter(|id| self.session_summaries.contains_key(id))
-            .collect();
-        let store = self.store.clone();
-        let previous = self.group_writes.take();
-        self.group_writes = Some(cx.spawn(async move |this, cx| {
-            if let Some(previous) = previous {
-                previous.await;
-            }
-            if !this
-                .update(cx, |shell, _| {
-                    if shell.notification_state.reminder_error.is_some() {
-                        shell.reminder_poll_in_flight = false;
-                        return false;
-                    }
-                    true
-                })
-                .unwrap_or(false)
-            {
-                return;
-            }
-            let work = cx.background_executor().spawn(async move {
-                let mut store = locked(&store)?;
-                let now = vorkspace_core::time::now_ms();
-                let mut reminders = store.reminders()?;
-                let missing: HashSet<_> = reminders
-                    .iter()
-                    .filter(|r| r.due_at <= now && !known.contains(&r.session_id))
-                    .map(|r| r.session_id)
-                    .collect();
-                let summaries = if missing.is_empty() {
-                    Vec::new()
-                } else {
-                    store
-                        .sessions()?
-                        .into_iter()
-                        .filter(|s| missing.contains(&s.id))
-                        .collect()
-                };
-                let claimed = store.claim_due_reminders(&reminders, now)?;
-                let fired: HashSet<_> = claimed.iter().map(|r| r.session_id).collect();
-                for reminder in &mut reminders {
-                    if fired.contains(&reminder.session_id) {
-                        reminder.fired_at = Some(now);
-                    }
-                }
-                Ok::<_, String>((reminders, claimed, summaries))
-            });
-            let result = work.await;
-            let _ = this.update(cx, |this, cx| {
-                this.reminder_poll_in_flight = false;
-                match result {
-                    Ok((mut reminders, mut claimed, summaries)) => {
-                        // Keep edits made here while the ordered store read was pending.
-                        // Rows absent in both local snapshots can still be due in the store.
-                        if this.reminders != before {
-                            let before: HashMap<_, _> =
-                                before.iter().map(|r| (r.session_id, r)).collect();
-                            let local: HashMap<_, _> =
-                                this.reminders.iter().map(|r| (r.session_id, r)).collect();
-                            let unchanged = |id| before.get(&id) == local.get(&id);
-                            reminders.retain(|r| unchanged(r.session_id));
-                            reminders.extend(
-                                this.reminders
-                                    .iter()
-                                    .filter(|r| !unchanged(r.session_id))
-                                    .cloned(),
-                            );
-                            claimed.retain(|r| unchanged(r.session_id));
-                        }
-                        if reminders == this.reminders && claimed.is_empty() {
-                            return;
-                        }
-                        this.reminders = reminders;
-                        for summary in summaries {
-                            this.session_summaries.entry(summary.id).or_insert(summary);
-                        }
-                        for reminder in claimed {
-                            this.deliver_reminder_notice(reminder.session_id, reminder.due_at, cx);
-                        }
-                    }
-                    Err(error) => {
-                        this.notification_state.reminder_error =
-                            Some(format!("Could not deliver reminders: {error}"));
-                    }
-                }
-                this.invalidate_chrome(cx);
-                cx.notify();
-            });
-        }));
     }
 
     fn report_session_delete_error(&mut self, id: i64, reason: &str) {
@@ -545,6 +431,7 @@ impl Shell {
             *owner == id
                 && (self.workspace.tab_of(*pane).is_some()
                     || self
+                        .review
                         .reviews
                         .get(pane)
                         .is_some_and(|r| r.read(cx).unsaved_files(cx)))
@@ -553,7 +440,7 @@ impl Shell {
             cx.notify();
             return;
         }
-        if !self.session_summaries.contains_key(&id) || self.deleting.contains(&id) {
+        if !self.has_session(id, cx) || self.deleting.contains(&id) {
             return;
         }
         if !self.reserve_session_deletion(id, cx) {
@@ -578,8 +465,8 @@ impl Shell {
         }
         self.invalidate_chrome(cx);
         let store = self.store.clone();
-        let previous = self.group_writes.take();
-        self.group_writes = Some(cx.spawn(async move |this, cx| {
+        let previous = self.sidebar.group_writes.take();
+        self.sidebar.group_writes = Some(cx.spawn(async move |this, cx| {
             if let Some(previous) = previous {
                 previous.await;
             }
@@ -595,6 +482,7 @@ impl Shell {
             let _ = this.update(cx, |this, cx| {
                 this.deleting.remove(&id);
                 this.release_session_deletion(id, cx);
+                this.complete_linked_cleanup(id, result.is_ok(), cx);
                 match result {
                     Ok(()) => this.forget_session(id, cx),
                     Err(error) => this.report_session_delete_error(id, &error),
@@ -614,7 +502,10 @@ impl Shell {
     }
 
     pub(super) fn remove_session_from_catalog(&mut self, id: i64, cx: &mut Context<Self>) {
-        if !self.session_summaries.contains_key(&id) {
+        if !self.order.contains(&id)
+            && !self.sessions.contains_key(&id)
+            && self.workspace.tab_of(id).is_none()
+        {
             return;
         }
         // A layout restored in a peer can still contain an unavailable tab.
@@ -622,17 +513,16 @@ impl Shell {
             self.workspace.close(id);
         }
         if self
+            .preview
             .session_preview
             .as_ref()
             .is_some_and(|preview| preview.id == id)
         {
-            self.session_preview = None;
-            self.preview_close = None;
+            self.preview.session_preview = None;
+            self.preview.close = None;
         }
         self.release_live_session(id, cx);
         self.session_removal_epoch = self.session_removal_epoch.wrapping_add(1);
-        self.session_summaries.remove(&id);
-        self.draft_sessions.remove(&id);
         self.history_recency.remove(&id);
         self.session_marks.remove(&id);
         self.tab_marks.remove(&id);
@@ -640,20 +530,21 @@ impl Shell {
         self.forget_search_session(id, cx);
         self.busy_sessions.remove(&id);
         self.unseen_finished.remove(&id);
-        self.selected_sessions.remove(&id);
-        self.reminders.retain(|r| r.session_id != id);
+        self.sidebar.selected_sessions.remove(&id);
+        self.poll_reminders(cx);
         self.workspace.project_focus.retain(|_, s| *s != id);
         self.history
             .prune(&self.workspace.open_sessions(), self.workspace.active);
-        if self.session_hover == Some(id) {
-            self.session_hover = None;
+        if self.preview.session_hover == Some(id) {
+            self.preview.session_hover = None;
         }
         if self
+            .sidebar
             .renaming
             .as_ref()
-            .is_some_and(|r| r.target == RenameTarget::Session(id))
+            .is_some_and(|r| r.target.anchor() == id)
         {
-            self.renaming = None;
+            self.sidebar.renaming = None;
         }
         self.persist(cx);
     }
@@ -665,16 +556,22 @@ impl Shell {
         cx: &mut Context<Self>,
     ) {
         self.close_preview(cx);
-        let text = match &target {
-            RenameTarget::Session(id) => self.session_metadata(*id, cx).display_title(),
-        };
-        let input = cx.new(|cx| {
-            let mut input = input::Input::field(
+        let (text, label, placeholder, save_on_blur) = match &target {
+            RenameTarget::Session(id) => (
+                self.session_metadata(*id, cx).display_title(),
                 "Rename. Press Enter to confirm or Escape to cancel.",
                 "",
-                content(0.35),
-                cx,
-            );
+                true,
+            ),
+            RenameTarget::NewFolder { .. } => (
+                String::new(),
+                "Folder name. Press Enter to create or Escape to cancel.",
+                "Folder name",
+                false,
+            ),
+        };
+        let input = cx.new(|cx| {
+            let mut input = input::Input::field(label, placeholder, content(0.35), cx);
             input.set_font_size(14.);
             input
         });
@@ -690,12 +587,12 @@ impl Shell {
                 window,
                 |this, _, _: &input::Submitted, window, cx| this.finish_rename(true, window, cx),
             ),
-            cx.on_blur(&focus, window, |this, window, cx| {
-                this.finish_rename(true, window, cx)
+            cx.on_blur(&focus, window, move |this, window, cx| {
+                this.finish_rename(save_on_blur, window, cx)
             }),
         ];
         window.focus(&focus, cx);
-        self.renaming = Some(Renaming {
+        self.sidebar.renaming = Some(Renaming {
             target,
             input,
             _events: events,
@@ -704,7 +601,7 @@ impl Shell {
         cx.notify();
     }
     fn finish_rename(&mut self, commit: bool, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(renaming) = self.renaming.take() else {
+        let Some(renaming) = self.sidebar.renaming.take() else {
             return;
         };
         let name = renaming.input.read(cx).content.trim().to_string();
@@ -718,23 +615,16 @@ impl Shell {
                         cx.notify();
                         return;
                     }
-                    if self.session_summaries.contains_key(&id)
+                    if self.has_session(id, cx)
                         && self.session_metadata(id, cx).summary.title != name
                     {
-                        if let Some(summary) = self.session_summaries.get_mut(&id) {
-                            summary.title = name.clone();
-                        }
-                        if let Some(session) = self.sessions.get(&id) {
-                            session.update(cx, |s, cx| {
-                                s.rename(name.clone(), cx);
-                            });
-                        } else {
-                            self.sync_search_session(id, cx);
-                        }
-                        self.write_session_group("rename the session", vec![id], cx, move |s| {
-                            s.title(id, &name)
-                        });
+                        self.edit_session_metadata(vec![id], SessionEdit::Rename(name), cx);
                     }
+                }
+                RenameTarget::NewFolder {
+                    sessions, project, ..
+                } => {
+                    self.move_session_folder(project, sessions, FolderDestination::New(name), cx);
                 }
             }
         }
@@ -745,12 +635,12 @@ impl Shell {
         cx.notify();
     }
     /// SessionRenameRow: the name in a focused field.
-    pub(super) fn rename_row(
-        &self,
-        target: &RenameTarget,
-        cx: &mut Context<Self>,
-    ) -> Option<AnyElement> {
-        let renaming = self.renaming.as_ref().filter(|r| r.target == *target)?;
+    pub(super) fn rename_row(&self, id: i64, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let renaming = self
+            .sidebar
+            .renaming
+            .as_ref()
+            .filter(|r| r.target.anchor() == id)?;
         Some(
             div()
                 .key_context("SessionRename")
@@ -783,12 +673,7 @@ impl Shell {
     }
 
     /// SessionCard's linked issue or PR; Cmd/Ctrl-click and click both open it.
-    pub(super) fn work_item_badge(
-        &self,
-        id: i64,
-        compact: bool,
-        cx: &mut Context<Self>,
-    ) -> Option<AnyElement> {
+    pub(super) fn work_item_badge(&self, id: i64, cx: &mut Context<Self>) -> Option<AnyElement> {
         let item = self.session_metadata(id, cx).summary.work_item.clone()?;
         let noun = if item.kind == "pr" { "PR" } else { "issue" };
         let url = item.url.clone();
@@ -816,7 +701,6 @@ impl Shell {
                     )
                     .text_color(rgb(ACCENT)),
                 )
-                .when(!compact, |d| d.child(format!("#{}", item.number)))
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .on_click(cx.listener(move |_, _, _, cx| {
                     cx.stop_propagation();
@@ -848,7 +732,7 @@ impl Shell {
                 |this, _, _: &input::Submitted, window, cx| this.save_link(true, window, cx),
             ),
             cx.subscribe(&input, |this, _, _: &input::Changed, cx| {
-                if let Some(dialog) = &mut this.link_dialog
+                if let Some(dialog) = &mut this.sidebar.link_dialog
                     && dialog.error.take().is_some()
                 {
                     cx.notify();
@@ -856,7 +740,7 @@ impl Shell {
             }),
         ];
         window.focus(&input.read(cx).focus_handle(cx), cx);
-        self.link_dialog = Some(LinkDialog {
+        self.sidebar.link_dialog = Some(LinkDialog {
             id,
             input,
             error: None,
@@ -866,7 +750,7 @@ impl Shell {
         cx.notify();
     }
     pub(super) fn close_link_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.link_dialog.take().is_some() {
+        if self.sidebar.link_dialog.take().is_some() {
             self.focus_active(window, cx);
             cx.notify();
         }
@@ -874,6 +758,7 @@ impl Shell {
     /// Saves the parsed link, or with `keep` false, removes it.
     fn save_link(&mut self, keep: bool, window: &mut Window, cx: &mut Context<Self>) {
         if self
+            .sidebar
             .link_dialog
             .as_ref()
             .is_some_and(|dialog| !self.session_available_here(dialog.id, cx))
@@ -883,7 +768,7 @@ impl Shell {
             self.close_link_dialog(window, cx);
             return;
         }
-        let Some(dialog) = &mut self.link_dialog else {
+        let Some(dialog) = &mut self.sidebar.link_dialog else {
             return;
         };
         let id = dialog.id;
@@ -899,21 +784,13 @@ impl Shell {
         } else {
             None
         };
-        if let Some(summary) = self.session_summaries.get_mut(&id) {
-            summary.work_item = item.clone();
-        }
-        if let Some(session) = self.sessions.get(&id) {
-            session.update(cx, |s, _| s.summary.work_item = item.clone());
-        }
-        self.write_session_group("link the session", vec![id], cx, move |s| {
-            s.set_work_item(id, item.as_ref())
-        });
+        self.edit_session_metadata(vec![id], SessionEdit::Link(item), cx);
         self.invalidate_chrome(cx);
         self.close_link_dialog(window, cx);
     }
     /// LinkSessionWorkItemDialog, centred over the window.
     pub(super) fn link_modal(&self, window: &Window, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let dialog = self.link_dialog.as_ref()?;
+        let dialog = self.sidebar.link_dialog.as_ref()?;
         let title = self.session_metadata(dialog.id, cx).display_title();
         let viewport = window.viewport_size();
         let width = 384f32.min(viewport.width.as_f32() - 24.);
@@ -958,7 +835,7 @@ impl Shell {
                 .bg(vorkspace_ui::fluid::scrim(0.4))
                 .child(
                     popover("link-work-item-modal", anchor)
-                        .modal_surface(self.workspace.classic_layout)
+                        .modal_surface()
                         .width(width)
                         .gap(0.)
                         .priority(60)

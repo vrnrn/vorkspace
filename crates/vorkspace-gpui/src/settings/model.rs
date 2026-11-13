@@ -1,4 +1,4 @@
-//! Port of src/features/settings/model/settings.ts: the pages, their rail
+//! The Settings model: the pages, their rail
 //! groups and the index Settings search jumps through.
 use serde::{Deserialize, Serialize};
 
@@ -7,7 +7,6 @@ use serde::{Deserialize, Serialize};
 pub(crate) enum Section {
     #[default]
     General,
-    Connections,
     Appearance,
     Keybindings,
     Chat,
@@ -33,7 +32,6 @@ pub(crate) const GROUPS: [(&str, &[Section]); 3] = [
         "App",
         &[
             Section::General,
-            Section::Connections,
             Section::Appearance,
             Section::Keybindings,
             Section::Archive,
@@ -65,9 +63,8 @@ pub(crate) const GROUPS: [(&str, &[Section]); 3] = [
 ];
 
 impl Section {
-    pub(crate) const ALL: [Section; 18] = [
+    pub(crate) const ALL: [Section; 17] = [
         Section::General,
-        Section::Connections,
         Section::Appearance,
         Section::Keybindings,
         Section::Chat,
@@ -89,7 +86,6 @@ impl Section {
         match self {
             Section::General => "general",
             Section::Vox => "vox",
-            Section::Connections => "connections",
             Section::Appearance => "appearance",
             Section::Keybindings => "keybindings",
             Section::Chat => "chat",
@@ -111,7 +107,6 @@ impl Section {
         match self {
             Section::General => "General",
             Section::Vox => "Vox",
-            Section::Connections => "Connections",
             Section::Appearance => "Appearance",
             Section::Keybindings => "Keybindings",
             Section::Chat => "Chat",
@@ -133,7 +128,6 @@ impl Section {
         match self {
             Section::Vox => "Voice conversations with your Codex account.",
             Section::General => "App behavior, notifications, and updates.",
-            Section::Connections => "Run agents on remote machines over SSH.",
             Section::Appearance => "Colors, backgrounds, and interface layout.",
             Section::Keybindings => "Customize keyboard shortcuts.",
             Section::Chat => "Conversation layout, composer behavior, and editing.",
@@ -159,7 +153,6 @@ impl Section {
                 "version update sounds notifications notes rail clipboard copy paste dictation microphone custom words"
             }
             Section::Vox => "voice microphone speech conversation memory silent",
-            Section::Connections => "ssh remote host machine server environment always on",
             Section::Appearance => {
                 "theme dark light color accent glass blur zoom scale wallpaper rail sidebar"
             }
@@ -187,12 +180,11 @@ impl Section {
             Section::Worktrees => "git branch worktree working copy project create delete",
         }
     }
-    /// SettingsRail.tsx's SECTION_ICONS.
+    /// The page's icon in the Settings rail.
     pub(crate) fn icon(self) -> &'static str {
         match self {
             Section::General => "sliders",
             Section::Vox => "mic",
-            Section::Connections => "internet",
             Section::Appearance => "palette",
             Section::Keybindings => "keyboard",
             Section::Chat => "message-square",
@@ -214,12 +206,6 @@ impl Section {
 
 /// SETTINGS_INDEX: (id, section, label, keywords).
 pub(crate) const INDEX: &[(&str, Section, &str, &str)] = &[
-    (
-        "remote-machines",
-        Section::Connections,
-        "Your machines",
-        "ssh remote connect host server environment",
-    ),
     (
         "mcp-servers",
         Section::Mcp,
@@ -303,12 +289,6 @@ pub(crate) const INDEX: &[(&str, Section, &str, &str)] = &[
         Section::General,
         "Custom words",
         "dictation vocabulary preferred spelling dictionary aliases corrections",
-    ),
-    (
-        "file-tabs",
-        Section::General,
-        "File tabs",
-        "editor open top workspace normal session pane beside chat",
     ),
     (
         "file-word-wrap",
@@ -601,7 +581,6 @@ mod tests {
             GROUPS[0].1,
             &[
                 Section::General,
-                Section::Connections,
                 Section::Appearance,
                 Section::Keybindings,
                 Section::Archive,
@@ -616,9 +595,7 @@ mod tests {
         for section in Section::ALL {
             assert_eq!(pages.iter().filter(|page| **page == section).count(), 1);
         }
-        assert_eq!(Section::Connections.id(), "connections");
         assert_eq!(Section::Connectors.id(), "connectors");
-        assert!(Section::Connections.description().contains("SSH"));
         assert_eq!(
             serde_json::from_str::<Section>(r#""inbox""#).unwrap(),
             Section::Connectors

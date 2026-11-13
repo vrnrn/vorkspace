@@ -4,6 +4,51 @@ use std::sync::Mutex;
 use vorkspace_core::{store::Store, transcript::Row};
 
 #[gpui::test]
+fn managed_reuse_waits_for_the_cold_composer_and_history(cx: &mut TestAppContext) {
+    use crate::conversation::composer_features::ManagedAvailability;
+
+    let project = tempfile::tempdir().unwrap();
+    let store = Store::test(Path::new(":memory:")).unwrap();
+    let path = project.path().to_str().unwrap();
+    let occupied = store.create("codex", path).unwrap();
+    let empty = store.create("codex", path).unwrap();
+    store
+        .save_composer_draft(
+            occupied.id,
+            0,
+            &serde_json::json!({
+                "cwd": path, "text": "Keep my cold draft",
+                "selectionStart": 4, "selectionEnd": 11,
+                "attachments": [], "mcpTags": [],
+            }),
+        )
+        .unwrap();
+    let store = Arc::new(Mutex::new(store));
+    for (summary, draft) in [(occupied, "Keep my cold draft"), (empty, "")] {
+        let chat = cx.new(|cx| Conversation::new(summary, store.clone(), cx));
+        chat.update(cx, |chat, cx| {
+            assert!(chat.managed_availability(cx) == ManagedAvailability::Pending);
+            chat.load_complete(cx);
+        });
+        let executor = cx.foreground_executor().clone();
+        executor.block_test(cx.condition(&chat, |chat, _| {
+            !chat.composer_draft.is_hydrating() && chat.history_ready()
+        }));
+        chat.read_with(cx, |chat, cx| {
+            assert_eq!(chat.input.read(cx).content, draft);
+            let selection = if draft.is_empty() { 0..0 } else { 4..11 };
+            assert_eq!(chat.input.read(cx).selection_utf16(), selection);
+            let expected = if draft.is_empty() {
+                ManagedAvailability::Available
+            } else {
+                ManagedAvailability::Unavailable
+            };
+            assert!(chat.managed_availability(cx) == expected);
+        });
+    }
+}
+
+#[gpui::test]
 fn stale_history_refresh_preserves_chat_scroll(cx: &mut TestAppContext) {
     for bot in [false, true] {
         for following in [false, true] {
@@ -144,7 +189,7 @@ fn stale_history_refresh_cannot_replace_a_newer_turn(cx: &mut TestAppContext) {
             // Admit a turn before the asynchronous refresh can publish.
             // It may even finish before that older read returns.
             chat.submission_generation += 1;
-            chat.busy = running;
+            chat.set_running_for_test(running);
             chat.transcript.update(cx, |view, cx| {
                 view.patch(
                     1,
@@ -219,6 +264,12 @@ fn partial_history_restores_before_queued_mutation(cx: &mut TestAppContext) {
         assert_eq!(chat.bot_row_origin(cx), 30);
         assert_eq!(chat.bot_row_count(cx), 50);
         assert!(!chat.history_ready());
+        chat.load(cx);
+    });
+    cx.run_until_parked();
+    chat.update(cx, |chat, cx| {
+        assert!(chat.history_partial, "display demand keeps the saved page");
+        assert_eq!(chat.transcript.read(cx).source_rows().len(), 20);
         chat.defer_history_action(
             |chat, cx| {
                 let rows = chat.transcript.read(cx).source_rows();
@@ -311,7 +362,7 @@ fn partial_history_restores_before_queued_mutation(cx: &mut TestAppContext) {
 fn history_eviction_keeps_live_state_and_pins_drafts_running_and_failed_saves(
     cx: &mut TestAppContext,
 ) {
-    let store = Store::open(Path::new(":memory:")).unwrap();
+    let store = Store::test(Path::new(":memory:")).unwrap();
     let session = store.create("codex", "/project").unwrap();
     let chat = cx.new(|cx| Conversation::new(session, Arc::new(Mutex::new(store)), cx));
     chat.update(cx, |chat, cx| {
@@ -332,9 +383,9 @@ fn history_eviction_keeps_live_state_and_pins_drafts_running_and_failed_saves(
                 cx,
             );
         });
-        chat.busy = true;
+        chat.set_running_for_test(true);
         assert!(!chat.unload_history(cx));
-        chat.busy = false;
+        chat.set_running_for_test(false);
         chat.status = "Could not save history".into();
         assert!(!chat.unload_history(cx));
         chat.status = "Ready".into();
@@ -365,14 +416,14 @@ fn history_eviction_keeps_live_state_and_pins_drafts_running_and_failed_saves(
 fn hidden_mutations_wait_for_history_without_changing_settings_or_receipts(
     cx: &mut TestAppContext,
 ) {
-    let store = Store::open(Path::new(":memory:")).unwrap();
+    let store = Store::test(Path::new(":memory:")).unwrap();
     let session = store.create("codex", "/project").unwrap();
     let chat = cx.new(|cx| Conversation::new(session, Arc::new(Mutex::new(store)), cx));
     chat.update(cx, |chat, cx| {
         chat.loaded = true;
         chat.history_unloaded = true;
         // Keep the test's restore under its own control; no provider runs.
-        chat.loading = true;
+        chat.history_read = history::ReadState::Reading;
         chat.settings.revision = 17;
         chat.settings.bot_message_id = Some("delivery-receipt".into());
         chat.model = Some("original-model".into());
@@ -384,7 +435,7 @@ fn hidden_mutations_wait_for_history_without_changing_settings_or_receipts(
             ..Default::default()
         };
         chat.quick_submit("Queued API prompt".into(), transfer, cx);
-        assert!(!chat.busy);
+        assert!(!chat.responding());
         assert_eq!(chat.settings.revision, 17);
         assert_eq!(chat.model.as_deref(), Some("original-model"));
         assert_eq!(
@@ -431,7 +482,7 @@ fn hidden_mutations_wait_for_history_without_changing_settings_or_receipts(
             )
         });
         chat.history_unloaded = false;
-        chat.loading = false;
+        chat.history_read = history::ReadState::Idle;
         chat.run_history_actions(cx);
         assert_eq!(chat.settings.revision, 19);
         assert!(chat.history_actions.is_empty());
@@ -460,7 +511,7 @@ fn hidden_mutations_wait_for_history_without_changing_settings_or_receipts(
 fn restored_external_prompt_keeps_its_files_separate_from_new_composer_files(
     cx: &mut TestAppContext,
 ) {
-    let store = Store::open(Path::new(":memory:")).unwrap();
+    let store = Store::test(Path::new(":memory:")).unwrap();
     let session = store.create("codex", "/project").unwrap();
     let chat = cx.new(|cx| Conversation::new(session, Arc::new(Mutex::new(store)), cx));
     chat.update(cx, |chat, cx| {
@@ -485,6 +536,6 @@ fn restored_external_prompt_keeps_its_files_separate_from_new_composer_files(
             queued.attachments,
             vec![std::path::PathBuf::from("/tmp/accepted-prompt.png")]
         );
-        assert!(!chat.busy);
+        assert!(!chat.responding());
     });
 }

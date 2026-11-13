@@ -29,8 +29,9 @@ impl Inbox {
         };
         let inset = self.detail_inset(window);
         let is_pr = item.kind == "pr";
-        let details = self.details.clone().unwrap_or_default();
-        let related_sessions = self.related_sessions(&item);
+        let empty = Details::default();
+        let details = self.detail.details.as_ref().unwrap_or(&empty);
+        let mut related_sessions = self.sessions.matching(&item).peekable();
         let assignees = item
             .assignees
             .iter()
@@ -42,7 +43,8 @@ impl Inbox {
             })
             .collect::<Vec<_>>();
         let base_ref = if details.base_ref_name.is_empty() {
-            self.thread
+            self.detail
+                .thread
                 .as_ref()
                 .map(|t| t.base_ref_name.as_str())
                 .unwrap_or("")
@@ -50,7 +52,8 @@ impl Inbox {
             &details.base_ref_name
         };
         let head_ref = if details.head_ref_name.is_empty() {
-            self.thread
+            self.detail
+                .thread
                 .as_ref()
                 .map(|t| t.head_ref_name.as_str())
                 .unwrap_or("")
@@ -74,45 +77,7 @@ impl Inbox {
                     .flex()
                     .flex_col()
                     .gap(px(8.))
-                    .child(
-                        page::meta()
-                            .id("inbox-detail-meta")
-                            .debug_selector(|| "inbox-detail-meta".into())
-                            .min_w_0()
-                            .flex()
-                            .flex_wrap()
-                            .items_center()
-                            .gap(px(8.))
-                            .child(provider_mark(&item.provider))
-                            .child(if is_pr {
-                                if item.provider == "gitlab" {
-                                    "Merge request"
-                                } else {
-                                    "Pull request"
-                                }
-                            } else {
-                                "Issue"
-                            })
-                            .child(item.reference())
-                            .child(vorkspace_ui::fluid::badge(
-                                item.status(),
-                                status_color(&item),
-                            ))
-                            .when(!item.attention_reason.is_empty(), |d| {
-                                d.child(
-                                    div()
-                                        .text_color(accent_color())
-                                        .child(attention_label(&item.attention_reason)),
-                                )
-                            })
-                            .child(div().min_w_0().truncate().child(
-                                if item.team_name.is_empty() {
-                                    item.repo.clone()
-                                } else {
-                                    item.team_name.clone()
-                                },
-                            )),
-                    )
+                    .child(Self::detail_item_meta(&item, is_pr))
                     .child(page::title().line_clamp(2).child(item.title.clone()))
                     .child(
                         page::meta()
@@ -121,27 +86,8 @@ impl Inbox {
                             .flex_wrap()
                             .items_center()
                             .gap(px(8.))
-                            .when(!details.author.is_empty(), |d| {
-                                d.child(avatar::person(
-                                    &item.provider,
-                                    &details.author,
-                                    &details.author_avatar_url,
-                                    16.,
-                                    window,
-                                    cx,
-                                ))
-                            })
-                            .when(!assignees.is_empty(), |d| {
-                                d.children(assignees.iter().map(|person| {
-                                    avatar::person(
-                                        &item.provider,
-                                        &person.login,
-                                        &person.avatar_url,
-                                        16.,
-                                        window,
-                                        cx,
-                                    )
-                                }))
+                            .map(|d| {
+                                Self::detail_people_meta(d, &item, details, &assignees, window, cx)
                             })
                             .when(
                                 item.assignees.is_empty()
@@ -154,43 +100,12 @@ impl Inbox {
                             .when(!item.updated_at.is_empty(), |d| {
                                 d.child(format!("Updated {}", relative_time(&item.updated_at)))
                             })
-                            .when(!base_ref.is_empty() && !head_ref.is_empty(), |d| {
-                                let branch = head_ref.to_owned();
-                                d.child(
-                                    div()
-                                        .min_w_0()
-                                        .max_w_full()
-                                        .flex()
-                                        .items_center()
-                                        .gap(px(4.))
-                                        .child(action_icon("git-compare", page::secondary_ink()))
-                                        .child(
-                                            div()
-                                                .min_w_0()
-                                                .truncate()
-                                                .child(format!("{base_ref} ← {head_ref}")),
-                                        )
-                                        .child(
-                                            icon_button(
-                                                "inbox-copy-branch",
-                                                "Copy branch name",
-                                                "response-copy",
-                                            )
-                                            .on_click(
-                                                move |_, _, cx| {
-                                                    cx.write_to_clipboard(
-                                                        ClipboardItem::new_string(branch.clone()),
-                                                    )
-                                                },
-                                            ),
-                                        ),
-                                )
-                            })
+                            .map(|d| Self::detail_branch_meta(d, base_ref, head_ref))
                             .when(!details.review_decision.is_empty(), |d| {
                                 d.child(review_label(&details.review_decision))
                             }),
                     )
-                    .when(!related_sessions.is_empty(), |d| {
+                    .when(related_sessions.peek().is_some(), |d| {
                         d.child(
                             page::meta()
                                 .min_w_0()
@@ -200,183 +115,20 @@ impl Inbox {
                                 .gap(px(4.))
                                 .child(action_icon("message-multiple", page::secondary_ink()))
                                 .child("Related threads")
-                                .children(related_sessions.into_iter().map(|session| {
-                                    action(format!("inbox-session-{}", session.id), session.title)
+                                .children(related_sessions.map(|session| {
+                                    let id = session.id;
+                                    action(format!("inbox-session-{id}"), session.title.clone())
                                         .bg(content(0.05))
                                         .on_click(cx.listener(move |_, _, _, cx| {
-                                            cx.emit(Event::OpenSession(session.id))
+                                            cx.emit(Event::OpenSession(id))
                                         }))
                                 })),
                         )
                     })
-                    .child(
-                        div()
-                            .flex()
-                            .flex_wrap()
-                            .items_center()
-                            .gap(px(8.))
-                            .when(!is_pr || item.provider == "gitlab", |d| {
-                                d.child(
-                                    page::primary(
-                                        "inbox-send-agent",
-                                        "Send to chat",
-                                        self.detail_loading || self.details.is_none(),
-                                    )
-                                    .child("Send to chat")
-                                    .on_click(cx.listener(
-                                        |this, _, _, cx| {
-                                            if !this.detail_loading && this.details.is_some() {
-                                                this.start(cx);
-                                            }
-                                        },
-                                    )),
-                                )
-                            })
-                            .when(
-                                (!is_pr || item.provider == "gitlab")
-                                    && (item.project_path.is_empty()
-                                        || matches!(item.provider.as_str(), "gitlab" | "jira")),
-                                |d| {
-                                    d.child(
-                                        icon_action(
-                                            "inbox-choose-project",
-                                            &self
-                                                .start_bot
-                                                .as_ref()
-                                                .and_then(|id| {
-                                                    self.bots
-                                                        .iter()
-                                                        .find(|(key, _)| key == id)
-                                                        .map(|(_, name)| name.clone())
-                                                })
-                                                .unwrap_or_else(|| {
-                                                    project_name(&self.start_project)
-                                                }),
-                                            if self.start_bot.is_some() {
-                                                "bot"
-                                            } else {
-                                                "folder"
-                                            },
-                                            true,
-                                        )
-                                        .relative()
-                                        .border_1()
-                                        .border_color(page::divider())
-                                        .child(action_icon("chevron-down", page::secondary_ink()))
-                                        .child(self.project_anchor.probe())
-                                        .on_click(
-                                            cx.listener(|this, _, _, cx| {
-                                                this.project_picker = !this.project_picker;
-                                                cx.notify();
-                                            }),
-                                        ),
-                                    )
-                                },
-                            )
-                            .when(is_pr && item.provider == "github", |d| {
-                                d.child(self.pr_actions(&item, cx))
-                            })
-                            .when(self.pinned_item.is_none(), |d| {
-                                let item = item.clone();
-                                d.child(
-                                    icon_action(
-                                        "inbox-open-tab",
-                                        "Open in new tab",
-                                        "app-window",
-                                        true,
-                                    )
-                                    .on_click(cx.listener(
-                                        move |_, _, _, cx| {
-                                            cx.emit(Event::OpenTab(Box::new(item.clone())));
-                                        },
-                                    )),
-                                )
-                            })
-                            .child(
-                                icon_action(
-                                    "inbox-open-external",
-                                    &format!(
-                                        "{} {}",
-                                        if is_pr { "Review on" } else { "Open in" },
-                                        model::provider_label(&item.provider)
-                                    ),
-                                    "external-link",
-                                    !item.url.is_empty(),
-                                )
-                                .on_click({
-                                    let url = item.url.clone();
-                                    move |_, _, cx| {
-                                        if !url.is_empty() {
-                                            cx.open_url(&url);
-                                        }
-                                    }
-                                }),
-                            ),
-                    )
-                    .when(is_pr, |d| {
-                        d.child(
-                            page::toolbar()
-                                .id("inbox-pr-tabs")
-                                .role(Role::TabList)
-                                .aria_label("Pull request details")
-                                .h_auto()
-                                .min_h(px(page::TOOLBAR_HEIGHT))
-                                .border_b_0()
-                                .px_0()
-                                .flex_wrap()
-                                .children(
-                                    [
-                                        (Tab::Summary, "Summary"),
-                                        (Tab::Code, "Code"),
-                                        (Tab::Checks, "Checks"),
-                                    ]
-                                    .into_iter()
-                                    .filter(|(tab, _)| {
-                                        *tab != Tab::Checks || item.provider == "github"
-                                    })
-                                    .map(|(tab, label)| {
-                                        page::tab(
-                                            format!("inbox-tab-{label}"),
-                                            label,
-                                            self.tab == tab,
-                                        )
-                                        .child(label)
-                                        .when(tab == Tab::Checks, |d| {
-                                            let failed = self
-                                                .checks
-                                                .as_ref()
-                                                .map(|checks| {
-                                                    checks
-                                                        .checks
-                                                        .iter()
-                                                        .filter(|check| failed_check(&check.state))
-                                                        .count()
-                                                })
-                                                .unwrap_or(0);
-                                            d.when(failed > 0, |d| {
-                                                d.child(
-                                                    icon("circle-x", page::ICON_SIZE).text_color(
-                                                        status(StatusColor::Danger, 1.),
-                                                    ),
-                                                )
-                                                .child(
-                                                    div()
-                                                        .text_color(status(StatusColor::Danger, 1.))
-                                                        .child(failed.to_string()),
-                                                )
-                                            })
-                                        })
-                                        .on_click(
-                                            cx.listener(move |this, _, _, cx| {
-                                                this.set_tab(tab, cx)
-                                            }),
-                                        )
-                                    }),
-                                ),
-                        )
-                    }),
+                    .child(self.detail_item_actions(&item, is_pr, cx))
+                    .when(is_pr, |d| d.child(self.detail_pull_request_tabs(&item, cx))),
             );
-        let body = match self.tab {
+        let body = match self.tabs.tab {
             Tab::Summary => self.summary_view(&item, window, cx),
             Tab::Code => self.diff_view(cx),
             Tab::Checks => self.checks_view(inset, cx),
@@ -388,13 +140,276 @@ impl Inbox {
             .flex()
             .flex_col()
             .child(title)
-            .when_some(self.detail_error.clone(), |d, text| d.child(error(text)))
+            .when_some(
+                self.detail
+                    .target_error
+                    .as_ref()
+                    .or(self.detail.error.as_ref())
+                    .cloned(),
+                |d, text| {
+                    d.child(
+                        error(text.clone())
+                            .id("inbox-detail-error")
+                            .role(Role::Status)
+                            .aria_label(text),
+                    )
+                },
+            )
             .child(body)
             .into_any_element()
     }
+
+    fn detail_item_meta(item: &Item, is_pr: bool) -> gpui::Stateful<Div> {
+        page::meta()
+            .id("inbox-detail-meta")
+            .debug_selector(|| "inbox-detail-meta".into())
+            .min_w_0()
+            .flex()
+            .flex_wrap()
+            .items_center()
+            .gap(px(8.))
+            .child(provider_mark(&item.provider))
+            .child(if is_pr {
+                if item.provider == "gitlab" {
+                    "Merge request"
+                } else {
+                    "Pull request"
+                }
+            } else {
+                "Issue"
+            })
+            .child(item.reference())
+            .child(vorkspace_ui::fluid::badge(
+                item.status(),
+                status_color(item),
+            ))
+            .when(!item.attention_reason.is_empty(), |d| {
+                d.child(
+                    div()
+                        .text_color(accent_color())
+                        .child(attention_label(&item.attention_reason)),
+                )
+            })
+            .child(
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .child(if item.team_name.is_empty() {
+                        item.repo.clone()
+                    } else {
+                        item.team_name.clone()
+                    }),
+            )
+    }
+
+    fn detail_item_actions(&self, item: &Item, is_pr: bool, cx: &mut Context<Self>) -> Div {
+        div()
+            .flex()
+            .flex_wrap()
+            .items_center()
+            .gap(px(8.))
+            .when(!is_pr || item.provider == "gitlab", |d| {
+                d.child(
+                    page::primary(
+                        "inbox-send-agent",
+                        "Send to chat",
+                        self.detail.loading || self.detail.details.is_none(),
+                    )
+                    .child("Send to chat")
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        if !this.detail.loading && this.detail.details.is_some() {
+                            this.start(cx);
+                        }
+                    })),
+                )
+            })
+            .when(
+                (!is_pr || item.provider == "gitlab")
+                    && (item.project_path.is_empty()
+                        || matches!(item.provider.as_str(), "gitlab" | "jira")),
+                |d| {
+                    d.child(
+                        icon_action(
+                            "inbox-choose-project",
+                            &self
+                                .start
+                                .bot
+                                .as_ref()
+                                .and_then(|id| {
+                                    self.start
+                                        .bots
+                                        .iter()
+                                        .find(|(key, _)| key == id)
+                                        .map(|(_, name)| name.clone())
+                                })
+                                .unwrap_or_else(|| project_name(&self.start.project)),
+                            if self.start.bot.is_some() {
+                                "bot"
+                            } else {
+                                "folder"
+                            },
+                            true,
+                        )
+                        .relative()
+                        .border_1()
+                        .border_color(page::divider())
+                        .child(action_icon("chevron-down", page::secondary_ink()))
+                        .child(self.start.project_anchor.probe())
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.start.project_picker = !this.start.project_picker;
+                            cx.notify();
+                        })),
+                    )
+                },
+            )
+            .when(is_pr && item.provider == "github", |d| {
+                d.child(self.pr_actions(item, cx))
+            })
+            .when(self.pinned_item.is_none(), |d| {
+                let item = item.clone();
+                d.child(
+                    icon_action("inbox-open-tab", "Open in new tab", "app-window", true).on_click(
+                        cx.listener(move |_, _, _, cx| {
+                            cx.emit(Event::OpenTab(Box::new(item.clone())));
+                        }),
+                    ),
+                )
+            })
+            .child(
+                icon_action(
+                    "inbox-open-external",
+                    &format!(
+                        "{} {}",
+                        if is_pr { "Review on" } else { "Open in" },
+                        model::provider_label(&item.provider)
+                    ),
+                    "external-link",
+                    !item.url.is_empty(),
+                )
+                .on_click({
+                    let url = item.url.clone();
+                    move |_, _, cx| {
+                        if !url.is_empty() {
+                            cx.open_url(&url);
+                        }
+                    }
+                }),
+            )
+    }
+
+    fn detail_pull_request_tabs(&self, item: &Item, cx: &Context<Self>) -> gpui::Stateful<Div> {
+        page::toolbar()
+            .id("inbox-pr-tabs")
+            .role(Role::TabList)
+            .aria_label("Pull request details")
+            .h_auto()
+            .min_h(px(page::TOOLBAR_HEIGHT))
+            .border_b_0()
+            .px_0()
+            .flex_wrap()
+            .children(
+                [
+                    (Tab::Summary, "Summary"),
+                    (Tab::Code, "Code"),
+                    (Tab::Checks, "Checks"),
+                ]
+                .into_iter()
+                .filter(|(tab, _)| *tab != Tab::Checks || item.provider == "github")
+                .map(|(tab, label)| {
+                    page::tab(format!("inbox-tab-{label}"), label, self.tabs.tab == tab)
+                        .child(label)
+                        .when(tab == Tab::Checks, |d| {
+                            let failed = self
+                                .tabs
+                                .checks
+                                .as_ref()
+                                .map(|checks| {
+                                    checks
+                                        .checks
+                                        .iter()
+                                        .filter(|check| failed_check(&check.state))
+                                        .count()
+                                })
+                                .unwrap_or(0);
+                            d.when(failed > 0, |d| {
+                                d.child(
+                                    icon("circle-x", page::ICON_SIZE)
+                                        .text_color(status(StatusColor::Danger, 1.)),
+                                )
+                                .child(
+                                    div()
+                                        .text_color(status(StatusColor::Danger, 1.))
+                                        .child(failed.to_string()),
+                                )
+                            })
+                        })
+                        .on_click(cx.listener(move |this, _, _, cx| this.set_tab(tab, cx)))
+                }),
+            )
+    }
+
+    fn detail_people_meta(
+        d: Div,
+        item: &Item,
+        details: &Details,
+        assignees: &[&model::Person],
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        d.when(!details.author.is_empty(), |d| {
+            d.child(avatar::person(
+                &item.provider,
+                &details.author,
+                &details.author_avatar_url,
+                16.,
+                window,
+                cx,
+            ))
+        })
+        .when(!assignees.is_empty(), |d| {
+            d.children(assignees.iter().map(|person| {
+                avatar::person(
+                    &item.provider,
+                    &person.login,
+                    &person.avatar_url,
+                    16.,
+                    window,
+                    cx,
+                )
+            }))
+        })
+    }
+
+    fn detail_branch_meta(d: Div, base_ref: &str, head_ref: &str) -> Div {
+        d.when(!base_ref.is_empty() && !head_ref.is_empty(), |d| {
+            let branch = head_ref.to_owned();
+            d.child(
+                div()
+                    .min_w_0()
+                    .max_w_full()
+                    .flex()
+                    .items_center()
+                    .gap(px(4.))
+                    .child(action_icon("git-compare", page::secondary_ink()))
+                    .child(
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .child(format!("{base_ref} ← {head_ref}")),
+                    )
+                    .child(
+                        icon_button("inbox-copy-branch", "Copy branch name", "response-copy")
+                            .on_click(move |_, _, cx| {
+                                cx.write_to_clipboard(ClipboardItem::new_string(branch.clone()))
+                            }),
+                    ),
+            )
+        })
+    }
+
     pub(super) fn pr_actions(&self, item: &Item, cx: &mut Context<Self>) -> AnyElement {
         let open = item.state.eq_ignore_ascii_case("open");
-        let selected = self.merge_action.clone();
+        let selected = self.actions.merge_action.clone();
         let merge_label = match selected.as_str() {
             "squash" => "Squash and merge",
             "rebase" => "Rebase and merge",
@@ -419,18 +434,18 @@ impl Inbox {
                         .rounded(px(radius::CONTROL))
                         .bg(content(1.))
                         .text_color(vorkspace_ui::fluid::on_ink())
-                        .child(self.action_anchor.probe())
+                        .child(self.actions.anchor.probe())
                         .child(
-                            page::primary("inbox-pr-merge", merge_label, self.acting)
+                            page::primary("inbox-pr-merge", merge_label, self.actions.acting)
                                 .min_w_0()
                                 .flex_shrink_1()
                                 .child(action_icon("git-merge", shell_fill()))
                                 .child(div().min_w_0().truncate().child(merge_label))
                                 .on_click(cx.listener(move |this, _, _, cx| {
-                                    if !this.acting {
-                                        this.confirm_action = Some(selected.clone());
-                                        this.action_error = None;
-                                        this.action_notice = None;
+                                    if !this.actions.acting {
+                                        this.actions.confirm_action = Some(selected.clone());
+                                        this.actions.error = None;
+                                        this.actions.notice = None;
                                         cx.notify();
                                     }
                                 })),
@@ -439,23 +454,23 @@ impl Inbox {
                             crate::controls::icon_button(
                                 "inbox-merge-options",
                                 "Merge options",
-                                !self.acting,
+                                !self.actions.acting,
                             )
                             .size(px(page::CONTROL_HEIGHT))
-                            .aria_disabled(self.acting)
+                            .aria_disabled(self.actions.acting)
                             .rounded_none()
                             .border_l_1()
                             .border_color(shell_fill().opacity(0.2))
-                            .when(!self.acting, |d| {
+                            .when(!self.actions.acting, |d| {
                                 d.cursor_pointer().hover(|s| {
                                     s.bg(vorkspace_ui::fluid::wash(shell_fill().opacity(0.1)))
                                 })
                             })
-                            .when(self.acting, |d| d.opacity(0.4))
+                            .when(self.actions.acting, |d| d.opacity(0.4))
                             .child(action_icon("chevron-down", shell_fill()))
                             .on_click(cx.listener(|this, _, _, cx| {
-                                if !this.acting {
-                                    this.action_menu = !this.action_menu;
+                                if !this.actions.acting {
+                                    this.actions.menu = !this.actions.menu;
                                     cx.notify();
                                 }
                             })),
@@ -490,23 +505,23 @@ impl Inbox {
                             "close" => "git-pull-request-closed",
                             _ => "git-pull-request",
                         },
-                        !self.acting,
+                        !self.actions.acting,
                     )
                     .relative()
-                    .child(self.pr_action_anchors[anchor_ix].probe())
+                    .child(self.actions.pr_action_anchors[anchor_ix].probe())
                     .border_1()
                     .border_color(page::divider())
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        if !this.acting {
-                            this.confirm_action = Some(action_name.into());
-                            this.action_error = None;
-                            this.action_notice = None;
+                        if !this.actions.acting {
+                            this.actions.confirm_action = Some(action_name.into());
+                            this.actions.error = None;
+                            this.actions.notice = None;
                             cx.notify();
                         }
                     }))
                 }),
             )
-            .when_some(self.action_notice.clone(), |d, notice| {
+            .when_some(self.actions.notice.clone(), |d, notice| {
                 d.child(page::meta().child(notice))
             })
             .into_any_element()
@@ -544,12 +559,13 @@ impl Inbox {
             page::secondary_ink()
         };
         let document = self
+            .detail
             .comments
             .iter()
             .find(|(cached, _)| cached.id == comment.id)
             .map(|(_, document)| document.clone());
         let clamped = timeline
-            && !self.expanded_comments.contains(&comment.id)
+            && !self.detail.expanded_comments.contains(&comment.id)
             && (comment.body.len() > 1200 || comment.body.lines().count() > 12);
         let expandable =
             timeline && (comment.body.len() > 1200 || comment.body.lines().count() > 12);
@@ -625,9 +641,9 @@ impl Inbox {
                         .px_0()
                         .text_color(page::secondary_ink())
                         .on_click(cx.listener(move |this, _, window, cx| {
-                            this.reply = Some((reply_id.clone(), name.clone()));
-                            this.summary_scroll.scroll_to_end();
-                            window.focus(&this.comment.focus_handle(cx), cx);
+                            this.composer.reply = Some((reply_id.clone(), name.clone()));
+                            this.summary.scroll.scroll_to_end();
+                            window.focus(&this.composer.comment.focus_handle(cx), cx);
                             cx.notify();
                         })),
                 )
@@ -678,10 +694,10 @@ impl Inbox {
                                 .text_color(page::secondary_ink())
                                 .on_click(cx.listener(
                                     move |this, _, _, cx| {
-                                        if !this.expanded_comments.remove(&id) {
-                                            this.expanded_comments.insert(id.clone());
+                                        if !this.detail.expanded_comments.remove(&id) {
+                                            this.detail.expanded_comments.insert(id.clone());
                                         }
-                                        this.summary_scroll.remeasure();
+                                        this.summary.scroll.remeasure();
                                         cx.notify();
                                     },
                                 )),
@@ -748,9 +764,9 @@ impl Inbox {
     }
 
     pub(crate) fn rebuild_activity(&mut self) {
-        self.activity.clear();
-        self.activity_revision += 1;
-        let Some(thread) = &self.thread else {
+        self.summary.activity.clear();
+        self.summary.activity_revision += 1;
+        let Some(thread) = &self.detail.thread else {
             return;
         };
         let timeline = self
@@ -791,9 +807,9 @@ impl Inbox {
                     entry => groups.push(entry),
                 }
             }
-            self.activity = groups;
+            self.summary.activity = groups;
         } else {
-            self.activity = thread
+            self.summary.activity = thread
                 .comments
                 .iter()
                 .cloned()
@@ -801,7 +817,7 @@ impl Inbox {
                 .map(Activity::Comment)
                 .collect();
         }
-        self.summary_scroll.remeasure();
+        self.summary.scroll.remeasure();
     }
 
     pub(super) fn discussion_row(
@@ -811,7 +827,7 @@ impl Inbox {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let entry = self.activity[ix].clone();
+        let entry = self.summary.activity[ix].clone();
         let timeline = item.kind == "pr" && item.provider == "github";
         let width = self.summary_body_width(window);
         if !timeline {
@@ -819,7 +835,7 @@ impl Inbox {
                 unreachable!()
             };
             return div()
-                .pb(px(if ix + 1 == self.activity.len() {
+                .pb(px(if ix + 1 == self.summary.activity.len() {
                     0.
                 } else {
                     8.
@@ -828,7 +844,7 @@ impl Inbox {
                 .into_any_element();
         }
         let first = ix == 0;
-        let last = ix + 1 == self.activity.len();
+        let last = ix + 1 == self.summary.activity.len();
         let mut activity = Vec::new();
         match entry {
             Activity::Comment(comment) => {
@@ -1007,7 +1023,7 @@ impl Inbox {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        let thread = self.thread.as_ref()?;
+        let thread = self.detail.thread.as_ref()?;
         if thread.comments.is_empty() && thread.commits.is_empty() && !thread.truncated {
             return None;
         }
@@ -1068,7 +1084,9 @@ impl Inbox {
                             ))
                         }),
                 )
-                .when_some(self.thread_error.clone(), |d, text| d.child(error(text)))
+                .when_some(self.detail.thread_error.clone(), |d, text| {
+                    d.child(error(text))
+                })
                 .into_any_element(),
         )
     }

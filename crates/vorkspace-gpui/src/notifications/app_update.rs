@@ -10,21 +10,14 @@ use vorkspace_ui::theme::*;
 const MARKER: &str = "vorkspace.installedUpdate";
 const VERSION: &str = "vorkspace.lastSeenAppVersion";
 
-/// Consume before parsing, matching React's one-launch marker semantics. The
+/// Consume before parsing, so the marker applies to one launch only. The
 /// settings abstraction has no delete operation, so an empty value is cleared.
 pub(crate) fn consume_installed_update(store: &Store) -> Result<Option<String>, String> {
     observe_version(store, env!("CARGO_PKG_VERSION"))
 }
 fn observe_version(store: &Store, version: &str) -> Result<Option<String>, String> {
     let previous = store.setting(VERSION)?;
-    // DesktopPreferences already canonicalizes historical app-owned prefixes.
-    // A cleared native marker takes precedence over immutable WebKit storage.
-    let raw = store.setting(MARKER)?.or_else(|| {
-        store
-            .desktop_preferences()
-            .and_then(|p| p.get(MARKER))
-            .map(str::to_owned)
-    });
+    let raw = store.setting(MARKER)?;
     let installed = raw
         .as_ref()
         .filter(|value| !value.is_empty())

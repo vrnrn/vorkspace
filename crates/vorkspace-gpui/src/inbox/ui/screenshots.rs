@@ -23,11 +23,11 @@ const PROJECT: &str = "/work/fixtures/release-platform";
 const AVATAR: &str = "fixture:initials";
 
 fn fixture(provider: &str, narrow_detail: bool, cx: &mut Context<Inbox>) -> Inbox {
-    let store = Arc::new(Mutex::new(Store::open(Path::new(":memory:")).unwrap()));
-    let mut inbox = Inbox::new_inner(store, vec![], PathBuf::from(PROJECT), false, cx);
+    let store = Arc::new(Mutex::new(Store::test(Path::new(":memory:")).unwrap()));
+    let mut inbox = Inbox::new_for_test(store, vec![], PathBuf::from(PROJECT), cx);
     inbox.state.source = provider.into();
     inbox.state.seen.seeded = true;
-    inbox.snapshot.connections.insert(
+    Rc::make_mut(&mut inbox.snapshot).connections.insert(
         provider.into(),
         model::Status {
             connected: true,
@@ -85,9 +85,9 @@ fn fixture(provider: &str, narrow_detail: bool, cx: &mut Context<Inbox>) -> Inbo
         login: "Morgan Lee".into(),
         avatar_url: AVATAR.into(),
     });
-    let key = selected.key();
+    let key = selected.detail_key();
     inbox.state.seen.mark(&selected);
-    inbox.snapshot.items = vec![
+    Rc::make_mut(&mut inbox.snapshot).items = vec![
         selected,
         make_item(
             43,
@@ -114,7 +114,7 @@ fn fixture(provider: &str, narrow_detail: bool, cx: &mut Context<Inbox>) -> Inbo
     inbox.selected = Some(key.clone());
     inbox.narrow_detail = narrow_detail;
     inbox.finish_detail(
-        inbox.detail_generation,
+        inbox.detail.generation,
         key,
         Ok(Details {
             author: "Taylor Chen".into(),
@@ -163,7 +163,6 @@ fn native_inbox_capture() {
                     ..Default::default()
                 },
                 theme == "light",
-                true,
             );
         });
         for provider in model::PROVIDERS {

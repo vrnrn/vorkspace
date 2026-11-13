@@ -2,7 +2,7 @@ use super::*;
 use vorkspace_core::{agent::BotContext, bot::Bot, store::Store};
 
 fn fixture(cx: &mut Context<Conversation>) -> Conversation {
-    let store = Store::open(Path::new(":memory:")).unwrap();
+    let store = Store::test(Path::new(":memory:")).unwrap();
     let summary = store
         .create("codex", "/tmp/native-recovery-fixture")
         .unwrap();
@@ -88,7 +88,7 @@ fn native_recovery_banner_capture() {
             theme: if light { "light" } else { "dark" }.into(),
             ..Default::default()
         };
-        vorkspace_ui::theme::configure(&prefs, false, true);
+        vorkspace_ui::theme::configure(&prefs, false);
         cx.update(|cx| {
             input::bind(cx);
             cx.set_global(prefs);
@@ -112,5 +112,5 @@ fn native_recovery_banner_capture() {
                 .unwrap();
         }
     }
-    vorkspace_ui::theme::configure(&Default::default(), false, true);
+    vorkspace_ui::theme::configure(&Default::default(), false);
 }

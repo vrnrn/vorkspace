@@ -104,39 +104,16 @@ fn bot_and_legacy_factories_preserve_ordinary_looks() {
 }
 
 #[test]
-fn frame_cache_distinguishes_one_eye_and_preserves_palette_invalidation() {
+fn one_eye_and_paired_faces_share_the_body_until_its_look_changes() {
     let parent = Bot::default();
     let single = minion_look(&parent, "member");
     let paired = BotLookConfig {
-        pattern: "dither",
-        print: "ground",
         one_eye: false,
+        face: "visor".into(),
         ..single.clone()
     };
-    let anim = BotAnimState::default();
-    let key = |look| frame_cache_key(true, look, false, 48, anim);
-    let single_key = key(&single);
-    let paired_key = key(&paired);
-    assert!(single_key != paired_key);
-    let mut cache = ImageCache::new(48 * 48 * 4 * 4);
-    let paired_image = render_frame(&paired_key, &paired, anim);
-    assert!(
-        cache
-            .insert(paired_key.clone(), paired_image.clone())
-            .is_empty()
-    );
-    assert!(
-        cache.get(&single_key).is_none(),
-        "a paired frame cannot serve a minion"
-    );
-    let single_image = render_frame(&single_key, &single, anim);
-    assert!(
-        cache
-            .insert(single_key.clone(), single_image.clone())
-            .is_empty()
-    );
-    assert!(Arc::ptr_eq(&cache.get(&single_key).unwrap(), &single_image));
-    assert!(Arc::ptr_eq(&cache.get(&paired_key).unwrap(), &paired_image));
+    let key = |look| BodyKey::new(look, 48);
+    assert!(key(&single) == key(&paired));
     let recolored = minion_look(
         &Bot {
             color: 0x22c55e,
@@ -144,21 +121,21 @@ fn frame_cache_distinguishes_one_eye_and_preserves_palette_invalidation() {
         },
         "member",
     );
-    assert!(cache.get(&key(&recolored)).is_none());
-    // Project badges ignore the eye distinction and keep sharing their frames.
-    assert!(
-        frame_cache_key(false, &single, false, 48, anim)
-            == frame_cache_key(false, &paired, false, 48, anim)
-    );
+    assert!(key(&single) != key(&recolored));
 }
 
 struct TeamAvatars(&'static str);
 impl gpui::Render for TeamAvatars {
     fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
         let parent = Bot::default();
-        gpui::div().size_full().flex().children(
-            (0..12).map(|i| minion_avatar(&parent, &format!("member-{i}"), self.0, 24., true)),
-        )
+        gpui::div().size_full().flex().children((0..12).map(|i| {
+            avatar_with_look(
+                minion_look(&parent, &format!("member-{i}")),
+                self.0,
+                24.,
+                true,
+            )
+        }))
     }
 }
 
@@ -204,75 +181,4 @@ fn minion_team_shares_existing_bounded_wakes_and_still_idle_sleeps(cx: &mut gpui
     cx.run_until_parked();
     cx.refresh().unwrap();
     PENDING_FRAMES.with(|pending| assert!(pending.borrow().is_empty()));
-}
-
-/// Opt-in contact sheets from the actual renderer, with no app launch or
-/// product hooks. Set VORKSPACE_MINION_GALLERY_DIR to a disposable output dir.
-#[test]
-#[ignore = "explicit renderer gallery export"]
-fn write_minion_render_gallery() {
-    let out = std::path::PathBuf::from(
-        std::env::var_os("VORKSPACE_MINION_GALLERY_DIR")
-            .expect("set VORKSPACE_MINION_GALLERY_DIR to a disposable output directory"),
-    );
-    std::fs::create_dir_all(&out).unwrap();
-    let states = ["idle", "working", "needs-you", "blink", "delete"];
-    for color in [0x3b82f6, 0x1c1c21] {
-        let parent = Bot {
-            color,
-            ..Default::default()
-        };
-        for side in [28, 48, 128] {
-            let cell = side + 16;
-            let mut sheet =
-                image::RgbaImage::from_pixel(cell * 6, cell * 5, image::Rgba([24, 24, 27, 255]));
-            for (row, status) in states.iter().enumerate() {
-                for col in 0..6 {
-                    let mut look = minion_look(&parent, &format!("gallery-member-{col}"));
-                    // Five explicit face styles plus an ordinary parent as
-                    // the final column; the first five bodies cover all shapes.
-                    if col < 5 {
-                        look.face = BOT_FACES[col].into();
-                        look.shape = BADGE_SHAPES[col].into();
-                    } else {
-                        look = BotLookConfig::from_bot(&parent);
-                    }
-                    let (mut anim, _) =
-                        bot_anim_at(look.seed, status, true, Duration::from_millis(950), None);
-                    if *status == "blink" {
-                        anim.blink = 0.08;
-                    }
-                    if *status == "delete" {
-                        anim.crossed_eyes = true;
-                    }
-                    let frame = render_badge_or_bot_with_eyes(
-                        true,
-                        &look.shape,
-                        &look.face,
-                        *status == "needs-you",
-                        look.pattern,
-                        look.textured,
-                        look.seed,
-                        look.grid,
-                        look.bg_color,
-                        look.fg_color,
-                        side,
-                        look.one_eye,
-                        anim,
-                    );
-                    image::imageops::overlay(
-                        &mut sheet,
-                        &frame,
-                        (col as u32 * cell + 8) as i64,
-                        (row as u32 * cell + 8) as i64,
-                    );
-                }
-            }
-            sheet
-                .save(out.join(format!("minions-{color:06x}-{side}px.png")))
-                .unwrap();
-        }
-    }
-    std::fs::write(out.join("gallery.md"),
-        "# Minion renderer gallery\n\nColumns: pills/squircle, dots/circle, visor/rounded, carets/pill, wink/hex, ordinary parent.\n\nRows: idle, working, needs-you, blink, delete. Each PNG uses the named raster size without scaling, in cobalt and obsidian.\n").unwrap();
 }

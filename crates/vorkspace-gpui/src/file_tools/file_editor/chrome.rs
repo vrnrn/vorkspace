@@ -10,19 +10,16 @@ const CONTROL_HEIGHT: f32 = 20.;
 const CONTROL_INSET: f32 = (HEADER_HEIGHT - 1. - CONTROL_HEIGHT) / 2.;
 
 impl FileEditor {
-    pub(super) fn path_header(&self, controls: Option<AnyElement>, cx: &App) -> AnyElement {
+    pub(super) fn path_header(&self, controls: Option<AnyElement>) -> AnyElement {
         let path = Path::new(&self.path);
         let name = path
             .file_name()
             .unwrap_or(path.as_os_str())
             .to_string_lossy();
-        let git = self.git.read(cx);
-        let root = [git.root.as_str(), self.cwd.as_str()]
-            .into_iter()
+        let root = Some(self.cwd.as_str())
             .filter(|root| !root.is_empty() && *root != "~")
             .map(Path::new)
-            .filter(|root| path.strip_prefix(root).is_ok())
-            .max_by_key(|root| root.as_os_str().len());
+            .filter(|root| path.starts_with(root));
         let relative = root
             .and_then(|root| path.strip_prefix(root).ok())
             .unwrap_or(path);

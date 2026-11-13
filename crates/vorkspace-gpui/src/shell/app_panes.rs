@@ -68,20 +68,23 @@ impl Shell {
     ) -> Option<AnyElement> {
         let manager = self.bots.clone()?;
         let shell = cx.weak_entity();
-        let view = self.bot_pane_views.entry(pane).or_insert_with(|| {
-            cx.new(|cx| BotPaneView {
-                _changed: cx.observe(&manager, |_, _, cx| cx.notify()),
-                shell,
-                manager,
-                bot,
-                width: 0.,
-                wide: false,
-            })
-        });
+        let view = self
+            .page_tabs
+            .bot_pane_views
+            .entry(pane)
+            .or_insert_with(|| {
+                cx.new(|cx| BotPaneView {
+                    _changed: cx.observe(&manager, |_, _, cx| cx.notify()),
+                    shell,
+                    manager,
+                    bot,
+                    width: 0.,
+                    wide: false,
+                })
+            });
         Some(view.clone().into_any_element())
     }
-    /// Surrounding project tools follow the displayed layout, never the focused
-    /// leaf. Focusing a note beside a session must not resize either pane.
+    #[cfg(test)]
     pub(super) fn has_session_panes(&self) -> bool {
         self.workspace.active_tab().is_some_and(|tab| {
             self.workspace
@@ -95,7 +98,7 @@ impl Shell {
         let Some(manager) = &self.bots else {
             return;
         };
-        for view in self.bot_document_tabs.values() {
+        for view in self.page_tabs.bot_document_tabs.values() {
             let (bot, document) = view.read(cx).reference();
             if let Some(source) = manager.read(cx).document_for_pane(bot, document) {
                 view.update(cx, |view, cx| view.set_document(source, cx));
@@ -111,33 +114,36 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.preparing_panes {
+        if self.panes.preparing_panes {
             return;
         }
         let Some(tab) = self.workspace.tab_of(id) else {
             return;
         };
-        self.preparing_panes = true;
+        self.panes.preparing_panes = true;
         for leaf in self.workspace.layout(tab).leaf_ids() {
             let ready = match self.workspace.app_panes.get(&leaf).map(|p| &p.content) {
-                Some(AppPane::Codebase) => self.codebase_tabs.contains_key(&leaf),
-                Some(AppPane::Note(_)) => self.note_tabs.contains_key(&leaf),
-                Some(AppPane::ConnectorItem(_)) => self.item_tabs.contains_key(&leaf),
-                Some(AppPane::BotDocument { .. }) => self.bot_document_tabs.contains_key(&leaf),
-                Some(AppPane::App(AppView::Notes)) => self.notes.is_some(),
-                Some(AppPane::App(AppView::Connector(provider))) => {
-                    self.connector_pages.contains_key(provider)
+                Some(AppPane::Codebase) => self.page_tabs.codebase_tabs.contains_key(&leaf),
+                Some(AppPane::Note(_)) => self.page_tabs.note_tabs.contains_key(&leaf),
+                Some(AppPane::ConnectorItem(_)) => self.page_tabs.item_tabs.contains_key(&leaf),
+                Some(AppPane::BotDocument { .. }) => {
+                    self.page_tabs.bot_document_tabs.contains_key(&leaf)
                 }
-                Some(AppPane::App(AppView::Todos)) => self.todos_page.is_some(),
-                Some(AppPane::App(AppView::Automations)) => self.automations.is_some(),
-                Some(AppPane::Terminal { id, .. }) => self.terminal_tabs.contains_key(id),
+                Some(AppPane::App(AppView::Notes)) => self.page_tabs.notes.is_some(),
+                Some(AppPane::App(AppView::Connector(provider))) => {
+                    self.pages.connector_pages.contains_key(provider)
+                }
+                Some(AppPane::App(AppView::Todos)) => self.page_tabs.todos_page.is_some(),
+                Some(AppPane::App(AppView::Automations)) => self.pages.automations.is_some(),
+                Some(AppPane::Terminal { id, .. }) => self.pages.terminal_tabs.contains_key(id),
                 Some(AppPane::Search) => {
                     let cwd = self
                         .app_layout_scope(leaf, cx)
                         .map_or_else(|| self.working_copy(), |(_, worktree)| worktree);
-                    self.app_search
+                    self.pages
+                        .search
                         .as_ref()
-                        .or(self.parked_search.as_ref())
+                        .or(self.pages.parked_search.as_ref())
                         .is_some_and(|search| search.matches_working_copy(cwd))
                 }
                 Some(AppPane::Bot(_) | AppPane::App(AppView::Inbox) | AppPane::Review) => true,
@@ -152,42 +158,43 @@ impl Shell {
                 self.open_app_pane(leaf, window, cx);
             }
         }
-        self.preparing_panes = false;
+        self.panes.preparing_panes = false;
     }
     pub(super) fn update_app_pane_visibility(
         &mut self,
         shown: &HashSet<i64>,
+        visible_chats: HashSet<gpui::EntityId>,
         cx: &mut Context<Self>,
-    ) {
+    ) -> HashSet<gpui::EntityId> {
         let visible = |content: &AppPane| {
             self.workspace
                 .app_panes
                 .iter()
                 .any(|(id, pane)| shown.contains(id) && pane.content.same_resource(content))
         };
-        for (provider, page) in &self.connector_pages {
+        for (provider, page) in &self.pages.connector_pages {
             let active = visible(&AppPane::App(AppView::Connector(*provider)));
             page.update(cx, |view, cx| view.set_active(active, cx));
         }
-        if let Some(view) = &self.notes {
+        if let Some(view) = &self.page_tabs.notes {
             let active = visible(&AppPane::App(AppView::Notes));
             view.update(cx, |view, cx| view.set_active(active, cx));
         }
         self.sync_search_visibility(visible(&AppPane::Search), cx);
-        for (id, view) in &self.note_tabs {
+        for (id, view) in &self.page_tabs.note_tabs {
             view.update(cx, |v, cx| v.set_active(shown.contains(id), cx));
         }
-        for (id, view) in &self.item_tabs {
+        for (id, view) in &self.page_tabs.item_tabs {
             view.update(cx, |v, cx| v.set_active(shown.contains(id), cx));
         }
-        for (id, view) in &self.bot_document_tabs {
+        for (id, view) in &self.page_tabs.bot_document_tabs {
             view.update(cx, |v, cx| v.set_active(shown.contains(id), cx));
         }
-        for (id, view) in &self.terminal_tabs {
+        for (id, view) in &self.pages.terminal_tabs {
             let active = self.workspace.app_panes.iter().any(|(pane, state)| shown.contains(pane) && matches!(state.content, AppPane::Terminal { id: terminal, .. } if terminal == *id));
-            view.update(cx, |v, _| v.visible = active);
+            view.update(cx, |terminal, cx| terminal.set_visible(active, cx));
         }
-        for (&id, review) in &self.reviews {
+        for (&id, review) in &self.review.reviews {
             if self
                 .workspace
                 .app_panes
@@ -198,7 +205,6 @@ impl Shell {
             }
         }
         if let Some(manager) = self.bots.clone() {
-            let context = self.workspace_bot_context();
             let visible: HashSet<String> = shown
                 .iter()
                 .filter_map(
@@ -210,11 +216,11 @@ impl Shell {
                     },
                 )
                 .collect();
-            manager.update(cx, |manager, cx| {
-                manager.set_workspace_context(context.as_deref(), cx);
-                manager.set_visible_panes(&visible, cx);
+            return manager.update(cx, |manager, cx| {
+                manager.set_visible_panes(visible, visible_chats, cx)
             });
         }
+        HashSet::new()
     }
 
     /// A global resource may be tiled beside a project-bound leaf. Restore that
@@ -303,17 +309,18 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.app_view_events.push(cx.subscribe_in(
+        self.pages.view_events.push(cx.subscribe_in(
             view,
             window,
             |this, origin, event: &crate::notes::Event, window, cx| match event {
                 crate::notes::Event::Close => {
                     let id = this
+                        .page_tabs
                         .note_tabs
                         .iter()
                         .find_map(|(&id, view)| (view == origin).then_some(id))
                         .or_else(|| {
-                            (this.notes.as_ref() == Some(origin))
+                            (this.page_tabs.notes.as_ref() == Some(origin))
                                 .then(|| this.app_pane_id(&AppPane::App(AppView::Notes)))
                                 .flatten()
                         });
@@ -323,14 +330,14 @@ impl Shell {
                 }
                 crate::notes::Event::OpenTab(id) => this.open_note_tab(id.clone(), window, cx),
                 crate::notes::Event::OpenSource(id) => this.open(*id, window, cx),
-                crate::notes::Event::AddToChat(note) => this.note_to_chat(note.clone(), window, cx),
+                crate::notes::Event::AddToChat(note) => this.note_to_chat(note.clone(), cx),
                 crate::notes::Event::Notice(message) => {
                     this.error = Some(message.clone());
                     cx.notify();
                 }
             },
         ));
-        self.app_view_events.push(cx.observe(view, |this, _, cx| {
+        self.pages.view_events.push(cx.observe(view, |this, _, cx| {
             this.invalidate_chrome(cx);
             cx.notify();
         }));
@@ -397,18 +404,20 @@ impl Shell {
             return self
                 .workspace
                 .session_for_pane(id)
-                .filter(|id| self.session_summaries.contains_key(id))
+                .filter(|id| self.has_session(*id, cx))
                 .map(|id| self.session_metadata(id, cx).display_title())
                 .unwrap_or_default();
         };
         match &pane.content {
             AppPane::App(view) => view.label().into(),
             AppPane::Note(_) => self
+                .page_tabs
                 .note_tabs
                 .get(&id)
                 .map(|view| view.read(cx).pane_title(cx))
                 .unwrap_or_else(|| "Note".into()),
             AppPane::ConnectorItem(item) => self
+                .page_tabs
                 .item_tabs
                 .get(&id)
                 .map(|view| view.read(cx).pane_title())
@@ -420,6 +429,7 @@ impl Shell {
                 .map(|bot| bot.label())
                 .unwrap_or_else(|| "Bot".into()),
             AppPane::BotDocument { .. } => self
+                .page_tabs
                 .bot_document_tabs
                 .get(&id)
                 .map(|view| view.read(cx).title())
@@ -463,7 +473,7 @@ impl Shell {
                         == vorkspace_core::files::path_key(self.working_copy()));
         }
         self.workspace.session_for_pane(id).is_some_and(|owner| {
-            self.session_summaries.contains_key(&owner)
+            self.has_session(owner, cx)
                 && self.session_metadata(owner, cx).summary.cwd == self.workspace.project
                 && self.in_worktree_scope(id, cx)
         })
@@ -530,7 +540,7 @@ impl Shell {
                 self.prepare_app_view(Some(id), window, cx);
                 self.leave_app_views(cx);
                 self.workspace.project = pane.project.clone();
-                match self.codebase_tabs.entry(id) {
+                match self.page_tabs.codebase_tabs.entry(id) {
                     std::collections::hash_map::Entry::Vacant(entry) => {
                         let view = cx
                             .new(|cx| crate::codebase::Page::new(pane.project, pane.worktree, cx));
@@ -596,31 +606,53 @@ impl Shell {
             );
         }
         Some(match pane {
-            AppPane::Codebase => self.codebase_tabs.get(&id)?.clone().into_any_element(),
-            AppPane::Note(_) => self.note_tabs.get(&id)?.clone().into_any_element(),
-            AppPane::ConnectorItem(_) => self.item_tabs.get(&id)?.clone().into_any_element(),
-            AppPane::BotDocument { .. } => {
-                self.bot_document_tabs.get(&id)?.clone().into_any_element()
-            }
-            AppPane::App(AppView::Notes) => self.notes.clone()?.into_any_element(),
+            AppPane::Codebase => self
+                .page_tabs
+                .codebase_tabs
+                .get(&id)?
+                .clone()
+                .into_any_element(),
+            AppPane::Note(_) => self
+                .page_tabs
+                .note_tabs
+                .get(&id)?
+                .clone()
+                .into_any_element(),
+            AppPane::ConnectorItem(_) => self
+                .page_tabs
+                .item_tabs
+                .get(&id)?
+                .clone()
+                .into_any_element(),
+            AppPane::BotDocument { .. } => self
+                .page_tabs
+                .bot_document_tabs
+                .get(&id)?
+                .clone()
+                .into_any_element(),
+            AppPane::App(AppView::Notes) => self.page_tabs.notes.clone()?.into_any_element(),
             AppPane::App(AppView::Connector(provider)) => self
+                .pages
                 .connector_pages
                 .get(&provider)?
                 .clone()
                 .into_any_element(),
-            AppPane::App(AppView::Todos) => self.todos_page.clone()?.into_any_element(),
-            AppPane::App(AppView::Automations) => self.automations.clone()?.into_any_element(),
+            AppPane::App(AppView::Todos) => self.page_tabs.todos_page.clone()?.into_any_element(),
+            AppPane::App(AppView::Automations) => {
+                self.pages.automations.clone()?.into_any_element()
+            }
             AppPane::App(AppView::Inbox) | AppPane::Review => return None,
             AppPane::Terminal { id, .. } => div()
                 .id(("terminal-tab-body", id))
                 .debug_selector(|| "terminal-tab-body".into())
                 .size_full()
-                .child(self.terminal_tabs.get(&id)?.clone())
+                .child(self.pages.terminal_tabs.get(&id)?.clone())
                 .into_any_element(),
             AppPane::Search => self
-                .app_search
+                .pages
+                .search
                 .as_ref()
-                .or(self.parked_search.as_ref())?
+                .or(self.pages.parked_search.as_ref())?
                 .view
                 .clone()
                 .into_any_element(),
@@ -637,13 +669,13 @@ impl Shell {
         let content = pane.content.clone();
         match &content {
             AppPane::Codebase => {
-                if let Some(view) = self.codebase_tabs.get(&id) {
+                if let Some(view) = self.page_tabs.codebase_tabs.get(&id) {
                     view.update(cx, |view, cx| view.set_width(width, cx));
                 }
             }
             AppPane::Bot(bot) => {
                 self.bot_pane_body(id, bot.clone(), cx);
-                if let Some(view) = self.bot_pane_views.get(&id) {
+                if let Some(view) = self.page_tabs.bot_pane_views.get(&id) {
                     view.update(cx, |view, cx| {
                         if view.width != width {
                             view.width = width;
@@ -653,27 +685,27 @@ impl Shell {
                 }
             }
             AppPane::Note(_) => {
-                if let Some(view) = self.note_tabs.get(&id) {
+                if let Some(view) = self.page_tabs.note_tabs.get(&id) {
                     view.update(cx, |view, cx| view.set_pane_width(width, cx));
                 }
             }
             AppPane::ConnectorItem(_) => {
-                if let Some(view) = self.item_tabs.get(&id) {
+                if let Some(view) = self.page_tabs.item_tabs.get(&id) {
                     view.update(cx, |view, cx| view.set_pane_width(width, cx));
                 }
             }
             AppPane::App(AppView::Notes) => {
-                if let Some(view) = &self.notes {
+                if let Some(view) = &self.page_tabs.notes {
                     view.update(cx, |view, cx| view.set_pane_width(width, cx));
                 }
             }
             AppPane::App(AppView::Connector(provider)) => {
-                if let Some(view) = self.connector_pages.get(provider) {
+                if let Some(view) = self.pages.connector_pages.get(provider) {
                     view.update(cx, |view, cx| view.set_pane_width(width, cx));
                 }
             }
             AppPane::App(AppView::Automations) => {
-                if let Some(view) = &self.automations {
+                if let Some(view) = &self.pages.automations {
                     view.update(cx, |view, cx| view.set_pane_width(width, cx));
                 }
             }
@@ -683,11 +715,12 @@ impl Shell {
 
     pub(super) fn sync_note_tab_owners(&mut self, cx: &mut Context<Self>) {
         let ids = self
+            .page_tabs
             .note_tabs
             .values()
             .filter_map(|v| v.read(cx).pane_note_id())
             .collect();
-        if let Some(library) = &self.notes {
+        if let Some(library) = &self.page_tabs.notes {
             library.update(cx, |view, cx| view.set_open_note_tabs(ids, cx));
         }
     }
@@ -708,15 +741,16 @@ impl Shell {
         let Some(id) = self.admit_app_pane(AppPane::Note(note.clone())) else {
             return;
         };
-        if !self.note_tabs.contains_key(&id) {
+        if !self.page_tabs.note_tabs.contains_key(&id) {
             let selected = self
+                .page_tabs
                 .notes
                 .as_ref()
                 .is_some_and(|view| view.read(cx).selected_note_id().as_deref() == Some(&note));
             let view = if selected {
-                let view = self.notes.take().unwrap();
+                let view = self.page_tabs.notes.take().unwrap();
                 if !view.update(cx, |view, cx| view.pin_selected_note(&note, cx)) {
-                    self.notes = Some(view);
+                    self.page_tabs.notes = Some(view);
                     if !previously_open {
                         self.workspace.close(id);
                     }
@@ -731,7 +765,7 @@ impl Shell {
                 self.subscribe_notes(&view, window, cx);
                 view
             };
-            self.note_tabs.insert(id, view);
+            self.page_tabs.note_tabs.insert(id, view);
             if selected {
                 let library = cx.new(|cx| Notes::new(self.store.clone(), cx));
                 self.subscribe_notes(&library, window, cx);
@@ -743,14 +777,13 @@ impl Shell {
                     );
                     view.configure_recording(&self.workspace.preferences.hidden_providers, cx);
                 });
-                self.notes = Some(library);
+                self.page_tabs.notes = Some(library);
             }
             self.sync_note_tab_owners(cx);
         }
-        self.active_app_view = Some(AppView::Notes);
-        if let Some(view) = self.note_tabs.get(&id) {
+        self.pages.active_app_view = Some(AppView::Notes);
+        if let Some(view) = self.page_tabs.note_tabs.get(&id) {
             view.update(cx, |view, cx| {
-                view.set_appearances(self.workspace.project_appearance.clone(), cx);
                 view.set_context(
                     self.workspace.project.clone(),
                     self.workspace.vorkspace_projects(),
@@ -785,15 +818,15 @@ impl Shell {
         let Some(id) = self.admit_app_pane(AppPane::ConnectorItem(Box::new(item.clone()))) else {
             return;
         };
-        if !self.item_tabs.contains_key(&id) {
-            let owner = self.inbox.as_ref().unwrap().clone();
+        if !self.page_tabs.item_tabs.contains_key(&id) {
+            let owner = self.pages.inbox.as_ref().unwrap().clone();
             let view = owner.update(cx, |owner, cx| {
                 owner.connector_item_page(provider.id(), item, cx)
             });
             self.subscribe_connector(&view, window, cx);
-            self.item_tabs.insert(id, view);
+            self.page_tabs.item_tabs.insert(id, view);
         }
-        self.active_app_view = Some(AppView::Connector(provider));
+        self.pages.active_app_view = Some(AppView::Connector(provider));
         self.finish_app_pane_open(window, cx);
     }
 
@@ -808,12 +841,12 @@ impl Shell {
     }
 
     pub(super) fn prepare_app_pane_close(&mut self, id: i64, cx: &mut Context<Self>) -> bool {
-        let note = self.note_tabs.get(&id).cloned().or_else(|| {
+        let note = self.page_tabs.note_tabs.get(&id).cloned().or_else(|| {
             self.workspace
                 .app_panes
                 .get(&id)
                 .filter(|pane| matches!(pane.content, AppPane::App(AppView::Notes)))
-                .and(self.notes.clone())
+                .and(self.page_tabs.notes.clone())
         });
         if let Some(note) = note
             && !note.update(cx, |view, cx| view.prepare_close(cx))
@@ -837,22 +870,22 @@ impl Shell {
         {
             self.workspace.app_panes.remove(&id);
         }
-        self.codebase_tabs.remove(&id);
-        self.bot_pane_views.remove(&id);
-        if let Some(view) = self.bot_document_tabs.remove(&id) {
+        self.page_tabs.codebase_tabs.remove(&id);
+        self.page_tabs.bot_pane_views.remove(&id);
+        if let Some(view) = self.page_tabs.bot_document_tabs.remove(&id) {
             view.update(cx, |v, cx| v.set_active(false, cx));
         }
-        if let Some(view) = self.note_tabs.remove(&id) {
+        if let Some(view) = self.page_tabs.note_tabs.remove(&id) {
             view.update(cx, |view, cx| {
                 view.flush(cx);
                 view.set_active(false, cx);
             });
             self.sync_note_tab_owners(cx);
         }
-        if let Some(view) = self.item_tabs.remove(&id) {
+        if let Some(view) = self.page_tabs.item_tabs.remove(&id) {
             let item = view.read(cx).pinned_item().cloned();
             if let Some(item) = item
-                && let Some(owner) = &self.inbox
+                && let Some(owner) = &self.pages.inbox
             {
                 owner.update(cx, |owner, cx| owner.release_item_page(&item, cx));
             }
@@ -860,7 +893,7 @@ impl Shell {
         if let Some(AppPane::Terminal { id, .. }) =
             self.workspace.app_panes.get(&id).map(|pane| &pane.content)
         {
-            self.terminal_tabs.remove(id);
+            self.pages.terminal_tabs.remove(id);
         }
     }
 
@@ -886,7 +919,7 @@ impl Shell {
         }) else {
             return;
         };
-        if !self.bot_document_tabs.contains_key(&id) {
+        if !self.page_tabs.bot_document_tabs.contains_key(&id) {
             let initial = self
                 .bots
                 .as_ref()
@@ -894,11 +927,13 @@ impl Shell {
             let view = cx.new(|cx| {
                 crate::bots::BotDocumentPane::new(self.store.clone(), bot, document, initial, cx)
             });
-            self.app_view_events.push(cx.observe(&view, |this, _, cx| {
-                this.invalidate_chrome(cx);
-                cx.notify();
-            }));
-            self.bot_document_tabs.insert(id, view);
+            self.pages
+                .view_events
+                .push(cx.observe(&view, |this, _, cx| {
+                    this.invalidate_chrome(cx);
+                    cx.notify();
+                }));
+            self.page_tabs.bot_document_tabs.insert(id, view);
         }
         self.finish_app_pane_open(window, cx);
     }

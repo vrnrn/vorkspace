@@ -1,17 +1,19 @@
-//! BtwSheet.tsx's isolated side threads. Their transcript and cancellation never
+//! Isolated side threads ("btw"). Their transcript and cancellation never
 //! share the parent provider session, turn queue, or main transcript rows.
 use super::*;
 use gpui::{AnyElement, App, Render};
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use vorkspace_core::{
-    provider::{self, Event, Request},
-    transcript::{Row, Transcript},
-};
+use vorkspace_core::transcript::{Row, Transcript};
 use vorkspace_ui::radius;
+
+mod storage;
+mod worker;
+use storage::{Saved, Thread, Writes};
+use worker::Stream;
 
 const SNAPSHOT_CHARS: usize = 64_000;
 const BLOCK_CHARS: usize = 8_000;
+const THREAD_BYTES: usize = 256 * 1024;
 
 fn supported(kind: Kind) -> bool {
     kind.is_supported() && kind != Kind::Antigravity
@@ -64,39 +66,12 @@ pub(super) struct Target {
     cwd: String,
     settings: Settings,
 }
-#[derive(Clone, Serialize, Deserialize)]
-struct Thread {
-    id: String,
-    source_turn: usize,
-    snapshot: String,
-    provider: String,
-    model: Option<String>,
-    #[serde(default)]
-    cwd: String,
-    #[serde(default)]
-    account: vorkspace_core::accounts::Profile,
-    #[serde(default)]
-    effort: Option<String>,
-    #[serde(default)]
-    model_settings: HashMap<String, String>,
-    #[serde(skip)]
-    environment: HashMap<String, String>,
-    rows: Vec<Row>,
-    draft: String,
-    status: String,
-    error: Option<String>,
-    #[serde(default)]
-    desktop: Option<serde_json::Value>,
+
+enum AfterLoad {
+    Resume { placeholder: String },
+    Submit { thread: String, text: String },
 }
-#[derive(Default, Serialize, Deserialize)]
-struct Saved {
-    revision: u64,
-    threads: Vec<Thread>,
-}
-enum Stream {
-    Text(String),
-    Finished(Result<(), String>),
-}
+
 pub(super) struct Btw {
     session: i64,
     store: Database,
@@ -108,23 +83,25 @@ pub(super) struct Btw {
     active: Option<String>,
     open: bool,
     focus_pending: bool,
-    loading: bool,
+    initial_load: Option<gpui::Task<()>>,
     error: Option<String>,
     revision: u64,
-    pending_submit: Option<String>,
+    writes: Writes,
+    save_delay: Option<gpui::Task<()>>,
+    save_after_load: bool,
+    after_load: Option<AfterLoad>,
     cancel: HashMap<String, Arc<AtomicBool>>,
     models: Option<Entity<ModelList>>,
     model_subscription: Option<Subscription>,
     model_anchor: AnchorSlot,
     _submit: Subscription,
     _changed: Subscription,
+    _quit: Subscription,
     response_subscription: Option<Subscription>,
 }
 impl Drop for Btw {
     fn drop(&mut self) {
-        for cancel in self.cancel.values() {
-            cancel.store(true, Ordering::Relaxed);
-        }
+        self.stop_replies();
     }
 }
 impl Btw {
@@ -140,78 +117,32 @@ impl Btw {
             this.submit(cx);
         });
         let changed = cx.observe(&input, |this, input, cx| {
-            if let Some(thread) = this.active_mut() {
-                thread.draft = input.read(cx).content.to_string();
+            if !this.open {
+                return;
+            }
+            let value = input.read(cx).content.clone();
+            if let Some(thread) = this.active_mut()
+                && thread.draft != value.as_ref()
+            {
+                thread.draft = value.to_string();
+                this.schedule_save(cx);
+                cx.notify();
             }
         });
-        let transcript = cx.new(|_| {
-            let mut view = TranscriptView::new();
-            view.side_question();
-            view
-        });
+        let transcript = Self::new_projection(cx);
+        let writes = Writes::default();
+        let load = writes.clone();
         let load_store = store.clone();
-        let work = cx.background_executor().spawn(async move {
-            let store = locked(&load_store)?;
-            if let Some(value) = store.setting(&format!("btw:{session}"))? {
-                return serde_json::from_str::<Saved>(&value)
-                    .map(Some)
-                    .map_err(|error| format!("Could not restore side questions: {error}"));
-            }
-            let imported = store.desktop_side_threads(session)?;
-            let accounts = store.provider_accounts()?;
-            let root = store.data_dir().map(std::path::Path::to_path_buf);
-            let threads = imported
-                .into_iter()
-                .map(|thread| {
-                    let kind = Kind::from_id(&thread.provider);
-                    let account = vorkspace_core::accounts::Profile {
-                        id: accounts.selected(kind, &thread.cwd),
-                        root: root.clone(),
-                    };
-                    let effort = [
-                        "effort",
-                        "reasoning",
-                        "reasoningEffort",
-                        "reasoning_effort",
-                        "variant",
-                    ]
-                    .into_iter()
-                    .find_map(|key| thread.model_settings.get(key).cloned());
-                    Thread {
-                        id: thread.id,
-                        source_turn: thread.source_turn,
-                        snapshot: thread.snapshot,
-                        provider: thread.provider,
-                        model: thread.model,
-                        cwd: thread.cwd,
-                        account,
-                        effort,
-                        model_settings: thread.model_settings,
-                        environment: HashMap::new(),
-                        rows: thread.rows,
-                        draft: String::new(),
-                        status: match thread.status.as_str() {
-                            "ready" => "completed",
-                            "running" => "stopped",
-                            status => status,
-                        }
-                        .into(),
-                        error: thread.error,
-                        desktop: Some(thread.original),
-                    }
-                })
-                .collect();
-            Ok(Some(Saved {
-                revision: 0,
-                threads,
-            }))
-        });
-        cx.spawn(async move |this, cx| {
+        let work = cx
+            .background_executor()
+            .spawn(async move { load.read(load_store, session) });
+        let initial_load = cx.spawn(async move |this, cx| {
             let result = work.await;
             let _ = this.update(cx, |this, cx| {
-                this.loading = false;
+                this.initial_load = None;
+                let after_load = this.after_load.take();
                 match result {
-                    Ok(Some(mut saved)) => {
+                    Ok(mut saved) => {
                         this.revision = this.revision.max(saved.revision);
                         for thread in &mut saved.threads {
                             if thread.cwd.is_empty() {
@@ -222,21 +153,53 @@ impl Btw {
                                 thread.status = "stopped".into();
                             }
                         }
+                        let resume = this.open
+                            && matches!(
+                                &after_load,
+                                Some(AfterLoad::Resume { placeholder })
+                                    if this.active.as_ref() == Some(placeholder)
+                                        && this.active().is_some_and(Thread::empty)
+                                        && this.input.read(cx).content.trim().is_empty()
+                            );
+                        if resume && !saved.threads.is_empty() {
+                            let empty = this.active.take();
+                            this.threads
+                                .retain(|thread| Some(&thread.id) != empty.as_ref());
+                            this.active = saved
+                                .active
+                                .filter(|id| saved.threads.iter().any(|thread| &thread.id == id))
+                                .or_else(|| saved.threads.last().map(|thread| thread.id.clone()));
+                        }
                         saved.threads.append(&mut this.threads);
                         this.threads = saved.threads;
+                        if resume && let Some(id) = this.active.clone() {
+                            this.select(&id, cx);
+                        }
                     }
-                    Ok(None) => {}
                     Err(error) => this.error = Some(error),
                 }
-                if let Some(text) = this.pending_submit.take()
+                if let Some(AfterLoad::Submit { thread, text }) = after_load
+                    && this.active.as_deref() == Some(thread.as_str())
                     && this.input.read(cx).content == text
                 {
                     this.submit(cx);
                 }
+                if std::mem::take(&mut this.save_after_load) {
+                    this.save(cx);
+                }
                 this.refresh(cx);
             });
-        })
-        .detach();
+        });
+        let quit = cx.on_app_quit(|this, cx| {
+            let save = this.save_on_quit(cx);
+            async move {
+                if let Some(save) = save
+                    && let Err(error) = save.await
+                {
+                    eprintln!("Could not save side questions on quit: {error}");
+                }
+            }
+        });
         Self {
             session,
             store,
@@ -248,16 +211,20 @@ impl Btw {
             active: None,
             open: false,
             focus_pending: false,
-            loading: true,
+            initial_load: Some(initial_load),
             error: None,
             revision: vorkspace_core::time::now_ms(),
-            pending_submit: None,
+            writes,
+            save_delay: None,
+            save_after_load: false,
+            after_load: None,
             cancel: HashMap::new(),
             models: None,
             model_subscription: None,
             model_anchor: AnchorSlot::default(),
             _submit: submit,
             _changed: changed,
+            _quit: quit,
             response_subscription: None,
         }
     }
@@ -285,13 +252,38 @@ impl Btw {
         cx: &mut Context<Self>,
     ) {
         self.target = target;
-        self.new_thread(cx);
         self.open = true;
         self.focus_pending = true;
-        self.pending_submit =
-            (!draft && !text.trim().is_empty() && self.loading).then(|| text.clone());
+        self.after_load = None;
+        let has_text = !text.trim().is_empty();
+        if !has_text
+            && let Some(id) = self
+                .active
+                .clone()
+                .or_else(|| self.threads.last().map(|thread| thread.id.clone()))
+        {
+            self.select(&id, cx);
+            return;
+        }
+        self.new_thread(cx);
+        if self.initial_load.is_some()
+            && let Some(thread) = self.active.clone()
+        {
+            self.after_load = if !has_text {
+                Some(AfterLoad::Resume {
+                    placeholder: thread,
+                })
+            } else if !draft {
+                Some(AfterLoad::Submit {
+                    thread,
+                    text: text.clone(),
+                })
+            } else {
+                None
+            };
+        }
         self.input.update(cx, |input, cx| input.set_text(text, cx));
-        if !draft && !self.loading {
+        if !draft && self.initial_load.is_none() {
             self.submit(cx);
         }
         cx.notify();
@@ -340,15 +332,13 @@ impl Btw {
                         .unwrap_or_else(|| self.target.cwd.clone()),
                 };
                 let store = self.store.clone();
+                let transcript = self.transcript.downgrade();
                 let work = cx
                     .background_executor()
                     .spawn(async move { locked(&store)?.save_note(&note) });
-                cx.spawn(async move |this, cx| {
+                cx.spawn(async move |_, cx| {
                     let result = work.await;
-                    let _ = this.update(cx, |this, cx| {
-                        this.transcript
-                            .update(cx, |view, cx| view.note_result(turn, result, cx))
-                    });
+                    let _ = transcript.update(cx, |view, cx| view.note_result(turn, result, cx));
                 })
                 .detach();
             }
@@ -356,12 +346,20 @@ impl Btw {
         }
     }
     fn close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.capture_draft(cx);
         self.open = false;
-        self.pending_submit = None;
-        self.threads.retain(|thread| !thread.rows.is_empty());
+        self.after_load = None;
+        self.models = None;
+        self.model_subscription = None;
+        self.threads.retain(|thread| !thread.empty());
         if self.active().is_none() {
             self.active = self.threads.last().map(|thread| thread.id.clone());
         }
+        self.transcript.update(cx, |view, cx| {
+            view.visible(false, cx);
+            view.streaming(false, cx);
+            view.replace_history(Vec::new(), cx);
+        });
         self.save(cx);
         window.focus(&self.parent_input.focus_handle(cx), cx);
         cx.notify();
@@ -389,11 +387,16 @@ impl Btw {
             draft: String::new(),
             status: "draft".into(),
             error: None,
-            desktop: None,
+            original: None,
         });
         self.select(&id, cx);
     }
     fn select(&mut self, id: &str, cx: &mut Context<Self>) {
+        if self.active.as_deref() != Some(id) {
+            self.capture_draft(cx);
+            self.response_subscription = None;
+            self.transcript = Self::new_projection(cx);
+        }
         self.active = Some(id.into());
         let draft = self
             .active()
@@ -401,10 +404,21 @@ impl Btw {
             .unwrap_or_default();
         self.input.update(cx, |input, cx| input.set_text(draft, cx));
         self.models = None;
+        self.model_subscription = None;
         self.focus_pending = true;
         self.refresh(cx);
     }
+    fn new_projection(cx: &mut Context<Self>) -> Entity<TranscriptView> {
+        cx.new(|_| {
+            let mut view = TranscriptView::new();
+            view.side_question();
+            view
+        })
+    }
     fn refresh(&mut self, cx: &mut Context<Self>) {
+        if !self.open {
+            return;
+        }
         let Some(thread) = self.active() else {
             cx.notify();
             return;
@@ -415,54 +429,101 @@ impl Btw {
         let model = crate::pickers::model_name(Kind::from_id(&provider), thread.model.as_deref());
         self.transcript.update(cx, |view, cx| {
             view.identity(&provider, &model);
-            view.patch(0, rows, cx);
+            view.visible(true, cx);
+            view.replace_history(rows, cx);
             view.streaming(streaming, cx);
         });
         cx.notify();
     }
     fn save(&mut self, cx: &mut Context<Self>) {
-        if self.loading {
+        let Some(work) = self.start_save(cx) else {
             return;
-        }
-        self.revision = self
-            .revision
-            .saturating_add(1)
-            .max(vorkspace_core::time::now_ms());
-        let revision = self.revision;
-        let value = match serde_json::to_string(&Saved {
-            revision,
-            threads: self.threads.clone(),
-        }) {
-            Ok(value) => value,
-            Err(error) => {
-                self.error = Some(error.to_string());
-                cx.notify();
-                return;
-            }
         };
-        let store = self.store.clone();
-        let key = format!("btw:{}", self.session);
-        let work = cx.background_executor().spawn(async move {
-            let store = locked(&store)?;
-            let existing = store
-                .setting(&key)?
-                .and_then(|text| serde_json::from_str::<Saved>(&text).ok())
-                .map_or(0, |saved| saved.revision);
-            if existing < revision {
-                store.save_setting(&key, &value)?;
-            }
-            Ok::<(), String>(())
-        });
+        let revision = self.revision;
         cx.spawn(async move |this, cx| {
             if let Err(error) = work.await {
                 let _ = this.update(cx, |this, cx| {
-                    this.error = Some(format!("Could not save side questions: {error}"));
-                    cx.notify();
+                    if this.revision == revision {
+                        this.error = Some(format!("Could not save side questions: {error}"));
+                        cx.notify();
+                    }
                 });
             }
         })
         .detach();
     }
+
+    fn capture_draft(&mut self, cx: &App) {
+        if !self.open {
+            return;
+        }
+        let text = self.input.read(cx).content.clone();
+        if let Some(thread) = self.active_mut() {
+            thread.draft = text.to_string();
+        }
+    }
+
+    fn schedule_save(&mut self, cx: &mut Context<Self>) {
+        self.save_delay = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(std::time::Duration::from_millis(200))
+                .await;
+            let _ = this.update(cx, |this, cx| this.save(cx));
+        }));
+    }
+
+    fn start_save(&mut self, cx: &mut Context<Self>) -> Option<gpui::Task<Result<(), String>>> {
+        self.save_delay = None;
+        if self.initial_load.is_some() {
+            self.save_after_load = true;
+            return None;
+        }
+        let snapshot = self.save_snapshot();
+        let store = self.store.clone();
+        let session = self.session;
+        let writes = self.writes.clone();
+        Some(
+            cx.background_executor()
+                .spawn(async move { writes.publish(store, session, snapshot) }),
+        )
+    }
+
+    fn save_snapshot(&mut self) -> Saved {
+        self.revision = self
+            .revision
+            .saturating_add(1)
+            .max(vorkspace_core::time::now_ms());
+        Saved {
+            revision: self.revision,
+            active: self.active.clone(),
+            threads: self.threads.clone(),
+        }
+    }
+
+    fn save_on_quit(&mut self, cx: &mut Context<Self>) -> Option<gpui::Task<Result<(), String>>> {
+        self.capture_draft(cx);
+        self.stop_replies();
+        self.save_delay = None;
+        if self.initial_load.take().is_none() {
+            return self.start_save(cx);
+        }
+        self.after_load = None;
+        let pending = self.save_snapshot();
+        let store = self.store.clone();
+        let session = self.session;
+        let writes = self.writes.clone();
+        Some(
+            cx.background_executor()
+                .spawn(async move { writes.append_new_threads(store, session, pending) }),
+        )
+    }
+
+    fn stop_replies(&mut self) {
+        for (_, cancel) in self.cancel.drain() {
+            cancel.store(true, Ordering::Relaxed);
+        }
+    }
+
     fn prompt(thread: &Thread) -> String {
         let messages = thread
             .rows
@@ -485,7 +546,7 @@ impl Btw {
         )
     }
     fn submit(&mut self, cx: &mut Context<Self>) -> bool {
-        if self.loading
+        if self.initial_load.is_some()
             || self.input.read(cx).is_composing()
             || self
                 .active()
@@ -503,6 +564,18 @@ impl Btw {
         let Some(thread) = self.active_mut() else {
             return false;
         };
+        if thread
+            .rows
+            .iter()
+            .map(|row| row.text.len())
+            .sum::<usize>()
+            .saturating_add(text.len())
+            >= THREAD_BYTES
+        {
+            self.error = Some("This side question reached its transcript limit. Start a new side question to continue.".into());
+            cx.notify();
+            return false;
+        }
         let mut transcript = Transcript {
             rows: std::mem::take(&mut thread.rows),
         };
@@ -539,7 +612,9 @@ impl Btw {
         let model = thread.model.clone();
         let prompt = Self::prompt(thread);
         let cwd = thread.cwd.clone();
-        let mut settings = Settings {
+        let remaining = THREAD_BYTES
+            .saturating_sub(thread.rows.iter().map(|row| row.text.len()).sum::<usize>());
+        let settings = Settings {
             account: thread.account.clone(),
             environment: thread.environment.clone(),
             effort: thread.effort.clone(),
@@ -560,83 +635,100 @@ impl Btw {
         self.cancel.insert(id.clone(), cancel.clone());
         let store = self.store.clone();
         let (tx, rx) = async_channel::bounded(16);
-        cx.background_executor().spawn(async move {
-            let result = (|| {
-                if settings.account.id != vorkspace_core::accounts::DEFAULT {
-                    let store = locked(&store)?;
-                    if !store.provider_accounts()?.exists(provider, &settings.account.id) {
-                        return Err("This provider account was removed. Choose another account before retrying the side question.".into());
-                    }
-                    settings.account.root = store.data_dir().map(std::path::Path::to_path_buf);
-                }
-                let binary = provider::resolve(provider).ok_or_else(|| format!("{} CLI not found.", provider.label()))?;
-                provider::run(Request { kind:provider, binary, cwd:cwd.into(), prompt, provider_id:None, model, settings }, cancel.clone(), |events| {
-                    for event in events {
-                        match event {
-                            Event::Text(text) => tx.send_blocking(Stream::Text(text)).map_err(|_| "Side question closed".to_owned())?,
-                            Event::Tool(_) | Event::Approval(_) | Event::Question(_) => return Err("The side-question provider attempted to use tools or request input.".into()),
-                            _ => {}
-                        }
-                    }
-                    Ok(())
-                })
-            })();
-            let _ = tx.send_blocking(Stream::Finished(result));
-        }).detach();
+        cx.background_executor()
+            .spawn(async move {
+                worker::run(
+                    worker::Request {
+                        provider,
+                        model,
+                        cwd,
+                        prompt,
+                        settings,
+                        remaining,
+                    },
+                    store,
+                    cancel,
+                    tx,
+                )
+            })
+            .detach();
         self.save(cx);
         self.refresh(cx);
         cx.spawn(async move |this, cx| {
             while let Ok(event) = rx.recv().await {
-                let finished = matches!(&event, Stream::Finished(_));
-                if this
-                    .update(cx, |this, cx| {
-                        let Some(thread) = this.threads.iter_mut().find(|thread| thread.id == id)
-                        else {
+                match event {
+                    Stream::Text(text) => {
+                        if this
+                            .update(cx, |this, cx| this.append_reply(&id, &text, cx))
+                            .is_err()
+                        {
                             return;
-                        };
-                        match event {
-                            Stream::Text(text) => {
-                                let size: usize =
-                                    thread.rows.iter().map(|row| row.text.len()).sum();
-                                if size > 256 * 1024 {
-                                    if let Some(cancel) = this.cancel.get(&id) {
-                                        cancel.store(true, Ordering::Relaxed);
-                                    }
-                                    return;
-                                }
-                                let mut transcript = Transcript {
-                                    rows: std::mem::take(&mut thread.rows),
-                                };
-                                transcript.append(&text);
-                                thread.rows = transcript.rows;
-                            }
-                            Stream::Finished(result) => {
-                                this.cancel.remove(&id);
-                                match result {
-                                    Ok(()) => thread.status = "completed".into(),
-                                    Err(error) if error == "Stopped" => {
-                                        thread.status = "stopped".into()
-                                    }
-                                    Err(error) => {
-                                        thread.status = "error".into();
-                                        thread.error = Some(error);
-                                    }
-                                }
-                                this.save(cx);
-                            }
                         }
-                        this.refresh(cx);
-                    })
-                    .is_err()
-                {
-                    break;
+                    }
+                    Stream::Finished(result) => {
+                        let _ = this.update(cx, |this, cx| this.finish_reply(&id, result, cx));
+                        return;
+                    }
                 }
-                if finished {
-                    break;
-                }
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(1))
+                    .await;
             }
+            let _ = this.update(cx, |this, cx| {
+                this.finish_reply(&id, Err("Side-question provider disconnected.".into()), cx);
+            });
         })
         .detach();
+    }
+    fn append_reply(&mut self, id: &str, text: &str, cx: &mut Context<Self>) {
+        if !self.cancel.contains_key(id) {
+            return;
+        }
+        let visible = self.open && self.active.as_deref() == Some(id);
+        let Some(thread) = self.threads.iter_mut().find(|thread| thread.id == id) else {
+            return;
+        };
+        let mut transcript = Transcript {
+            rows: std::mem::take(&mut thread.rows),
+        };
+        let start = transcript.append(text);
+        thread.rows = transcript.rows;
+        if visible {
+            let tail = thread.rows[start..].to_vec();
+            self.transcript
+                .update(cx, |view, cx| view.patch(start, tail, cx));
+        }
+    }
+    fn finish_reply(&mut self, id: &str, result: Result<(), String>, cx: &mut Context<Self>) {
+        if self.cancel.remove(id).is_none() {
+            return;
+        }
+        let Some(thread) = self.threads.iter_mut().find(|thread| thread.id == id) else {
+            return;
+        };
+        match result {
+            Ok(()) => thread.status = "completed".into(),
+            Err(error) if error == "Stopped" => {
+                thread.status = "stopped".into();
+                thread.error = Some("Stopped by you.".into());
+            }
+            Err(error) => {
+                thread.status = "error".into();
+                thread.error = Some(error);
+            }
+        }
+        if self.open && self.active.as_deref() == Some(id) {
+            self.transcript
+                .update(cx, |view, cx| view.streaming(false, cx));
+            cx.notify();
+        }
+        self.save(cx);
+    }
+    pub(super) fn save_visible_draft(&mut self, cx: &mut Context<Self>) {
+        if self.open {
+            self.capture_draft(cx);
+            self.save(cx);
+        }
     }
     fn stop(&mut self, cx: &mut Context<Self>) {
         if let Some(id) = &self.active
@@ -670,7 +762,7 @@ impl Btw {
         }
         self.run(cx);
     }
-    fn remove(&mut self, id: &str, cx: &mut Context<Self>) {
+    fn remove(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(cancel) = self.cancel.remove(id) {
             cancel.store(true, Ordering::Relaxed);
         }
@@ -681,7 +773,8 @@ impl Btw {
                 self.select(&id, cx);
             } else {
                 self.active = None;
-                self.open = false;
+                self.close(window, cx);
+                return;
             }
         }
         self.save(cx);
@@ -700,6 +793,7 @@ impl Btw {
             return;
         }
         let provider = Kind::from_id(&thread.provider);
+        let thread_id = thread.id.clone();
         let model = thread.model.clone();
         let cwd = thread.cwd.clone();
         let mut account = thread.account.clone();
@@ -712,8 +806,9 @@ impl Btw {
         self.model_subscription = Some(cx.subscribe_in(
             &picker,
             window,
-            |this, _, event: &ModelPicked, window, cx| {
+            move |this, _, event: &ModelPicked, window, cx| {
                 if let Some(thread) = this.active_mut()
+                    && thread.id == thread_id
                     && thread.provider == event.0.id()
                 {
                     thread.model = event.1.clone();
@@ -751,8 +846,9 @@ impl Render for Btw {
         let running = self
             .active()
             .is_some_and(|thread| thread.status == "running");
-        let can_submit =
-            !self.loading && !running && !self.input.read(cx).content.trim().is_empty();
+        let can_submit = self.initial_load.is_none()
+            && !running
+            && !self.input.read(cx).content.trim().is_empty();
         let failure = self
             .active()
             .and_then(|thread| thread.error.clone())
@@ -774,9 +870,10 @@ impl Render for Btw {
                     .rows
                     .iter()
                     .find(|row| row.role == "user")
-                    .map(|row| row.text.split_whitespace().collect::<Vec<_>>().join(" "))
-                    .unwrap_or_else(|| "New question".into());
-                let label = bounded(&question, 48);
+                    .map(|row| row.text.as_str())
+                    .or_else(|| (!thread.draft.trim().is_empty()).then_some(thread.draft.as_str()))
+                    .unwrap_or("New question");
+                let label = bounded(question, 48);
                 div()
                     .flex()
                     .items_center()
@@ -787,7 +884,7 @@ impl Render for Btw {
                         div()
                             .id(format!("btw-tab-{id}"))
                             .role(Role::Tab)
-                            .aria_label(question)
+                            .aria_label(label.clone())
                             .aria_selected(selected)
                             .px_2()
                             .py_1()
@@ -810,9 +907,9 @@ impl Render for Btw {
                             .rounded(px(radius::CONTROL))
                             .hover(|style| style.bg(vorkspace_ui::fluid::hover(0.1)))
                             .child(icon("x", 12.))
-                            .on_click(
-                                cx.listener(move |this, _, _, cx| this.remove(&remove_id, cx)),
-                            ),
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.remove(&remove_id, window, cx)
+                            })),
                     )
                     .into_any_element()
             })
@@ -991,6 +1088,12 @@ impl Render for Btw {
 }
 
 impl Conversation {
+    pub(crate) fn save_side_question_draft(&mut self, cx: &mut Context<Self>) {
+        if let Some(sheet) = &self.btw {
+            sheet.update(cx, |sheet, cx| sheet.save_visible_draft(cx));
+        }
+    }
+
     fn btw_target(&self, cx: &App) -> Option<Target> {
         if !self.history_ready()
             || self.settings.bot.is_some()
@@ -1096,11 +1199,113 @@ mod tests {
     use super::*;
 
     #[gpui::test]
+    fn switching_side_threads_replaces_the_projection_and_reopening_restores_the_draft(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let store = Arc::new(std::sync::Mutex::new(
+            vorkspace_core::store::Store::test(Path::new(":memory:")).unwrap(),
+        ));
+        let session = locked(&store)
+            .unwrap()
+            .create("codex", "/project")
+            .unwrap()
+            .id;
+        let target = Target {
+            source_turn: 0,
+            snapshot: "Main history".into(),
+            provider: Kind::Codex,
+            model: None,
+            cwd: "/project".into(),
+            settings: Settings::default(),
+        };
+        let first = cx.update(|cx| {
+            cx.open_window(Default::default(), |_, cx| {
+                let parent = cx.new(input::Input::side_question);
+                cx.new(|cx| Btw::new(session, store.clone(), parent, target.clone(), cx))
+            })
+            .unwrap()
+        });
+        cx.run_until_parked();
+        let (long, draft) = first
+            .update(cx, |sheet, window, cx| {
+                sheet.open_with(target.clone(), String::new(), true, cx);
+                let long = sheet.active.clone().unwrap();
+                sheet.active_mut().unwrap().rows = vec![
+                    row("user", "Old question", true),
+                    row("assistant", "Old answer", true),
+                ];
+                sheet.refresh(cx);
+                assert_eq!(sheet.transcript.read(cx).source_rows().len(), 2);
+                sheet.new_thread(cx);
+                assert!(sheet.transcript.read(cx).source_rows().is_empty());
+                sheet.input.update(cx, |input, cx| {
+                    input.set_text("Unsent side draft".into(), cx)
+                });
+                let draft = sheet.active.clone().unwrap();
+                sheet.close(window, cx);
+                assert!(sheet.transcript.read(cx).source_rows().is_empty());
+                (long, draft)
+            })
+            .unwrap();
+        cx.run_until_parked();
+        first
+            .update(cx, |_, window, _| window.remove_window())
+            .unwrap();
+        cx.run_until_parked();
+
+        let reopened = cx.update(|cx| {
+            cx.open_window(Default::default(), |_, cx| {
+                let parent = cx.new(input::Input::side_question);
+                cx.new(|cx| {
+                    let mut sheet = Btw::new(session, store.clone(), parent, target.clone(), cx);
+                    sheet.open_with(target.clone(), String::new(), false, cx);
+                    sheet
+                })
+            })
+            .unwrap()
+        });
+        cx.run_until_parked();
+        reopened
+            .update(cx, |sheet, _, cx| {
+                assert_eq!(sheet.active.as_ref(), Some(&draft));
+                assert_eq!(sheet.input.read(cx).content, "Unsent side draft");
+                sheet.select(&long, cx);
+                assert_eq!(sheet.transcript.read(cx).source_rows().len(), 2);
+                sheet.select(&draft, cx);
+                assert!(sheet.transcript.read(cx).source_rows().is_empty());
+                assert_eq!(sheet.input.read(cx).content, "Unsent side draft");
+            })
+            .unwrap();
+
+        let early_draft = cx.update(|cx| {
+            let parent = cx.new(input::Input::side_question);
+            let sheet = cx.new(|cx| Btw::new(session, store.clone(), parent, target.clone(), cx));
+            sheet.update(cx, |sheet, cx| {
+                sheet.open_with(target, "Draft before hydration".into(), true, cx);
+                assert!(sheet.initial_load.is_some());
+                let id = sheet.active.clone().unwrap();
+                sheet.save_on_quit(cx).unwrap().detach();
+                id
+            })
+        });
+        cx.run_until_parked();
+        let saved = Writes::default().read(store, session).unwrap();
+        assert_eq!(saved.active.as_deref(), Some(early_draft.as_str()));
+        assert_eq!(saved.threads.len(), 3);
+        assert_eq!(saved.threads[0].id, long);
+        assert_eq!(saved.threads[0].rows[1].text, "Old answer");
+        assert_eq!(saved.threads[1].id, draft);
+        assert_eq!(saved.threads[1].draft, "Unsent side draft");
+        assert_eq!(saved.threads[2].id, early_draft);
+        assert_eq!(saved.threads[2].draft, "Draft before hydration");
+    }
+
+    #[gpui::test]
     fn unsupported_side_history_preserves_drafts_and_rows_on_submit_and_retry(
         cx: &mut gpui::TestAppContext,
     ) {
         let view = cx.update(|cx| {
-            let store = vorkspace_core::store::Store::open(Path::new(":memory:")).unwrap();
+            let store = vorkspace_core::store::Store::test(Path::new(":memory:")).unwrap();
             let session = store.create("codex", "/project").unwrap();
             let parent = cx.new(input::Input::side_question);
             cx.new(|cx| {
@@ -1144,7 +1349,7 @@ mod tests {
                         draft: "Unsent side draft".into(),
                         status: "error".into(),
                         error: Some("Saved failure".into()),
-                        desktop: None,
+                        original: None,
                     }];
                     view.active = Some("saved-side".into());
                     view.input.update(cx, |input, cx| {
@@ -1214,7 +1419,7 @@ mod tests {
             draft: String::new(),
             status: "draft".into(),
             error: None,
-            desktop: None,
+            original: None,
         };
         let prompt = Btw::prompt(&thread);
         assert!(prompt.contains("reference context only"));

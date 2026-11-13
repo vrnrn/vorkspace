@@ -1,5 +1,5 @@
-//! Response actions use the same prose and recap rules as transcriptActivity.ts,
-//! secondOpinion.ts and handoff.ts. Tool chrome and private reasoning aren't copied.
+//! Prose and recap rules for response actions (copy, second opinion, handoff).
+//! Tool chrome and private reasoning aren't copied.
 use crate::{tool::ToolCall, transcript::Row};
 use serde::{Deserialize, Serialize};
 
@@ -79,7 +79,7 @@ pub fn request(rows: &[Row]) -> String {
         .trim()
         .into()
 }
-pub fn edited_files(rows: &[Row]) -> Vec<String> {
+pub(crate) fn edited_files(rows: &[Row]) -> Vec<String> {
     let mut files = Vec::new();
     for row in rows.iter().filter(|r| r.role == "tool") {
         if let Ok(tool) = serde_json::from_str::<ToolCall>(&row.text) {
@@ -196,7 +196,7 @@ pub fn wrap_handoff_prompt(from: &str, brief: &str, user_request: &str) -> Strin
     }
 }
 
-pub fn strip_goal_sections(markdown: &str) -> String {
+pub(crate) fn strip_goal_sections(markdown: &str) -> String {
     let mut skip_section = false;
     let mut removed_goal_line = false;
     markdown

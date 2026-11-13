@@ -17,7 +17,8 @@ fn clicking_base_choices_keeps_the_exact_remote_or_local_ref(cx: &mut TestAppCon
                     name: "main".into(),
                     remote: Some("origin".into()),
                 },
-            ],
+            ]
+            .into(),
             ..Default::default()
         },
     );
@@ -79,7 +80,7 @@ fn clicking_a_remote_tracking_row_checks_out_the_existing_local_branch(cx: &mut 
     git(&["branch", "--set-upstream-to=origin/main", "main"]);
     git(&["switch", "-c", "feature"]);
     let mut state = git::snapshot(cwd).unwrap();
-    state.branches.sort_by_key(|branch| branch.remote.is_some());
+    std::sync::Arc::make_mut(&mut state.branches).sort_by_key(|branch| branch.remote.is_some());
     vorkspace_model::git_cache::remember(&cwd.to_string_lossy(), &state);
     let window = cx.update(|cx| {
         cx.open_window(Default::default(), |_, cx| {
@@ -163,13 +164,15 @@ fn all_picker_modes_start_with_cached_choices_and_keep_them_after_refresh_failur
                     name: "feature".into(),
                     remote: None,
                 },
-            ],
+            ]
+            .into(),
             worktrees: vec![git::Worktree {
                 path: cwd.into(),
                 branch: Some("main".into()),
                 main: true,
                 ..Default::default()
-            }],
+            }]
+            .into(),
             ..Default::default()
         },
     );

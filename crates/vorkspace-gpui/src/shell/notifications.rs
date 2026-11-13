@@ -1,4 +1,4 @@
-//! Hosts the same notification stack as App.tsx, and routes native clicks.
+//! Delivers window notifications and routes native clicks back to their session.
 use super::*;
 use crate::notifications::{
     app_update::{self, AppUpdateEvent, InstalledUpdateNotice, WhatsNew, WhatsNewEvent},
@@ -8,11 +8,11 @@ use crate::notifications::{
     file_error::{FileActionError, FileActionErrorEvent},
     github_activity::{self, GithubActivity, GithubActivityEvent},
     harness_updates::{HarnessUpdates, HarnessUpdatesEvent},
-    linked_activity::{Cleanup, LinkedActivity, LinkedActivityEvent},
+    linked_activity::{LinkedActivity, LinkedActivityEvent},
     platform, reminders,
 };
-use crate::settings::ProjectNotifications;
-use std::{sync::mpsc::Receiver, time::Duration};
+use crate::settings::{Preferences, ProjectNotifications};
+use std::{collections::BTreeSet, time::Duration};
 
 pub(super) struct State {
     pub region: AnchorSlot,
@@ -21,32 +21,28 @@ pub(super) struct State {
     pub reminders: Entity<reminders::View>,
     pub installed: Entity<InstalledUpdateNotice>,
     pub file_error: Entity<FileActionError>,
-    pub reminder_error: Option<String>,
     pub github: Entity<GithubActivity>,
     linked: HashMap<i64, Entity<LinkedActivity>>,
-    linked_cleanup: HashMap<i64, Cleanup>,
-    linked_seen_ready: bool,
-    linked_last_poll: Option<std::time::Instant>,
-    linked_revisions: HashMap<String, i64>,
-    linked_primed: bool,
-    linked_started_at: u64,
-    linked_seen_writes: Option<gpui::Task<()>>,
+    linked_cleanup: HashSet<i64>,
     pub(super) whats_new: Option<(Entity<WhatsNew>, Subscription, FocusHandle)>,
-    permission: Permission,
-    permission_probe: Option<Receiver<Permission>>,
     announcements: approvals::InputAnnouncements,
     #[cfg(test)]
     spoken: Vec<String>,
     responding: HashSet<i64>,
+    pending_input_sessions: BTreeSet<i64>,
     sequence: u64,
     badge: usize,
     sounds_enabled: bool,
     sounds_enabled_at: u64,
-    poll: Option<gpui::Task<()>>,
+    mute_expiry: Option<(u64, gpui::Task<()>)>,
 }
 
 impl State {
-    pub(super) fn new(workspace: &Workspace, cx: &mut Context<Shell>) -> Self {
+    pub(super) fn new(
+        workspace: &Workspace,
+        github: Entity<GithubActivity>,
+        cx: &mut Context<Shell>,
+    ) -> Self {
         Self {
             region: AnchorSlot::default(),
             harness: cx
@@ -55,92 +51,54 @@ impl State {
             reminders: cx.new(|_| reminders::View::default()),
             installed: cx.new(|_| InstalledUpdateNotice::new(None)),
             file_error: cx.new(|_| FileActionError::new()),
-            reminder_error: None,
-            github: cx.new(|_| GithubActivity::new(HashMap::new())),
+            github,
             linked: HashMap::new(),
-            linked_cleanup: HashMap::new(),
-            linked_seen_ready: false,
-            linked_last_poll: None,
-            linked_revisions: HashMap::new(),
-            linked_primed: false,
-            linked_started_at: vorkspace_core::time::now_ms(),
-            linked_seen_writes: None,
+            linked_cleanup: HashSet::new(),
             whats_new: None,
-            permission: Permission::Unsupported,
-            permission_probe: None,
             announcements: Default::default(),
             #[cfg(test)]
             spoken: Vec::new(),
             responding: HashSet::new(),
+            pending_input_sessions: BTreeSet::new(),
             sequence: 0,
             badge: 0,
             sounds_enabled: workspace.preferences.sounds,
             sounds_enabled_at: 0,
-            poll: None,
+            mute_expiry: None,
         }
     }
 }
 
 impl Shell {
-    pub(super) fn inbox_activity(
-        &mut self,
-        projects: &[vorkspace_core::inbox::NotificationProject],
+    pub(super) fn chime_inbox_activity(
+        &self,
+        connectors: &vorkspace_core::inbox::Connectors,
         changed: &[vorkspace_core::inbox::Item],
-        cx: &mut Context<Self>,
+        cx: &App,
     ) {
-        let previous = &self.workspace.preferences.notification_projects;
-        let mut catalog = previous.as_array().cloned().unwrap_or_default();
-        for project in projects {
-            let mut value = serde_json::to_value(project).unwrap();
-            if let Some(old) = catalog
-                .iter_mut()
-                .find(|entry| entry["id"].as_str() == Some(&project.id))
-            {
-                let mut paths = old["paths"].as_array().cloned().unwrap_or_default();
-                for path in &project.paths {
-                    let path = serde_json::Value::String(path.clone());
-                    if !paths.contains(&path) {
-                        paths.push(path);
-                    }
-                }
-                value["paths"] = serde_json::Value::Array(paths);
-                *old = value;
-            } else {
-                catalog.push(value);
-            }
-        }
-        let catalog = serde_json::Value::Array(catalog);
-        if &catalog != previous {
-            self.workspace.preferences.notification_projects = catalog;
-            self.persist(cx);
-            self.sync_settings(cx);
-        }
-        let connectors = self
-            .inbox
-            .as_ref()
-            .map(|inbox| inbox.read(cx).connector_preferences())
-            .unwrap_or_default();
-        if self.holds_scheduler(cx)
-            && crate::notifications::inbox::should_chime(
-                &self.workspace.preferences,
-                &connectors,
-                changed,
-                self.notification_state.sounds_enabled_at,
-                vorkspace_core::time::now_ms(),
-            )
-        {
-            crate::sound::play(crate::sound::Cue::LinkedActivity);
+        let preferences = cx
+            .try_global::<Preferences>()
+            .unwrap_or(&self.workspace.preferences);
+        if crate::notifications::inbox::should_chime(
+            preferences,
+            connectors,
+            changed,
+            self.notification_state.sounds_enabled_at,
+            vorkspace_core::time::now_ms(),
+        ) {
+            crate::sound::play(crate::sound::Cue::LinkedActivity, self.store.clone());
         }
     }
 
-    pub(super) fn refresh_notification_permission(&mut self) {
-        self.notification_state.permission_probe = Some(platform::permission());
+    pub(super) fn refresh_notification_permission(&self, cx: &mut Context<Self>) {
+        if let Some(core) = &self.app_core {
+            core.update(cx, |core, cx| core.refresh_notification_permission(cx));
+        }
     }
 
-    /// Call from SessionChanged, so a turn beginning and ending between render
-    /// frames still produces exactly one completion. Render sync shares the set.
+    /// Observe completion independently of whether the window paints a frame.
     pub(super) fn notification_session_changed(&mut self, id: i64, cx: &mut Context<Self>) {
-        self.process_notification_inputs(cx);
+        self.notification_input_changed(id, cx);
         let Some(view) = self.sessions.get(&id) else {
             return;
         };
@@ -150,7 +108,6 @@ impl Shell {
             return;
         }
         if !self.notification_state.responding.remove(&id)
-            || chat.busy
             || chat.notification_was_cancelled()
             || chat.summary.archived
             || self
@@ -170,6 +127,23 @@ impl Shell {
             Some(crate::sound::Cue::Finished),
             cx,
         );
+    }
+
+    pub(super) fn release_session_notice(&mut self, id: i64, cx: &mut Context<Self>) {
+        self.notification_state.responding.remove(&id);
+        self.notification_input_changed(id, cx);
+    }
+
+    fn notification_input_changed(&mut self, id: i64, cx: &mut Context<Self>) {
+        let pending = self
+            .notification_chat(id, cx)
+            .is_some_and(|view| view.read(cx).needs_approval());
+        if pending {
+            self.notification_state.pending_input_sessions.insert(id);
+        } else if !self.notification_state.pending_input_sessions.remove(&id) {
+            return;
+        }
+        self.process_notification_inputs(cx);
     }
 
     pub(super) fn bind_notices(&mut self, cx: &mut Context<Self>) {
@@ -268,8 +242,8 @@ impl Shell {
         if let Some(bots) = self.bots.clone() {
             self.observations.push(cx.subscribe(
                 &bots,
-                |this, _, _: &crate::bots::NotificationChanged, cx| {
-                    this.process_notification_inputs(cx);
+                |this, _, event: &crate::bots::NotificationChanged, cx| {
+                    this.notification_input_changed(event.0, cx);
                     cx.notify()
                 },
             ));
@@ -308,62 +282,21 @@ impl Shell {
 
     pub(super) fn start_native_notifications(&mut self, cx: &mut Context<Self>) {
         self.set_window_badge(0, cx);
-        if platform::initialize() {
-            self.notification_state.permission = Permission::Prompt;
-            self.notification_state.permission_probe = Some(platform::permission());
+        if let Some(core) = &self.app_core {
+            core.update(cx, |core, cx| core.start_native_notifications(cx));
         }
         self.notification_state.badge = 0;
+        self.notification_state.pending_input_sessions = self
+            .notification_chats(cx)
+            .iter()
+            .map(|view| view.read(cx))
+            .filter(|chat| chat.needs_approval())
+            .map(|chat| chat.summary.id)
+            .collect();
         self.process_notification_inputs(cx);
-        self.notification_state.poll = Some(cx.spawn(async move |this, cx| {
-            loop {
-                cx.background_executor().timer(Duration::from_secs(1)).await;
-                if this
-                    .update(cx, |this, cx| {
-                        let permission = this
-                            .notification_state
-                            .permission_probe
-                            .as_ref()
-                            .and_then(|rx| rx.try_recv().ok());
-                        if let Some(permission) = permission {
-                            this.notification_state.permission = permission;
-                            this.notification_state.permission_probe = None;
-                            cx.notify();
-                        }
-                        if this.holds_scheduler(cx) {
-                            for target in platform::drain_clicks() {
-                                this.open_notice_target(target, cx);
-                            }
-                        }
-                        // Known reminders keep one-second precision. The session
-                        // clock also discovers schedules saved by other windows.
-                        let now = vorkspace_core::time::now_ms();
-                        if this
-                            .reminders
-                            .iter()
-                            .any(|r| r.due_at <= now && r.fired_at.is_none())
-                        {
-                            this.poll_reminders(cx);
-                        }
-                        this.poll_linked_activity(cx);
-                        // Scheduled mutes expire without a preference change.
-                        if !this.notification_state.approvals.read(cx).is_empty()
-                            || this
-                                .notification_chats(cx)
-                                .iter()
-                                .any(|v| v.read(cx).needs_approval())
-                        {
-                            cx.notify();
-                        }
-                    })
-                    .is_err()
-                {
-                    break;
-                }
-            }
-        }));
     }
 
-    fn notification_chats(&self, cx: &App) -> Vec<Entity<Conversation>> {
+    pub(super) fn notification_chats(&self, cx: &App) -> Vec<Entity<Conversation>> {
         let mut views: Vec<_> = self.sessions.values().cloned().collect();
         if let Some(bots) = &self.bots {
             views.extend(bots.read(cx).all_notification_chats(cx));
@@ -394,25 +327,42 @@ impl Shell {
     /// Advance banners and the Dock badge while an occluded window skips render.
     fn process_notification_inputs(&mut self, cx: &mut Context<Self>) {
         let snapshots: Vec<_> = self
-            .notification_chats(cx)
+            .notification_state
+            .pending_input_sessions
             .iter()
-            .map(|view| {
-                let chat = view.read(cx);
-                SessionInputs {
-                    session_id: chat.summary.id.to_string(),
-                    title: chat.display_title().to_owned(),
-                    provider: chat.summary.provider.clone(),
-                    harness: Kind::display_label(&chat.summary.provider).to_owned(),
-                    pending: chat.pending_notification_inputs(cx),
-                    inbox_ask: false,
-                    orchestration_worker: self.orchestration_worker(chat.summary.id),
-                    conversation_focused: false,
-                }
-            })
+            .filter_map(|&id| self.notification_chat(id, cx))
+            .filter_map(|view| self.input_snapshot(view.read(cx), false, cx))
             .collect();
         self.notification_state.approvals.update(cx, |notices, _| {
             notices.track_pending(&snapshots);
         });
+        self.publish_pending_inputs(&snapshots, cx);
+    }
+
+    fn input_snapshot(
+        &self,
+        chat: &Conversation,
+        check_visibility: bool,
+        cx: &App,
+    ) -> Option<SessionInputs> {
+        let pending = chat.pending_notification_inputs(cx);
+        if pending.is_empty() {
+            return None;
+        }
+        let id = chat.summary.id;
+        Some(SessionInputs {
+            session_id: id.to_string(),
+            title: chat.display_title().to_owned(),
+            provider: chat.summary.provider.clone(),
+            harness: Kind::display_label(&chat.summary.provider).to_owned(),
+            pending,
+            orchestration_worker: self.orchestration_worker(id),
+            // An on-screen conversation already shows its request inline.
+            conversation_focused: check_visibility && self.notice_session_visible(id, cx),
+        })
+    }
+
+    fn publish_pending_inputs(&mut self, snapshots: &[SessionInputs], cx: &mut Context<Self>) {
         let badge = delivery::dock_badge_count(
             snapshots
                 .iter()
@@ -422,7 +372,7 @@ impl Shell {
             self.notification_state.badge = badge;
             self.set_window_badge(badge, cx);
         }
-        for (session, input) in self.notification_state.announcements.reconcile(&snapshots) {
+        for (session, input) in self.notification_state.announcements.reconcile(snapshots) {
             if let Ok(id) = session.session_id.parse()
                 && let Some(view) = self.notification_chat(id, cx)
             {
@@ -445,7 +395,7 @@ impl Shell {
     }
 
     fn notice_session_visible(&self, id: i64, cx: &App) -> bool {
-        if self.settings.is_some() {
+        if self.pages.settings.is_some() {
             return false;
         }
         self.workspace.active_tab().is_some_and(|tab| {
@@ -456,13 +406,13 @@ impl Shell {
                 // toast when the whole pane can show the inline request.
                 if split {
                     let Some((canvas, viewport)) =
-                        self.pane_bounds.get().zip(self.pane_viewport.get())
+                        self.panes.bounds.get().zip(self.panes.viewport.get())
                     else {
                         return false;
                     };
                     let rect = leaf.rect;
                     let top_left = viewport.origin
-                        + self.pane_scroll.offset()
+                        + self.panes.scroll.offset()
                         + gpui::point(canvas.size.width * rect.x, canvas.size.height * rect.y);
                     let bottom_right = top_left
                         + gpui::point(canvas.size.width * rect.w, canvas.size.height * rect.h);
@@ -500,89 +450,30 @@ impl Shell {
 
     pub(super) fn sync_notices(&mut self, cx: &mut Context<Self>) {
         let now = vorkspace_core::time::now_ms();
-        let prefs = self.workspace.preferences.clone();
-        if self.notification_state.sounds_enabled != prefs.sounds {
-            self.notification_state.sounds_enabled = prefs.sounds;
-            if prefs.sounds {
+        let sounds = self.workspace.preferences.sounds;
+        if self.notification_state.sounds_enabled != sounds {
+            self.notification_state.sounds_enabled = sounds;
+            if sounds {
                 self.notification_state.sounds_enabled_at = now;
             }
         }
-        let views = self.notification_chats(cx);
         let mut snapshots = Vec::new();
         let mut directories = HashMap::new();
-        let mut completed = Vec::new();
-        let mut live_ids = HashSet::new();
-        for view in views {
+        for view in self
+            .notification_state
+            .pending_input_sessions
+            .iter()
+            .filter_map(|&id| self.notification_chat(id, cx))
+        {
             let chat = view.read(cx);
-            let id = chat.summary.id;
-            live_ids.insert(id);
-            if chat.responding() {
-                self.notification_state.responding.insert(id);
-            } else if self.notification_state.responding.remove(&id)
-                && !chat.busy
-                && !chat.notification_was_cancelled()
-                && !chat.summary.archived
-                && self.sessions.contains_key(&id)
-                && !self
-                    .bots
-                    .as_ref()
-                    .is_some_and(|bots| bots.read(cx).is_bot_session(id))
-            {
-                completed.push((chat.summary.clone(), chat.notification_reply_body(cx)));
-            }
-            directories.insert(id.to_string(), chat.summary.cwd.clone());
-            snapshots.push(SessionInputs {
-                session_id: id.to_string(),
-                title: chat.display_title().to_owned(),
-                provider: chat.summary.provider.clone(),
-                harness: Kind::display_label(&chat.summary.provider).to_owned(),
-                pending: chat.pending_notification_inputs(cx),
-                inbox_ask: false,
-                orchestration_worker: self.orchestration_worker(id),
-                // A conversation on screen already shows its request as the
-                // inline card, so a toast for it would ask the same thing twice.
-                // Where the keyboard focus sits does not change what is visible.
-                conversation_focused: self.window_active && self.notice_session_visible(id, cx),
-            });
-        }
-        self.notification_state
-            .responding
-            .retain(|id| live_ids.contains(id));
-        let badge = delivery::dock_badge_count(
-            snapshots
-                .iter()
-                .filter_map(|s| Some((s.session_id.parse().ok()?, !s.pending.is_empty()))),
-        );
-        if self.notification_state.badge != badge {
-            self.notification_state.badge = badge;
-            platform::set_dock_badge(badge);
-        }
-        let announcements = self.notification_state.announcements.reconcile(&snapshots);
-        for (session, input) in announcements {
-            if let Ok(id) = session.session_id.parse()
-                && let Some(view) = self.notification_chat(id, cx)
-            {
-                let summary = view.read(cx).summary.clone();
-                self.announce_input(&summary.title, &input.label);
-                self.deliver_session_notice(
-                    &summary,
-                    "agentInput",
-                    &input.label,
-                    Some(crate::sound::Cue::Input),
-                    cx,
-                );
+            if let Some(snapshot) = self.input_snapshot(chat, self.window.active, cx) {
+                directories.insert(snapshot.session_id.clone(), chat.summary.cwd.clone());
+                snapshots.push(snapshot);
             }
         }
-        for (summary, body) in completed {
-            self.announce(format!("{} finished", summary.title));
-            self.deliver_session_notice(
-                &summary,
-                "agentFinished",
-                &body,
-                Some(crate::sound::Cue::Finished),
-                cx,
-            );
-        }
+        self.publish_pending_inputs(&snapshots, cx);
+        self.schedule_mute_expiry(now, cx);
+        let prefs = &self.workspace.preferences;
         self.notification_state.approvals.update(cx, |notices, cx| {
             notices.sync(
                 &snapshots,
@@ -600,11 +491,11 @@ impl Shell {
             )
         });
         let due = self
-            .reminders
+            .reminders(cx)
             .iter()
             .filter(|r| r.due_at <= now)
             .filter_map(|r| {
-                let summary = self.session_summaries.get(&r.session_id)?;
+                let summary = self.session_summary(r.session_id, cx)?;
                 prefs
                     .allows_project_notification(&summary.cwd, "reminders", Some(r.due_at), now)
                     .then(|| reminders::Snapshot {
@@ -616,9 +507,35 @@ impl Shell {
                     })
             })
             .collect();
-        let error = self.notification_state.reminder_error.clone();
+        let error = self.reminder_error(cx).map(str::to_owned);
         self.notification_state.reminders.update(cx, |notices, cx| {
             notices.sync(due, error, prefs.notifications, cx)
+        });
+    }
+
+    fn schedule_mute_expiry(&mut self, now: u64, cx: &mut Context<Self>) {
+        let expiry =
+            delivery::next_mute_expiry(&self.workspace.preferences.project_notifications, now);
+        if self
+            .notification_state
+            .mute_expiry
+            .as_ref()
+            .map(|(at, _)| *at)
+            == expiry
+        {
+            return;
+        }
+        self.notification_state.mute_expiry = expiry.map(|at| {
+            let task = cx.spawn(async move |this, cx| {
+                cx.background_executor()
+                    .timer(Duration::from_millis(at - now))
+                    .await;
+                let _ = this.update(cx, |this, cx| {
+                    this.notification_state.mute_expiry = None;
+                    cx.notify();
+                });
+            });
+            (at, task)
         });
     }
 
@@ -640,20 +557,23 @@ impl Shell {
         );
     }
 
-    pub(super) fn deliver_reminder_notice(&mut self, id: i64, due_at: u64, cx: &mut Context<Self>) {
-        if let Some(summary) = self.session_summaries.get(&id).cloned() {
-            self.dispatch_notice(
-                &summary,
-                "reminders",
-                Target::Reminder {
-                    session_id: id,
-                    due_at,
-                },
-                &summary.title,
-                None,
-                cx,
-            );
-        }
+    pub(super) fn deliver_reminder_notice(
+        &mut self,
+        summary: &Session,
+        due_at: u64,
+        cx: &mut Context<Self>,
+    ) {
+        self.dispatch_notice(
+            summary,
+            "reminders",
+            Target::Reminder {
+                session_id: summary.id,
+                due_at,
+            },
+            &summary.title,
+            None,
+            cx,
+        );
     }
 
     fn dispatch_notice(
@@ -676,8 +596,12 @@ impl Shell {
         }
         let notify = delivery::should_notify(
             prefs.notifications,
-            self.notification_state.permission,
-            self.window_active,
+            self.app_core
+                .as_ref()
+                .map_or(Permission::Unsupported, |core| {
+                    core.read(cx).notification_permission
+                }),
+            self.window.active,
             category != "reminders" && self.notice_session_visible(summary.id, cx),
         );
         if !notify {
@@ -685,7 +609,7 @@ impl Shell {
                 && occurred >= self.notification_state.sounds_enabled_at
                 && let Some(cue) = cue
             {
-                crate::sound::play(cue);
+                crate::sound::play(cue, self.store.clone());
             }
             return;
         }
@@ -724,14 +648,14 @@ impl Shell {
                     && prefs.allows_project_notification(&directory, &category, Some(occurred), now)
                     && let Some(cue) = cue
                 {
-                    crate::sound::play(cue);
+                    crate::sound::play(cue, this.store.clone());
                 }
             });
         })
         .detach();
     }
 
-    fn open_notice_target(&mut self, target: Target, cx: &mut Context<Self>) {
+    pub(super) fn open_notice_target(&mut self, target: Target, cx: &mut Context<Self>) {
         let core = self.app_core.clone();
         cx.spawn(async move |this, cx| {
             let id = match target {
@@ -748,17 +672,10 @@ impl Shell {
             let show = |shell: &mut Self, window: &mut Window, cx: &mut Context<Self>| {
                 shell.show_notice_target(target, window, cx)
             };
-            if let Some(opened) = owner.and_then(|owner| owner.update_in(cx, show).ok()) {
-                if opened && let Target::Reminder { session_id, due_at } = target {
-                    let _ = this.update(cx, |shell, cx| {
-                        shell
-                            .reminders
-                            .retain(|r| r.session_id != session_id || r.due_at != due_at);
-                        shell.invalidate_chrome(cx);
-                        cx.notify();
-                    });
-                }
-            } else {
+            if owner
+                .and_then(|owner| owner.update_in(cx, show).ok())
+                .is_none()
+            {
                 let _ = this.update_in(cx, show);
             }
         })
@@ -794,41 +711,33 @@ impl Shell {
             && let Some(view) = self.notification_chat(id, cx)
         {
             let summary = view.read(cx).summary.clone();
-            self.session_summaries.insert(id, summary.clone());
             self.session_marks
                 .insert(id, cx.new(|_| SessionMark::new(summary.provider.clone())));
             self.tab_marks
                 .insert(id, cx.new(|_| SessionMark::tab(summary.provider.clone())));
-            self.observations
-                .push(cx.subscribe(&view, move |this, _, _: &SessionChanged, cx| {
+            self.observations.push(cx.subscribe(
+                &view,
+                move |this, _, change: &SessionChanged, cx| {
                     this.refresh_session_mark(id, cx);
-                    this.notification_session_changed(id, cx);
+                    if change.affects_attention() {
+                        this.notification_session_changed(id, cx);
+                    }
                     this.invalidate_chrome(cx);
                     cx.notify();
-                }));
+                },
+            ));
             self.sessions.insert(id, view);
             if !self.order.contains(&id) {
                 self.order.push(id);
             }
         }
-        if !self.session_summaries.contains_key(&id) {
+        if !self.has_session(id, cx) {
             return false;
         }
-        // Opening normally dismisses the current reminder. A notice only
-        // acknowledges its own occurrence, after navigation succeeds.
-        let preserved = due
-            .and_then(|_| self.reminders.iter().position(|r| r.session_id == id))
-            .map(|ix| (ix, self.reminders.remove(ix)));
         let revision = self.navigation_revision;
-        self.open(id, window, cx);
-        if let Some((ix, reminder)) = preserved {
-            self.reminders.insert(ix, reminder);
-        }
+        self.open_with_reminder(id, due, window, cx);
         if self.navigation_revision == revision || self.workspace.active != Some(id) {
             return false;
-        }
-        if let Some(due) = due {
-            self.clear_notification_reminder(id, due, cx);
         }
         window.activate_window();
         true
@@ -840,48 +749,13 @@ impl Shell {
         expected: u64,
         cx: &mut Context<Self>,
     ) {
-        let removed = self
-            .reminders
-            .iter()
-            .find(|r| r.session_id == id && r.due_at == expected)
-            .cloned();
-        self.reminders
-            .retain(|r| !(r.session_id == id && r.due_at == expected));
-        platform::dismiss(
-            &Target::Reminder {
-                session_id: id,
+        self.edit_reminder(
+            app_core::ReminderEdit::Clear {
+                session: id,
                 due_at: expected,
-            }
-            .tag(0),
+            },
+            cx,
         );
-        let store = self.store.clone();
-        let previous = self.group_writes.take();
-        self.group_writes = Some(cx.spawn(async move |this, cx| {
-            if let Some(previous) = previous {
-                previous.await;
-            }
-            let work = cx.background_executor().spawn(async move {
-                locked(&store).and_then(|s| s.clear_reminders(&[id], Some(expected)))
-            });
-            let result = work.await;
-            let _ = this.update(cx, |this, cx| {
-                match result {
-                    Err(error) => {
-                        if let Some(removed) = removed
-                            && !this.reminders.iter().any(|r| r.session_id == id)
-                        {
-                            this.reminders.push(removed);
-                        }
-                        this.notification_state.reminder_error = Some(error);
-                    }
-                    Ok(()) => this.notification_state.reminder_error = None,
-                }
-                this.invalidate_chrome(cx);
-                cx.notify();
-            });
-        }));
-        self.invalidate_chrome(cx);
-        cx.notify();
     }
 
     fn snooze_notification_reminder(
@@ -891,72 +765,20 @@ impl Shell {
         due_at: u64,
         cx: &mut Context<Self>,
     ) {
-        if !self
-            .reminders
-            .iter()
-            .any(|r| r.session_id == id && r.due_at == expected)
-        {
-            return;
-        }
-        let store = self.store.clone();
-        let previous = self.group_writes.take();
-        self.group_writes = Some(cx.spawn(async move |this, cx| {
-            if let Some(previous) = previous {
-                previous.await;
-            }
-            let work = cx.background_executor().spawn(async move {
-                locked(&store).and_then(|s| s.snooze_reminder_if(id, expected, due_at))
-            });
-            let result = work.await;
-            let _ = this.update(cx, |this, cx| match result {
-                Ok(_) => {
-                    platform::dismiss(
-                        &Target::Reminder {
-                            session_id: id,
-                            due_at: expected,
-                        }
-                        .tag(0),
-                    );
-                    this.notification_state.reminder_error = None;
-                    this.reload_notification_reminders(cx);
-                }
-                Err(error) => {
-                    this.notification_state.reminder_error = Some(error);
-                    cx.notify();
-                }
-            });
-        }));
+        self.edit_reminder(
+            app_core::ReminderEdit::Snooze {
+                session: id,
+                due_at: expected,
+                until: due_at,
+            },
+            cx,
+        );
     }
 
-    fn reload_notification_reminders(&mut self, cx: &mut Context<Self>) {
-        let expected_snapshot = self.reminders.clone();
-        let store = self.store.clone();
-        let previous = self.group_writes.take();
-        self.group_writes = Some(cx.spawn(async move |this, cx| {
-            if let Some(previous) = previous {
-                previous.await;
-            }
-            let work = cx
-                .background_executor()
-                .spawn(async move { locked(&store).and_then(|s| s.reminders()) });
-            let result = work.await;
-            let _ = this.update(cx, |this, cx| {
-                match result {
-                    Ok(reminders) => {
-                        // Preserve a newer optimistic schedule/cancel while its
-                        // ordered write waits behind this reload operation.
-                        if this.reminders == expected_snapshot {
-                            this.reminders = reminders;
-                        }
-                        this.notification_state.reminder_error = None;
-                        this.poll_reminders(cx);
-                    }
-                    Err(error) => this.notification_state.reminder_error = Some(error),
-                }
-                this.invalidate_chrome(cx);
-                cx.notify();
-            });
-        }));
+    fn reload_notification_reminders(&self, cx: &mut Context<Self>) {
+        if let Some(core) = &self.app_core {
+            core.update(cx, |core, cx| core.retry_reminders(cx));
+        }
     }
 
     pub(super) fn open_whats_new(&mut self, version: String, cx: &mut Context<Self>) {
@@ -983,7 +805,7 @@ impl Shell {
             .top(px(12.))
             .right(px(12.))
             .w(px(360.))
-            .max_w(px((self.viewport_width - 24.).max(0.)))
+            .max_w(px((self.window.viewport_width - 24.).max(0.)))
             .flex()
             .flex_col()
             .items_end()
@@ -1091,87 +913,33 @@ impl Shell {
         self.observations.push(cx.subscribe(
             &self.notification_state.github,
             |this, _, event, cx| {
-                match event {
-                    GithubActivityEvent::Acknowledged(seen) => {
-                        let seen = seen.clone();
-                        let store = this.store.clone();
-                        let previous = this.notification_state.linked_seen_writes.take();
-                        this.notification_state.linked_seen_writes =
-                            Some(cx.spawn(async move |_, cx| {
-                                if let Some(previous) = previous {
-                                    previous.await;
-                                }
-                                cx.background_executor()
-                                    .spawn(async move {
-                                        let _ = locked(&store)
-                                            .and_then(|s| github_activity::save_seen(&s, &seen));
-                                    })
-                                    .await;
-                            }));
-                    }
-                    GithubActivityEvent::Changed => {
-                        this.observe_linked_activity(cx);
-                        this.sync_linked_activity(cx);
-                    }
+                if matches!(event, GithubActivityEvent::Changed { .. }) {
+                    this.sync_linked_activity(cx);
+                    cx.notify();
                 }
-                cx.notify();
             },
         ));
-        let store = self.store.clone();
-        let metadata = self.workspace.desktop_preferences_metadata.clone();
-        let work = cx.background_executor().spawn(async move {
-            locked(&store)
-                .and_then(|s| github_activity::load_seen_with_metadata(&s, metadata.as_ref()))
-        });
-        cx.spawn(async move |this, cx| {
-            let seen = work.await.unwrap_or_default();
-            let _ = this.update(cx, |this, cx| {
-                this.notification_state
-                    .github
-                    .update(cx, |feed, _| feed.restore_seen(seen));
-                this.notification_state.linked_seen_ready = true;
-                this.poll_linked_activity(cx);
-            });
-        })
-        .detach();
+        if let Some(core) = &self.app_core {
+            core.update(cx, |core, cx| core.start_linked_activity(cx));
+        }
     }
 
-    fn poll_linked_activity(&mut self, cx: &mut Context<Self>) {
-        if self.notification_state.linked_seen_ready
-            && self
-                .notification_state
-                .linked_last_poll
-                .is_none_or(|at| at.elapsed() >= Duration::from_secs(60))
-            && self.notification_state.github.read(cx).ready_to_poll()
-        {
-            self.notification_state.linked_last_poll = Some(std::time::Instant::now());
-            let mut sessions = self.session_summaries.clone();
-            for view in self.notification_chats(cx) {
-                let summary = view.read(cx).summary.clone();
-                sessions.insert(summary.id, summary);
-            }
-            self.notification_state.github.update(cx, |feed, cx| {
-                feed.poll(sessions.into_values().collect(), cx)
-            });
+    pub(super) fn complete_linked_cleanup(
+        &mut self,
+        id: i64,
+        succeeded: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.notification_state.linked_cleanup.remove(&id) {
+            return;
         }
-        let pending = self.notification_state.linked_cleanup.clone();
-        for (id, action) in pending {
-            if self.archiving.contains(&id) || self.deleting.contains(&id) {
-                continue;
-            }
-            let success = match action {
-                Cleanup::Archive => self.session_summaries.get(&id).is_some_and(|s| s.archived),
-                Cleanup::Delete => !self.session_summaries.contains_key(&id),
-            };
-            self.notification_state.linked_cleanup.remove(&id);
-            if let Some(notice) = self.notification_state.linked.get(&id).cloned() {
-                notice.update(cx, |notice, cx| notice.finish_cleanup(success, cx));
-            }
-            if success {
-                self.notification_state
-                    .github
-                    .update(cx, |feed, cx| feed.acknowledge(id, cx));
-            }
+        if let Some(notice) = self.notification_state.linked.get(&id) {
+            notice.update(cx, |notice, cx| notice.finish_cleanup(cx));
+        }
+        if succeeded {
+            self.notification_state
+                .github
+                .update(cx, |feed, cx| feed.acknowledge(id, cx));
         }
     }
 
@@ -1195,60 +963,43 @@ impl Shell {
             )
     }
 
-    fn observe_linked_activity(&mut self, cx: &mut Context<Self>) {
-        let cards: Vec<_> = self
-            .notification_state
+    pub(super) fn should_chime_linked_activity(
+        &self,
+        card: &github_activity::Card,
+        started_at: u64,
+    ) -> bool {
+        let occurred = u64::try_from(card.updated_at).unwrap_or(0);
+        self.linked_activity_allowed(card)
+            && self.workspace.preferences.sounds
+            && occurred >= self.notification_state.sounds_enabled_at
+            && occurred >= started_at
+    }
+
+    fn linked_card(&self, id: i64, cx: &App) -> Option<github_activity::Card> {
+        let chat = self.notification_chat(id, cx);
+        let current = chat
+            .as_ref()
+            .map(|chat| &chat.read(cx).summary)
+            .or_else(|| self.session_summary(id, cx))?;
+        self.notification_state
             .github
             .read(cx)
             .cards
-            .values()
+            .get(&id)
+            .filter(|card| {
+                !current.archived
+                    && current.work_item.as_ref() == Some(&card.item)
+                    && card.updated_at as u64 > current.updated_at
+                    && self.linked_activity_allowed(card)
+            })
             .cloned()
-            .collect();
-        for card in cards {
-            let key = format!(
-                "{}:{}:{}:{}",
-                card.session,
-                card.item.repo.to_lowercase(),
-                card.item.kind,
-                card.item.number
-            );
-            let previous = self.notification_state.linked_revisions.get(&key).copied();
-            self.notification_state
-                .linked_revisions
-                .insert(key, previous.unwrap_or(0).max(card.updated_at));
-            // The first successful feed is a baseline, never a new-activity
-            // announcement. Acknowledgment and local-turn cutoffs are applied
-            // by the feed before a card enters this collection.
-            let newly_changed = self.notification_state.linked_primed
-                && previous.is_none_or(|at| card.updated_at > at);
-            let occurred = u64::try_from(card.updated_at).unwrap_or(0);
-            if newly_changed
-                && self.holds_scheduler(cx)
-                && !card.details_error
-                && self.linked_activity_allowed(&card)
-                && self.workspace.preferences.sounds
-                && occurred >= self.notification_state.sounds_enabled_at
-                && occurred >= self.notification_state.linked_started_at
-            {
-                // React uses a deduplicated chime, without an OS/banner here.
-                crate::sound::play(crate::sound::Cue::LinkedActivity);
-            }
-        }
-        self.notification_state.linked_primed = true;
     }
 
     fn sync_linked_activity(&mut self, cx: &mut Context<Self>) {
         let ids: Vec<_> = self.notification_state.linked.keys().copied().collect();
         for id in ids {
-            let card = self
-                .notification_state
-                .github
-                .read(cx)
-                .cards
-                .get(&id)
-                .filter(|card| self.linked_activity_allowed(card))
-                .cloned();
-            let can_cleanup = self.session_summaries.get(&id).is_some_and(|s| !s.archived);
+            let card = self.linked_card(id, cx);
+            let can_cleanup = self.session_summary(id, cx).is_some_and(|s| !s.archived);
             if let Some(notice) = self.notification_state.linked.get(&id) {
                 notice.update(cx, |notice, cx| {
                     notice.set_snapshot(card, can_cleanup, can_cleanup, cx)
@@ -1263,15 +1014,8 @@ impl Shell {
         id: i64,
         cx: &mut Context<Self>,
     ) -> Option<Entity<LinkedActivity>> {
-        let card = self
-            .notification_state
-            .github
-            .read(cx)
-            .cards
-            .get(&id)
-            .filter(|card| self.linked_activity_allowed(card))
-            .cloned()?;
-        let can_cleanup = self.session_summaries.get(&id).is_some_and(|s| !s.archived);
+        let card = self.linked_card(id, cx)?;
+        let can_cleanup = self.session_summary(id, cx).is_some_and(|s| !s.archived);
         if let Some(notice) = self.notification_state.linked.get(&id) {
             notice.update(cx, |notice, cx| {
                 notice.set_snapshot(Some(card), can_cleanup, can_cleanup, cx)
@@ -1302,8 +1046,7 @@ impl Shell {
             LinkedActivityEvent::OpenDiscussion(id) => {
                 // A native threaded discussion pane is not implemented yet.
                 if let Some(item) = self
-                    .session_summaries
-                    .get(&id)
+                    .session_summary(id, cx)
                     .and_then(|s| s.work_item.as_ref())
                 {
                     cx.open_url(&item.url);
@@ -1348,11 +1091,9 @@ impl Shell {
             LinkedActivityEvent::Archive(id) => {
                 self.toggle_archive(id, cx);
                 if self.archiving.contains(&id) {
-                    self.notification_state
-                        .linked_cleanup
-                        .insert(id, Cleanup::Archive);
+                    self.notification_state.linked_cleanup.insert(id);
                 } else if let Some(notice) = self.notification_state.linked.get(&id) {
-                    notice.update(cx, |notice, cx| notice.finish_cleanup(false, cx));
+                    notice.update(cx, |notice, cx| notice.finish_cleanup(cx));
                 }
             }
             LinkedActivityEvent::Delete(id) => {
@@ -1375,11 +1116,9 @@ impl Shell {
                             this.delete_session(id, window, cx);
                         }
                         if this.deleting.contains(&id) {
-                            this.notification_state
-                                .linked_cleanup
-                                .insert(id, Cleanup::Delete);
+                            this.notification_state.linked_cleanup.insert(id);
                         } else if let Some(notice) = this.notification_state.linked.get(&id) {
-                            notice.update(cx, |notice, cx| notice.finish_cleanup(false, cx));
+                            notice.update(cx, |notice, cx| notice.finish_cleanup(cx));
                         }
                     });
                 })

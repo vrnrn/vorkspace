@@ -22,9 +22,8 @@ impl Conversation {
     }
     pub(crate) fn sync_native_history(&mut self, cx: &mut Context<Self>) {
         if self.native_syncing
-            || self.loading
-            || self.busy
-            || self.stopping
+            || self.history_loading()
+            || self.turn_in_flight()
             || self.account_switching
         {
             return;
@@ -66,8 +65,7 @@ impl Conversation {
                     || this.summary.provider != session.provider
                     || this.summary.provider_id != session.provider_id
                     || this.settings.account.id != account
-                    || this.busy
-                    || this.stopping
+                    || this.turn_in_flight()
                 {
                     return;
                 }
@@ -112,7 +110,7 @@ impl Conversation {
     }
 
     pub(super) fn native_history_banner(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        if self.current_native_recovery().is_none() || self.busy || self.stopping {
+        if self.current_native_recovery().is_none() || self.turn_in_flight() {
             return None;
         }
         Some(
@@ -165,8 +163,7 @@ impl Conversation {
             }
             let work = this
                 .update(cx, |this, cx| {
-                    if this.busy
-                        || this.stopping
+                    if this.turn_in_flight()
                         || this.account_switching
                         || this.submission_generation != generation
                         || this.summary.id != session.id
@@ -198,8 +195,7 @@ impl Conversation {
                     || this.summary.provider != session.provider
                     || this.summary.provider_id != session.provider_id
                     || this.settings.account.id != account
-                    || this.busy
-                    || this.stopping
+                    || this.turn_in_flight()
                 {
                     return;
                 }

@@ -7,6 +7,8 @@ pub mod file_icons;
 pub mod fluid;
 pub mod fonts;
 pub mod glide;
+#[cfg(test)]
+mod list_tests;
 pub mod palettes;
 pub mod pane_motion;
 pub mod preferences;

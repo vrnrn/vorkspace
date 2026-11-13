@@ -64,7 +64,7 @@ struct Service {
     audio_active: bool,
 }
 
-pub fn init(cx: &mut App) {
+pub(crate) fn init(cx: &mut App) {
     let service = cx.new(|_| Service::default());
     cx.set_global(Dictation(service.clone()));
     let (sender, receiver) = async_channel::unbounded();
@@ -128,7 +128,7 @@ pub fn configure(config: DictationConfig, cx: &mut App) {
         s.publish(cx);
     });
 }
-pub fn audio_changed(active: bool, cx: &mut App) {
+pub(crate) fn audio_changed(active: bool, cx: &mut App) {
     get(cx).update(cx, |s, cx| {
         s.audio_active = active;
         if active {
@@ -143,13 +143,13 @@ pub fn audio_changed(active: bool, cx: &mut App) {
         }
     });
 }
-pub fn setup(_: &mut App) {
+pub(crate) fn setup(_: &mut App) {
     unsafe { vorkspace_dictation_setup() }
 }
-pub fn toggle(cx: &mut App) {
+pub(crate) fn toggle(cx: &mut App) {
     get(cx).update(cx, |s, cx| s.toggle(cx));
 }
-pub fn cancel(cx: &mut App) {
+pub(crate) fn cancel(cx: &mut App) {
     unsafe { vorkspace_dictation_cancel() };
     // A notch click runs inside that window's event dispatch. Close it after
     // GPUI has released the current window lease.
@@ -165,7 +165,7 @@ pub fn cancel(cx: &mut App) {
     .detach();
 }
 
-pub fn shutdown(cx: &mut App) {
+pub(crate) fn shutdown(cx: &mut App) {
     unsafe { vorkspace_dictation_cancel() };
     get(cx).update(cx, |s, cx| s.close(cx));
     cx.quit();
@@ -257,13 +257,19 @@ impl Service {
                 }
             }
         }
+        let listening = self.status.phase == DictationPhase::Listening;
         if let Some(panel) = self.panel {
             let _ = panel.update(cx, |p, _, cx| {
                 p.status = self.status.clone();
+                if !listening {
+                    p.level = 0.;
+                }
                 cx.notify();
             });
         }
-        if self.meter.is_none() {
+        if !listening {
+            self.meter = None;
+        } else if self.meter.is_none() {
             self.meter = Some(cx.spawn(async move |this, cx| {
                 loop {
                     cx.background_executor()
@@ -272,11 +278,7 @@ impl Service {
                     if this
                         .update(cx, |s, cx| {
                             let Some(panel) = s.panel else { return false };
-                            let level = if s.status.phase == DictationPhase::Listening {
-                                unsafe { vorkspace_dictation_level() }.clamp(0., 1.)
-                            } else {
-                                0.
-                            };
+                            let level = unsafe { vorkspace_dictation_level() }.clamp(0., 1.);
                             let _ = panel.update(cx, |p, _, cx| {
                                 let next = p.level + (level - p.level) * 0.45;
                                 if (next - p.level).abs() > 0.005 {

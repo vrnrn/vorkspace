@@ -2,7 +2,9 @@
 //! overview and settings.
 pub(crate) use crate::avatar;
 use vorkspace_ui::radius;
+mod attachments;
 pub(crate) mod cards;
+mod completions;
 mod creation;
 mod document_pane;
 mod effects;
@@ -21,7 +23,7 @@ mod panel_stack;
 mod panels;
 mod peers;
 mod roster;
-pub(crate) use roster::{MembershipChanged, SharedRoster};
+pub(crate) use roster::{MembershipChanged, PreparedRoster, SharedRoster};
 mod scheduler;
 mod search;
 #[cfg(test)]
@@ -29,7 +31,7 @@ mod tests;
 mod work;
 
 use crate::{
-    conversation::{BotSubmitted, Conversation, SessionChanged},
+    conversation::{Conversation, SessionChanged},
     input::{self, Input},
     popover::{Anchor, AnchorSlot, Menu, MenuEvent, menu_popover, popover},
 };
@@ -135,10 +137,11 @@ pub(crate) enum OpenWorkspacePane {
 pub(crate) struct BotDocumentSource {
     pub bot: String,
     pub document: bot::Document,
-    pub desktop: bool,
+    pub projected: bool,
 }
 pub(crate) use notifications::{NotificationChanged, NotificationFinished};
 struct RunningHabit {
+    _changed: Subscription,
     bot: String,
     habit: String,
     view: Entity<Conversation>,
@@ -149,12 +152,9 @@ struct RunningHabit {
     cards: Vec<serde_json::Value>,
     mailbox: Vec<String>,
 }
-pub(crate) use crate::conversation::{
-    BotConversations, MinionRegistry, TeamHistories, TeamHistory,
-};
+pub(crate) use crate::conversation::{BotConversations, TeamHistories, TeamHistory};
 
 pub(crate) struct Bots {
-    pub(crate) minion_registry: MinionRegistry,
     pub(crate) team_histories: TeamHistories,
     pub(crate) conversation_views: BotConversations,
     retired_teams: HashSet<String>,
@@ -173,7 +173,9 @@ pub(crate) struct Bots {
     /// A Bot created a moment ago is not here, so it shows at once.
     pub(crate) vorkspace_hidden: HashSet<String>,
     pub(crate) active: Option<String>,
-    chats: HashMap<String, Entity<Conversation>>,
+    chats: attachments::Chats,
+    visible_panes: HashSet<String>,
+    visible_session_views: HashSet<gpui::EntityId>,
     bridge: Option<bot::bridge::Server>,
     observations: Vec<Subscription>,
     _bridge_task: Option<gpui::Task<()>>,
@@ -214,10 +216,10 @@ pub(crate) struct Bots {
     rail_ids: Vec<String>,
     running: HashMap<i64, RunningHabit>,
     active_run: Option<i64>,
-    completion_work: HashSet<(String, u64)>,
+    completion_work: HashSet<(String, bot::LaunchGroup)>,
     /// The open background dialog, centred in the window it opened in.
     background: Option<(
-        Entity<crate::project_settings::BackgroundDialog>,
+        Entity<crate::background_settings::BackgroundDialog>,
         Subscription,
     )>,
     backgrounds: HashMap<String, Entity<crate::project_background::ProjectBackground>>,
@@ -301,35 +303,6 @@ impl Bots {
             .find(|view| view.read(cx).summary.id == id)
             .cloned()
     }
-    pub(crate) fn resource_sessions(
-        &self,
-        cx: &App,
-    ) -> Vec<(i64, crate::resource_pressure::SessionInfo)> {
-        self.chats
-            .values()
-            .chain(self.running.values().map(|r| &r.view))
-            .map(|v| {
-                let s = &v.read(cx).summary;
-                (
-                    s.id,
-                    crate::resource_pressure::SessionInfo {
-                        title: s.title.clone().into(),
-                        provider: s.provider.clone(),
-                    },
-                )
-            })
-            .collect()
-    }
-    pub(crate) fn stop_session(&mut self, id: i64, cx: &mut Context<Self>) {
-        if let Some(view) = self
-            .chats
-            .values()
-            .chain(self.running.values().map(|r| &r.view))
-            .find(|v| v.read(cx).summary.id == id)
-        {
-            view.update(cx, |v, cx| v.stop_if_busy(cx));
-        }
-    }
     pub(crate) fn bind_window(&mut self, window: &Window) {
         self.parent_window = Some(window.window_handle());
     }
@@ -361,13 +334,16 @@ impl Bots {
     pub(crate) fn document_for_pane(&self, bot: &str, id: &str) -> Option<BotDocumentSource> {
         let actor = self.roster.get(bot)?;
         let listed = actor.documents.iter().find(|document| document.id == id)?;
-        let desktop = actor.desktop_document_ids.iter().any(|source| source == id);
+        let projected = actor
+            .projected_document_ids
+            .iter()
+            .any(|source| source == id);
         Some(BotDocumentSource {
             bot: bot.into(),
             // Resolve through this Bot's roster so a document ID alone never
             // grants access to another Bot's output.
             document: listed.clone(),
-            desktop,
+            projected,
         })
     }
     pub(crate) fn move_rail_drag(&mut self, event: &gpui::MouseMoveEvent, cx: &mut Context<Self>) {
@@ -464,7 +440,9 @@ impl Bots {
             vorkspace,
             vorkspace_hidden: HashSet::new(),
             active: None,
-            chats: HashMap::new(),
+            chats: attachments::Chats::default(),
+            visible_panes: HashSet::new(),
+            visible_session_views: HashSet::new(),
             bridge,
             observations: vec![roster_subscription],
             _bridge_task: None,
@@ -477,7 +455,6 @@ impl Bots {
             habit_panel,
             open_islands: HashSet::new(),
             expanded_islands: HashMap::new(),
-            minion_registry: Default::default(),
             team_histories: Default::default(),
             conversation_views: Default::default(),
             retired_teams: Default::default(),
@@ -576,7 +553,7 @@ impl Bots {
             || !self.loading_chats.is_empty()
             || self.chats.values().any(|chat| {
                 let chat = chat.read(cx);
-                chat.busy || chat.external_submission_pending()
+                chat.external_submission_pending()
             })
     }
 
@@ -628,7 +605,7 @@ impl Bots {
         &mut self,
         prefs: vorkspace_ui::preferences::Preferences,
         cx: &mut Context<Self>,
-    ) {
+    ) -> bool {
         let was = self.prefs.bots;
         self.prefs = prefs;
         bot::set_minions_enabled(self.prefs.bots && self.prefs.minions);
@@ -639,6 +616,7 @@ impl Bots {
             self.picker = None;
         }
         cx.notify();
+        was != self.prefs.bots
     }
     pub(crate) fn current(&self) -> Option<&Bot> {
         self.active.as_deref().and_then(|id| self.roster.get(id))
@@ -673,16 +651,31 @@ impl Bots {
         }
         self.chat_for_action(id, cx)
     }
-    pub(crate) fn set_visible_panes(&mut self, visible: &HashSet<String>, cx: &mut Context<Self>) {
-        for id in visible {
+    pub(crate) fn set_visible_panes(
+        &mut self,
+        visible: HashSet<String>,
+        visible_chats: HashSet<gpui::EntityId>,
+        cx: &mut Context<Self>,
+    ) -> HashSet<gpui::EntityId> {
+        for id in &visible {
             self.ensure_chat(id, cx);
         }
-        for (id, chat) in &self.chats {
-            chat.update(cx, |chat, cx| {
-                chat.transcript
-                    .update(cx, |view, cx| view.visible(visible.contains(id), cx));
-            });
-        }
+        self.visible_panes = visible;
+        self.visible_session_views = visible_chats;
+        self.chats
+            .iter()
+            .map(|(id, chat)| {
+                self.apply_chat_visibility(id, chat, cx);
+                chat.entity_id()
+            })
+            .collect()
+    }
+
+    fn apply_chat_visibility(&self, id: &str, chat: &Entity<Conversation>, cx: &mut App) {
+        let shown = self.visible_panes.contains(id)
+            || self.visible_session_views.contains(&chat.entity_id());
+        let transcript = chat.read(cx).transcript.clone();
+        transcript.update(cx, |view, cx| view.visible(shown, cx));
     }
     /// Queue an application message through the Bot's ordinary outbox.
     pub(crate) fn send_message(
@@ -1089,118 +1082,7 @@ impl Bots {
                     }
                     view.load(cx);
                 });
-                let source = id.clone();
-                this.observations.push(cx.subscribe(
-                    &view,
-                    move |this, _, event: &BotSubmitted, cx| {
-                        this.enqueue_held(
-                            &source,
-                            event.text.clone(),
-                            event
-                                .attachments
-                                .iter()
-                                .map(|p| p.to_string_lossy().to_string())
-                                .collect(),
-                            false,
-                            event.queue,
-                            event.draft_id.clone(),
-                            event.mode.clone(),
-                            event.prepared_prompt.clone(),
-                            cx,
-                        )
-                    },
-                ));
-                let source = id.clone();
-                this.observations.push(cx.subscribe(
-                    &view,
-                    move |this, _, _: &SessionChanged, cx| {
-                        this.chat_changed(&source, cx);
-                    },
-                ));
-                let source = id.clone();
-                this.observations.push(cx.subscribe(
-                    &view,
-                    move |this, _, _: &crate::conversation::UsageResumed, cx| {
-                        let empty = this.roster.get(&source).is_none_or(|m| m.outbox.is_empty());
-                        if empty {
-                            this.enqueue(
-                                &source,
-                                "Continue from where you left off.".into(),
-                                Vec::new(),
-                                false,
-                                cx,
-                            );
-                        } else {
-                            if let Some(bot) = this.roster.get_mut(&source) {
-                                for message in &mut bot.outbox {
-                                    // Usage recovery may be automatic. Only an
-                                    // explicit Retry can authorize a new peer
-                                    // submission after uncertain external effects.
-                                    if message.peer.is_none() {
-                                        message.error = None;
-                                    }
-                                }
-                            }
-                            this.save(cx);
-                            this.configure_chat(&source, cx);
-                        }
-                    },
-                ));
-                let source = id.clone();
-                let mut status = view.read(cx).bot_status_label();
-                this.observations
-                    .push(cx.observe(&view, move |this, view, cx| {
-                        let next = view.read(cx).bot_status_label();
-                        if this.active.as_ref() == Some(&source) || status != next {
-                            cx.notify();
-                        }
-                        status = next;
-                        this.dispatch(&source, cx);
-                    }));
-                let source = id.clone();
-                this.observations.push(cx.subscribe(
-                    &view,
-                    move |this, _, event: &crate::conversation::BotSteerFailed, cx| {
-                        this.steer_failed(&source, &event.id, &event.error, cx)
-                    },
-                ));
-                let source = id.clone();
-                this.observations.push(cx.subscribe(
-                    &view,
-                    move |this, _, event: &crate::conversation::BotQueueChanged, cx| {
-                        this.queue_changed(&source, &event.id, event.remove, cx)
-                    },
-                ));
-                let transcript = view.read(cx).transcript.clone();
-                let target = view.clone();
-                let source = id.clone();
-                this.observations.push(cx.subscribe(
-                    &transcript,
-                    move |this, _, event: &crate::transcript::BotResponseAction, cx| match event {
-                        crate::transcript::BotResponseAction::Queue { id, remove } => {
-                            this.queue_changed(&source, id, *remove, cx)
-                        }
-                        crate::transcript::BotResponseAction::Quote { text, window } => {
-                            let target = target.clone();
-                            let text = text.clone();
-                            let handle = *window;
-                            let app: &mut App = cx;
-                            app.defer(move |cx| {
-                                let _ = handle.update(cx, |_, window, cx| {
-                                    target.update(cx, |v, cx| v.bot_quote(&text, window, cx))
-                                });
-                            });
-                        }
-                    },
-                ));
-                let source = id.clone();
-                this.observations.push(cx.subscribe(
-                    &transcript,
-                    move |this, _, event: &crate::transcript::bot_cards::CardAction, cx| {
-                        this.card_action(&source, &event.0, cx)
-                    },
-                ));
-                this.chats.insert(id.clone(), view);
+                this.attach_chat(id.clone(), view, cx);
                 this.sync_peer_looks(cx);
                 if let Some(handle) = this.parent_window {
                     let owner = cx.weak_entity();
@@ -1421,7 +1303,7 @@ impl Bots {
         {
             view.update(cx, |view, cx| {
                 if view.needs_history_restore() {
-                    view.load(cx);
+                    view.load_complete(cx);
                 }
             });
         }
@@ -1471,15 +1353,15 @@ impl Bots {
         let Some(view) = self.chats.get(id).cloned() else {
             return;
         };
-        if view.read(cx).busy {
+        if view.read(cx).responding() {
             self.steer(id, cx);
             return;
         }
         // Refreshing context notifies the view. A held/restoring recipient must
         // not enter a configure → observe → dispatch loop before admission.
-        if !view.read(cx).bot_ready() {
+        if !view.read(cx).bot_ready(cx) {
             if view.read(cx).needs_history_restore() {
-                view.update(cx, |view, cx| view.load(cx));
+                view.update(cx, |view, cx| view.load_complete(cx));
             }
             return;
         }
@@ -1596,7 +1478,7 @@ impl Bots {
                 .get(id)
                 .is_some_and(|bot| bot.seen_rows < view.read(cx).bot_row_origin(cx))
         {
-            view.update(cx, |view, cx| view.load(cx));
+            view.update(cx, |view, cx| view.load_complete(cx));
             return;
         }
         let view = view.read(cx);
@@ -1609,7 +1491,7 @@ impl Bots {
                 habit: false,
                 was_cancelled: view.notification_was_cancelled(),
             });
-        cx.emit(NotificationChanged);
+        cx.emit(NotificationChanged(view.summary.id));
         if let Some(completion) = completion {
             cx.emit(completion);
         }
@@ -1620,8 +1502,13 @@ impl Bots {
         }
         if finished {
             if let Some(mut sent) = self.inflight.remove(id) {
-                let (mut ok, mut status) = self.chats[id].read(cx).external_outcome(cx);
-                if sent.peer.is_some() && self.chats[id].read(cx).notification_was_cancelled() {
+                let chat = self.chats[id].read(cx);
+                let (mut ok, mut status) = chat.external_outcome(cx);
+                let stopped = chat.turn_state()
+                    == crate::conversation::TurnState::Settled(
+                        vorkspace_runtime::runtime::TurnOutcome::Cancelled,
+                    );
+                if sent.peer.is_some() && (stopped || chat.notification_was_cancelled()) {
                     ok = false;
                     status = "Stopped before the peer reply completed. Inspect the conversation before retrying.".into();
                 }
@@ -1639,7 +1526,7 @@ impl Bots {
                         self.save(cx);
                         self.configure_chat(id, cx);
                     }
-                } else if sent.peer.is_some() || !status.starts_with("Stopped") {
+                } else if sent.peer.is_some() || !stopped {
                     if let Some(bot) = self.roster.get_mut(id) {
                         if let Some(queued) = bot.outbox.iter_mut().find(|m| m.id == sent.id) {
                             queued.error = Some(status);

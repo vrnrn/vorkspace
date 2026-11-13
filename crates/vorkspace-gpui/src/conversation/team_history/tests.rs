@@ -8,7 +8,7 @@ use vorkspace_core::{
 
 fn fixture(cx: &mut TestAppContext, configured: bool, retired: bool) -> WindowHandle<Conversation> {
     vorkspace_ui::clock::use_test_clock(cx);
-    let store = Store::open(Path::new(":memory:")).unwrap();
+    let store = Store::test(Path::new(":memory:")).unwrap();
     let summary = store
         .create("codex", "/missing/team-history-fixture")
         .unwrap();
@@ -106,7 +106,7 @@ fn team_history_rejects_user_send_voice_quote_retry_and_resume_without_consuming
                             .messages
                             .is_empty()
                     );
-                    assert!(!view.busy);
+                    assert!(!view.responding());
                     let actor = view.team_histories.as_ref().unwrap().borrow()[&view.summary.id]
                         .actor
                         .clone();
@@ -175,14 +175,14 @@ fn restored_team_views_keep_bot_capabilities_and_reject_unowned_dispatch(cx: &mu
             attachments: vec![],
         };
         assert!(!view.bot_dispatch(&message, cx));
-        assert!(!view.busy);
+        assert!(!view.responding());
         assert!(view.settings.bot_message_id.is_none());
     })
     .unwrap();
 }
 
 #[gpui::test]
-fn internal_team_dispatch_keeps_its_admission_while_user_input_is_read_only(
+fn internal_team_dispatch_checks_the_provider_without_granting_user_admission(
     cx: &mut TestAppContext,
 ) {
     // An unsupported provider fails locally before any subprocess can start.
@@ -205,13 +205,9 @@ fn internal_team_dispatch_keeps_its_admission_while_user_input_is_read_only(
                 error: None,
                 attachments: Vec::new(),
             };
-            assert!(view.bot_dispatch(&message, cx));
+            assert!(!view.bot_dispatch(&message, cx));
             assert!(view.status.contains("no longer supported"));
-            assert_eq!(view.settings.bot_message_id.as_deref(), Some("team-work"));
-            assert!(
-                !view.team_dispatch,
-                "the internal grant never leaks to a later user call"
-            );
+            assert!(view.settings.bot_message_id.is_none());
             view.send(cx);
             assert!(view.status.contains("Read-only"));
             assert_eq!(view.input.read(cx).content, "Preserved draft");

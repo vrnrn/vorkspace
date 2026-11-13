@@ -1,4 +1,4 @@
-//! Mirrors claudeCatalog.ts's live list_models mapping and launch ids.
+//! Claude's live list_models mapping and launch ids.
 use super::{model, Model, ModelControl};
 use serde_json::Value;
 use std::collections::HashSet;

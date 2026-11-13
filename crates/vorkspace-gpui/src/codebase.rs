@@ -202,6 +202,13 @@ fn ranked_codebase_results_keep_the_identity_used_to_open_source() {
     assert_eq!(matches[1].qualified, "atlas.src.greet");
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SearchStatus {
+    Unloaded,
+    Searching,
+    Complete,
+}
+
 pub(crate) struct Page {
     project: String,
     root: String,
@@ -213,10 +220,12 @@ pub(crate) struct Page {
     selected: Option<Symbol>,
     source: Option<Entity<Document>>,
     relationships: Vec<(String, bool)>,
-    loading: bool,
+    activating: bool,
+    search_status: SearchStatus,
     detail_loading: bool,
     more: bool,
     error: Option<String>,
+    detail_error: Option<String>,
     search_epoch: u64,
     detail_epoch: u64,
     width: f32,
@@ -273,10 +282,12 @@ impl Page {
             selected: None,
             source: None,
             relationships: Vec::new(),
-            loading: false,
+            activating: false,
+            search_status: SearchStatus::Unloaded,
             detail_loading: false,
             more: false,
             error: None,
+            detail_error: None,
             search_epoch: 0,
             detail_epoch: 0,
             width: 1000.,
@@ -302,7 +313,10 @@ impl Page {
             return;
         };
         let next = service.snapshot(&self.project, &self.root);
-        let ready = next.phase == "ready" && self.snapshot.phase != "ready";
+        if next == self.snapshot {
+            return;
+        }
+        let ready = next.enabled && next.phase == "ready" && self.snapshot.phase != "ready";
         if !next.enabled || next.phase != "ready" {
             self.search_epoch += 1;
             self.detail_epoch += 1;
@@ -310,8 +324,12 @@ impl Page {
             self.selected = None;
             self.symbols.clear();
             self.relationships.clear();
-            self.loading = false;
+            self.search_status = SearchStatus::Unloaded;
             self.detail_loading = false;
+            self.more = false;
+            self.show_detail = false;
+            self.detail_error = None;
+            self.debounce = None;
         }
         self.snapshot = next;
         if ready {
@@ -320,6 +338,11 @@ impl Page {
         cx.notify();
     }
     pub(crate) fn activate(&mut self, reindex: bool, cx: &mut Context<Self>) {
+        if self.activating
+            || (reindex && matches!(self.snapshot.phase.as_str(), "preparing" | "indexing"))
+        {
+            return;
+        }
         let Ok(service) = self.service.clone() else {
             return;
         };
@@ -327,6 +350,7 @@ impl Page {
             self.refresh(cx);
             return;
         }
+        self.activating = true;
         let (project, root) = (self.project.clone(), self.root.clone());
         let work = cx
             .background_executor()
@@ -334,16 +358,24 @@ impl Page {
         cx.spawn(async move |this, cx| {
             let result = work.await;
             let _ = this.update(cx, |this, cx| {
-                this.error = result.err();
+                this.activating = false;
                 this.refresh(cx);
-                if this.symbols.is_empty() && this.snapshot.phase == "ready" {
+                if result.is_ok()
+                    && this.search_status == SearchStatus::Unloaded
+                    && this.debounce.is_none()
+                    && this.snapshot.phase == "ready"
+                {
                     this.search(cx);
                 }
+                this.error = result.err();
+                cx.notify();
             });
         })
         .detach();
+        cx.notify();
     }
     fn search(&mut self, cx: &mut Context<Self>) {
+        self.debounce = None;
         if self.snapshot.phase != "ready" {
             return;
         }
@@ -359,7 +391,7 @@ impl Page {
             json!({"query":query,"limit":100,"format":"json"})
         };
         let reply = service.query(&self.project, &self.root, "search_graph", arguments);
-        self.loading = true;
+        self.search_status = SearchStatus::Searching;
         self.error = None;
         cx.spawn(async move |this, cx| {
             let result = match reply {
@@ -378,14 +410,17 @@ impl Page {
                 {
                     return;
                 }
-                this.loading = false;
                 match result {
                     Ok(value) => {
+                        this.search_status = SearchStatus::Complete;
                         this.symbols = symbols(&value);
                         this.more = value["has_more"].as_bool().unwrap_or(false);
                         this.list_scroll.scroll_to_item(0);
                     }
-                    Err(error) => this.error = Some(error),
+                    Err(error) => {
+                        this.search_status = SearchStatus::Unloaded;
+                        this.error = Some(error);
+                    }
                 }
                 cx.notify();
             });
@@ -408,7 +443,7 @@ impl Page {
         self.source = None;
         self.relationships.clear();
         self.show_detail = true;
-        self.error = None;
+        self.detail_error = None;
         self.detail_loading = true;
         cx.spawn(async move |this, cx| {
             let source = async {
@@ -427,64 +462,72 @@ impl Page {
                     .map_err(|e| e.to_string())?
             }
             .await;
-            // A symbol can have source without being a callable function. A
-            // failed relationship lookup must not hide its source excerpt.
-            let links = if source.is_ok() {
-                async {
-                    service
-                        .query(
-                            &project,
-                            &root,
-                            "trace_path",
-                            json!({
-                                "function_name": qualified, "direction": "both",
-                                "depth": 1, "limit": 50, "format": "json"
-                            }),
-                        )?
-                        .recv()
-                        .await
-                        .map_err(|e| e.to_string())?
-                }
-                .await
-            } else {
-                Ok(Value::Null)
-            };
+            let shown = this
+                .update(cx, |this, cx| {
+                    if this.detail_epoch != epoch
+                        || !this
+                            .service
+                            .as_ref()
+                            .is_ok_and(|s| s.enabled(&this.project))
+                    {
+                        return false;
+                    }
+                    this.detail_loading = false;
+                    match source {
+                        Ok(source) => {
+                            if let Some(selected) = &mut this.selected {
+                                let file = source["file_path"].as_str().unwrap_or("");
+                                selected.file = file
+                                    .strip_prefix(&format!("{}/", this.snapshot.root))
+                                    .unwrap_or(file)
+                                    .into();
+                                selected.lines =
+                                    format!("{}–{}", source["start_line"], source["end_line"]);
+                            }
+                            let text = source["source"].as_str().unwrap_or("Source unavailable");
+                            let longest = text.split(|c| c != '`').map(str::len).max().unwrap_or(0);
+                            let fence = "`".repeat(longest.max(2) + 1);
+                            let source = format!("{fence}\n{text}\n{fence}");
+                            this.source = Some(
+                                cx.new(|cx| Document::prose(&source, "Source unavailable", cx)),
+                            );
+                            this.detail_scroll.scroll_to_item(0);
+                        }
+                        Err(error) => this.detail_error = Some(error),
+                    }
+                    cx.notify();
+                    this.source.is_some()
+                })
+                .unwrap_or(false);
+            if !shown {
+                return;
+            }
+            // Source is already readable. Only the current selection requests links.
+            let links = async {
+                service
+                    .query(
+                        &project,
+                        &root,
+                        "trace_path",
+                        json!({
+                            "function_name": qualified, "direction": "both",
+                            "depth": 1, "limit": 50, "format": "json"
+                        }),
+                    )?
+                    .recv()
+                    .await
+                    .map_err(|e| e.to_string())?
+            }
+            .await;
             let _ = this.update(cx, |this, cx| {
-                if this.detail_epoch != epoch
-                    || !this
-                        .service
-                        .as_ref()
-                        .is_ok_and(|s| s.enabled(&this.project))
-                {
+                if this.detail_epoch != epoch || !service.enabled(&project) {
                     return;
                 }
-                this.detail_loading = false;
-                match source {
-                    Ok(source) => {
-                        if let Some(selected) = &mut this.selected {
-                            let file = source["file_path"].as_str().unwrap_or("");
-                            selected.file = file
-                                .strip_prefix(&format!("{}/", this.snapshot.root))
-                                .unwrap_or(file)
-                                .into();
-                            selected.lines =
-                                format!("{}–{}", source["start_line"], source["end_line"]);
-                        }
-                        let text = source["source"].as_str().unwrap_or("Source unavailable");
-                        let longest = text.split(|c| c != '`').map(str::len).max().unwrap_or(0);
-                        let fence = "`".repeat(longest.max(2) + 1);
-                        let source = format!("{fence}\n{text}\n{fence}");
-                        this.source =
-                            Some(cx.new(|cx| Document::prose(&source, "Source unavailable", cx)));
-                        match links {
-                            Ok(links) => this.relationships = links_list(&links),
-                            Err(error) => {
-                                this.error = Some(format!("Relationships unavailable: {error}"))
-                            }
-                        }
-                        this.detail_scroll.scroll_to_item(0);
+                match links {
+                    Ok(links) => this.relationships = links_list(&links),
+                    Err(error) => {
+                        this.detail_error = Some(format!("Relationships unavailable: {error}"))
                     }
-                    Err(error) => this.error = Some(error),
                 }
                 cx.notify();
             });
@@ -579,11 +622,11 @@ impl Page {
                     .overflow_y_scroll()
                     .track_scroll(&self.list_scroll)
                     .p_2()
-                    .when(self.loading, |d| {
+                    .when(self.search_status == SearchStatus::Searching, |d| {
                         d.child(page::meta().p_2().child("Searching…"))
                     })
                     .when(
-                        self.snapshot.phase == "ready" && !self.loading && self.symbols.is_empty(),
+                        self.search_status == SearchStatus::Complete && self.symbols.is_empty(),
                         |d| d.child(page::meta().p_2().child("No matching symbols")),
                     )
                     .children(self.symbols.iter().enumerate().map(|(index, symbol)| {
@@ -662,6 +705,9 @@ impl Page {
                         d.child(page::meta().child("Loading source…"))
                     })
                     .when_some(self.source.clone(), |d, source| d.child(source))
+                    .when_some(self.detail_error.clone(), |d, error| {
+                        d.child(page::meta().child(error))
+                    })
                     .when(!self.relationships.is_empty(), |d| {
                         let selected = self
                             .selected
@@ -782,6 +828,7 @@ impl Render for Page {
                             "codebase-reindex",
                             if ready { "Reindex" } else { "Retry" },
                             self.snapshot.enabled
+                                && !self.activating
                                 && !matches!(
                                     self.snapshot.phase.as_str(),
                                     "preparing" | "indexing"

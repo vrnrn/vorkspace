@@ -1,5 +1,6 @@
-//! GPUI port of AgentMarkdown.tsx and its .agent-markdown CSS.
+//! Markdown rendering for agent messages.
 use vorkspace_ui::radius;
+mod accessibility;
 mod document;
 mod search;
 use crate::syntax::HighlightedDocument;
@@ -54,7 +55,9 @@ fn activate_link(event: &ClickEvent, selection: Option<&Selection>) -> bool {
             _ => true,
         }
 }
+use accessibility::{LinkedText, Links, append_link};
 use std::{
+    borrow::Cow,
     hash::{DefaultHasher, Hash, Hasher},
     ops::Range,
     sync::Arc,
@@ -96,6 +99,7 @@ pub(crate) struct Fence {
     pub start_line: usize,
     pub numbered: bool,
     pub lines: Vec<Range<usize>>,
+    longest_line: usize,
     pub truncated: bool,
     pub key: u64,
 }
@@ -140,13 +144,16 @@ impl Fence {
         }
         let mut at = 0;
         let mut lines = Vec::new();
+        let mut longest_line = 0;
         let mut truncated = false;
         for line in code.split_inclusive('\n') {
             if preview && lines.len() == SVG_PREVIEW_LINES {
                 truncated = true;
                 break;
             }
-            let end = at + line.trim_end_matches(['\n', '\r']).len();
+            let visible = line.trim_end_matches(['\n', '\r']);
+            let end = at + visible.len();
+            longest_line = longest_line.max(visible.chars().count());
             lines.push(at..end);
             at += line.len();
         }
@@ -170,6 +177,7 @@ impl Fence {
             start_line,
             numbered: !info.contains("noLineNumbers"),
             lines,
+            longest_line,
             truncated,
             key: hash.finish(),
         }
@@ -177,6 +185,10 @@ impl Fence {
 
     pub(crate) fn highlight_source(&self) -> &str {
         &self.code[..self.lines.last().unwrap().end]
+    }
+
+    pub(crate) fn width(&self) -> Pixels {
+        px(self.longest_line as f32 * 7.3 + 48.)
     }
 }
 
@@ -218,17 +230,10 @@ pub(crate) struct MarkdownRow {
 
 pub(crate) fn rows(block: &Block) -> Vec<MarkdownRow> {
     let mut rows = Vec::new();
-    flatten(block, 0, 0, None, &mut rows);
+    flatten(block, 0, 0, &mut rows);
     rows
 }
-fn flatten(
-    block: &Block,
-    indent: usize,
-    quote: usize,
-    marker: Option<String>,
-    out: &mut Vec<MarkdownRow>,
-) {
-    let first = out.len();
+fn flatten(block: &Block, indent: usize, quote: usize, out: &mut Vec<MarkdownRow>) {
     let mut add = |part, gap| {
         out.push(MarkdownRow {
             part,
@@ -302,7 +307,7 @@ fn flatten(
                 let bullet =
                     ordered_start.map_or_else(|| "•".into(), |n| format!("{}.", n + ix as u64));
                 for child in children {
-                    flatten(child, indent + 1, quote, None, out);
+                    flatten(child, indent + 1, quote, out);
                 }
                 if let Some(row) = out.get_mut(start) {
                     row.marker = Some(bullet);
@@ -312,7 +317,7 @@ fn flatten(
         }
         Block::BlockQuote { children } => {
             for child in children {
-                flatten(child, indent, quote + 1, None, out);
+                flatten(child, indent, quote + 1, out);
             }
         }
         Block::Table {
@@ -320,35 +325,32 @@ fn flatten(
             rows,
             align,
         } => {
-            let all: Vec<_> = std::iter::once(header.clone())
-                .chain(rows.iter().cloned())
-                .collect();
-            let columns = table_column_widths(&all);
-            for (ix, cells) in all.chunks(PART_LINES).enumerate() {
+            let all = std::iter::once(header).chain(rows);
+            let columns = table_column_widths(all.clone());
+            let count = rows.len() + 1;
+            let mut cells = all.cloned();
+            for at in (0..count).step_by(PART_LINES) {
                 add(
                     Part::Table {
-                        cells: cells.to_vec(),
+                        cells: cells.by_ref().take(PART_LINES).collect(),
                         columns: columns.clone(),
                         align: align.clone(),
-                        header: ix == 0,
-                        last: (ix + 1) * PART_LINES >= all.len(),
+                        header: at == 0,
+                        last: at + PART_LINES >= count,
                     },
-                    if ix == 0 { 16. } else { 0. },
+                    if at == 0 { 16. } else { 0. },
                 );
             }
         }
         Block::Rule => add(Part::Rule, 24.),
         Block::Math { tex } => add(Part::Math(tex.clone()), 16.),
     }
-    if let Some(row) = out.get_mut(first)
-        && marker.is_some()
-    {
-        row.marker = marker;
-    }
 }
 
-fn table_column_widths(rows: &[Vec<Vec<InlineRun>>]) -> Arc<[f32]> {
-    let count = rows.iter().map(Vec::len).max().unwrap_or(1).max(1);
+fn table_column_widths<'a>(
+    rows: impl Iterator<Item = &'a Vec<Vec<InlineRun>>> + Clone,
+) -> Arc<[f32]> {
+    let count = rows.clone().map(Vec::len).max().unwrap_or(1).max(1);
     let mut widths = vec![160_f32; count];
     // These are preferred flex widths, not fixed cell widths. Sample the whole
     // table once so virtualized chunks use the same columns. Short labels keep
@@ -452,8 +454,8 @@ fn inline_selected(
     let mut text = String::new();
     let mut highlights = Vec::new();
     let mut fonts = Vec::new();
-    let mut links = Vec::new();
-    let mut urls = Vec::new();
+    let mut links: Vec<(Range<usize>, String)> = Vec::new();
+    let fade = fade.filter(|times| !times.is_empty());
     for run in runs {
         let start = text.len();
         let style = &run.style;
@@ -484,13 +486,16 @@ fn inline_selected(
             }),
             ..Default::default()
         };
-        if !style.code && !style.math && style.link.is_none() {
+        if let Some(times) = fade
+            && !style.code
+            && !style.math
+            && style.link.is_none()
+        {
             let mut cursor = start;
             for piece in run.text.split_inclusive(char::is_whitespace) {
                 let mut highlight = highlight;
                 if !piece.trim().is_empty() {
-                    let alpha =
-                        vorkspace_ui::reveal::word_opacity(fade.and_then(|f| f.get(word)), now);
+                    let alpha = vorkspace_ui::reveal::word_opacity(times.get(word), now);
                     highlight.fade_out = Some(1. - (1. - highlight.fade_out.unwrap_or(0.)) * alpha);
                     word += 1;
                 }
@@ -504,8 +509,7 @@ fn inline_selected(
             fonts.push((range.clone(), vorkspace_ui::fonts::MONO.into()));
         }
         if let Some(url) = &style.link {
-            links.push(range);
-            urls.push(url.clone());
+            append_link(&mut links, range, url);
         }
     }
     let text: SharedString = text.into();
@@ -513,45 +517,58 @@ fn inline_selected(
         .with_highlights(highlights)
         .with_font_family_overrides(fonts);
     let layout = styled.layout().clone();
-    let clicked_selection = selection.clone();
-    let clicked_layout = layout.clone();
-    let menu_layout = layout.clone();
-    let clicked_links = links.clone();
-    let menu_links = links.clone();
-    let clicked_urls = urls.clone();
     let text_id: SharedString = format!("{id}-text").into();
-    let child = div()
-        .id(id)
-        .child(InteractiveText::new(text_id, styled).on_click(links, |_, _, _| {}))
-        .on_click(move |event, window, cx| {
-            if !activate_link(event, clicked_selection.as_ref()) {
-                return;
-            }
-            let Ok(byte) = clicked_layout.index_for_position(event.position()) else {
-                return;
-            };
-            if let Some(ix) = clicked_links.iter().position(|range| range.contains(&byte)) {
-                // A drag starting on another link must not activate this one.
-                if let ClickEvent::Mouse(mouse) = event {
-                    let Ok(down) = clicked_layout.index_for_position(mouse.down.position) else {
-                        return;
-                    };
-                    if !clicked_links[ix].contains(&down) {
+    let styled = InteractiveText::new(text_id, styled);
+    let child = if links.is_empty() {
+        div().id(id).child(styled).into_any_element()
+    } else {
+        let links: Links = links.into();
+        let clicked_links = links.clone();
+        let menu_links = links.clone();
+        let clicked_selection = selection.clone();
+        let clicked_layout = layout.clone();
+        let menu_layout = layout.clone();
+        let child = div()
+            .id(id.clone())
+            .child(
+                styled
+                    .with_link_cursors(links.iter().map(|(range, _)| range.clone()).collect())
+                    .with_accessibility(false),
+            )
+            .on_click(move |event, window, cx| {
+                if !activate_link(event, clicked_selection.as_ref()) {
+                    return;
+                }
+                let Ok(byte) = clicked_layout.index_for_position(event.position()) else {
+                    return;
+                };
+                if let Some((range, url)) = clicked_links
+                    .iter()
+                    .find(|(range, _)| range.contains(&byte))
+                {
+                    if let ClickEvent::Mouse(mouse) = event
+                        && !clicked_layout
+                            .index_for_position(mouse.down.position)
+                            .is_ok_and(|down| range.contains(&down))
+                    {
                         return;
                     }
+                    open_link(url, window, cx);
                 }
-                open_link(&clicked_urls[ix], window, cx);
-            }
-        })
-        .on_mouse_down(MouseButton::Right, move |event, window, cx| {
-            if let Ok(byte) = menu_layout.index_for_position(event.position)
-                && let Some(ix) = menu_links.iter().position(|range| range.contains(&byte))
-            {
-                link_menu(&urls[ix], event.position, window, cx);
-                cx.stop_propagation();
-            }
-        })
-        .into_any_element();
+            })
+            .on_mouse_down(MouseButton::Right, move |event, window, cx| {
+                if let Ok(byte) = menu_layout.index_for_position(event.position)
+                    && let Some((_, url)) =
+                        menu_links.iter().find(|(range, _)| range.contains(&byte))
+                {
+                    link_menu(url, event.position, window, cx);
+                    cx.stop_propagation();
+                }
+            })
+            .into_any_element();
+        LinkedText::new(id, text.clone(), links, vec![(0, layout.clone())], child)
+            .into_any_element()
+    };
     if let Some(selection) = selection {
         selection.wrap(text, layout, child)
     } else {
@@ -571,6 +588,15 @@ fn rich_inline(
     infer_file_links: bool,
 ) -> AnyElement {
     let mut children = Vec::new();
+    let has_links = runs.iter().any(|run| {
+        if run.style.code {
+            code_link(run, infer_file_links).is_some()
+        } else {
+            run.style.link.is_some()
+        }
+    });
+    let mut links = Vec::new();
+    let mut fragments = Vec::new();
     let mut offset = 0;
     for (run_ix, run) in runs.iter().enumerate() {
         let style = &run.style;
@@ -579,6 +605,12 @@ fn rich_inline(
             let file = code_link(run, infer_file_links).is_some();
             let styled = StyledText::new(text.clone());
             let layout = styled.layout().clone();
+            if let Some(url) = code_link(run, infer_file_links) {
+                append_link(&mut links, offset..offset + text.len(), url);
+            }
+            if has_links {
+                fragments.push((offset, layout.clone()));
+            }
             let selected = selection.as_ref().map(|s| {
                 let selected = s.offset(offset);
                 if file {
@@ -634,6 +666,9 @@ fn rich_inline(
             offset += run.text.len();
             continue;
         }
+        if let Some(url) = &style.link {
+            append_link(&mut links, offset..offset + run.text.len(), url);
+        }
         for (part_ix, part) in run.text.split_inclusive(char::is_whitespace).enumerate() {
             let text = part.trim_end_matches(char::is_whitespace);
             if !text.is_empty() {
@@ -668,10 +703,12 @@ fn rich_inline(
                     ..Default::default()
                 };
                 let link = style.link.clone();
-                let menu_link = link.clone();
                 let styled =
                     StyledText::new(text.to_owned()).with_highlights([(0..text.len(), highlight)]);
                 let layout = styled.layout().clone();
+                if has_links {
+                    fragments.push((offset, layout.clone()));
+                }
                 let child = styled.into_any_element();
                 let selected = selection.as_ref().map(|s| {
                     let selected = s.offset(offset);
@@ -693,22 +730,19 @@ fn rich_inline(
                         .text_size(px(font_size))
                         .line_height(px(24.))
                         .opacity(alpha)
-                        .when(link.is_some(), |d| {
-                            d.cursor(gpui::CursorStyle::PointingHand)
-                        })
                         .child(child)
-                        .on_click(move |event, window, cx| {
-                            if let Some(url) = &link
-                                && activate_link(event, clicked_selection.as_ref())
-                            {
-                                open_link(url, window, cx);
-                            }
-                        })
-                        .on_mouse_down(MouseButton::Right, move |event, window, cx| {
-                            if let Some(url) = &menu_link {
-                                link_menu(url, event.position, window, cx);
-                                cx.stop_propagation();
-                            }
+                        .when_some(link, |d, url| {
+                            let menu_url = url.clone();
+                            d.cursor(gpui::CursorStyle::PointingHand)
+                                .on_click(move |event, window, cx| {
+                                    if activate_link(event, clicked_selection.as_ref()) {
+                                        open_link(&url, window, cx);
+                                    }
+                                })
+                                .on_mouse_down(MouseButton::Right, move |event, window, cx| {
+                                    link_menu(&menu_url, event.position, window, cx);
+                                    cx.stop_propagation();
+                                })
                         })
                         .into_any_element(),
                 );
@@ -721,16 +755,25 @@ fn rich_inline(
             }
         }
     }
-    div()
-        .id(id)
-        .role(Role::Label)
-        .aria_label(runs.iter().map(|run| run.text.as_str()).collect::<String>())
+    let text: SharedString = runs
+        .iter()
+        .map(|run| run.text.as_str())
+        .collect::<String>()
+        .into();
+    let child = div()
+        .id(id.clone())
+        .when(!has_links, |d| d.role(Role::Label).aria_label(text.clone()))
         .w_full()
         .flex()
         .flex_wrap()
         .items_center()
         .children(children)
-        .into_any_element()
+        .into_any_element();
+    if has_links {
+        LinkedText::new(id, text, links.into(), fragments, child).into_any_element()
+    } else {
+        child
+    }
 }
 fn is_file_chip(text: &str) -> bool {
     !text.chars().any(char::is_whitespace)
@@ -812,17 +855,21 @@ pub(crate) fn body_selected(
         .line_height(px(24.));
     match &row.part {
         Part::Text { runs, heading } => {
-            let mut runs = runs.clone();
-            if *heading > 0 {
-                for run in &mut runs {
-                    run.style.bold = true;
-                }
-            }
+            let runs = if *heading > 0 {
+                Cow::Owned(
+                    runs.iter()
+                        .cloned()
+                        .map(|mut run| {
+                            run.style.bold = true;
+                            run
+                        })
+                        .collect::<Vec<_>>(),
+                )
+            } else {
+                Cow::Borrowed(runs.as_slice())
+            };
             let heading = if tone == Tone::Work { 0 } else { *heading };
             if heading > 0 {
-                for run in &mut runs {
-                    run.style.bold = true;
-                }
                 body = body
                     .text_size(px(match heading {
                         1 => 22.,
@@ -983,9 +1030,8 @@ pub(crate) fn code_lines(
     range: Range<usize>,
     highlighted: Option<&HighlightedDocument>,
     query: &str,
-    current: bool,
 ) -> Div {
-    code_lines_selected(fence, range, highlighted, query, current, None)
+    code_lines_selected(fence, range, highlighted, query, false, None)
 }
 pub(crate) fn code_lines_selected(
     fence: &Fence,
@@ -1006,15 +1052,9 @@ pub(crate) fn code_lines_selected(
         )
     });
     let start = range.start;
-    let longest = fence
-        .lines
-        .iter()
-        .map(|r| fence.code[r.clone()].chars().count())
-        .max()
-        .unwrap_or(0);
     div()
         .relative()
-        .w(px(longest as f32 * 7.3 + 48.))
+        .w(fence.width())
         .min_w_full()
         .flex()
         .flex_col()
@@ -1143,7 +1183,7 @@ fn svg_source_preview(source: &str) -> AnyElement {
                 .pr_2()
                 .border_t_1()
                 .border_color(content(0.1))
-                .child(code_lines(&fence, 0..fence.lines.len(), None, "", false)),
+                .child(code_lines(&fence, 0..fence.lines.len(), None, "")),
         )
         .into_any_element()
 }
@@ -1210,6 +1250,174 @@ pub(crate) fn selection_text(row: &MarkdownRow) -> String {
 mod file_link_tests {
     use super::*;
     use vorkspace_model::markdown_model::InlineStyle;
+
+    #[gpui::test]
+    fn wrapped_links_keep_one_accessible_target_and_text_order_after_resize(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use gpui::{Context, FocusHandle, VisualTestContext, size};
+        use std::{cell::RefCell, rc::Rc};
+
+        struct AccessibleMarkdown {
+            row: MarkdownRow,
+            focus: FocusHandle,
+            opened: Rc<RefCell<Vec<String>>>,
+        }
+        impl gpui::Render for AccessibleMarkdown {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                let opened = self.opened.clone();
+                div()
+                    .track_focus(&self.focus)
+                    .w_full()
+                    .p(px(20.))
+                    .on_action(move |path: &crate::file_link::OpenPath, _, _| {
+                        opened.borrow_mut().push(path.0.clone());
+                    })
+                    .child(body(
+                        &self.row,
+                        "accessible-row".into(),
+                        Tone::Normal,
+                        None,
+                        vorkspace_ui::clock::Instant::now(),
+                    ))
+            }
+        }
+
+        let opened = Rc::new(RefCell::new(Vec::new()));
+        let row = rows(&Block::Paragraph {
+            runs: vec![
+                InlineRun {
+                    text: "Before ".into(),
+                    style: InlineStyle::default(),
+                },
+                InlineRun {
+                    text: "long café source ".into(),
+                    style: InlineStyle {
+                        link: Some("/fixture/source.rs:5:1".into()),
+                        ..Default::default()
+                    },
+                },
+                InlineRun {
+                    text: "continues over several wrapped lines".into(),
+                    style: InlineStyle {
+                        bold: true,
+                        link: Some("/fixture/source.rs:5:1".into()),
+                        ..Default::default()
+                    },
+                },
+                InlineRun {
+                    text: " after".into(),
+                    style: InlineStyle::default(),
+                },
+            ],
+        })
+        .remove(0);
+        let window = cx.update(|cx| {
+            cx.open_window(Default::default(), |window, cx| {
+                cx.new(|cx| {
+                    let focus = cx.focus_handle();
+                    window.focus(&focus, cx);
+                    AccessibleMarkdown {
+                        row,
+                        focus,
+                        opened: opened.clone(),
+                    }
+                })
+            })
+            .unwrap()
+        });
+        let visual = &mut VisualTestContext::from_window(window.into(), cx);
+        visual.activate_accessibility();
+        for rich in [false, true] {
+            if rich {
+                window
+                    .update(visual, |view, _, cx| {
+                        let Part::Text { runs, .. } = &mut view.row.part else {
+                            panic!()
+                        };
+                        runs[0].text.insert(0, ' ');
+                        runs.insert(
+                            0,
+                            InlineRun {
+                                text: "snippet".into(),
+                                style: InlineStyle {
+                                    code: true,
+                                    ..Default::default()
+                                },
+                            },
+                        );
+                        cx.notify();
+                    })
+                    .unwrap();
+            }
+            let mut identity = None;
+            for width in [210., 350., 210.] {
+                visual.simulate_resize(size(px(width), px(400.)));
+                visual.run_until_parked();
+                let node = window
+                    .update(visual, |_, window, _| {
+                        let tree: serde_json::Value =
+                            serde_json::from_str(&window.debug_a11y_tree_json().unwrap()).unwrap();
+                        let nodes = tree["nodes"].as_object().unwrap();
+                        let paragraph = nodes
+                            .values()
+                            .find(|node| node["aria"]["role"] == "Paragraph")
+                            .unwrap();
+                        assert!(paragraph["aria"]["value"].is_null());
+                        let children: Vec<_> = paragraph["children"]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .map(|id| &nodes[id.as_str().unwrap()])
+                            .collect();
+                        let text: String = children
+                            .iter()
+                            .map(|node| {
+                                node["aria"]["value"]
+                                    .as_str()
+                                    .or_else(|| node["aria"]["label"].as_str())
+                                    .unwrap()
+                            })
+                            .collect();
+                        assert_eq!(
+                            text,
+                            if rich {
+                                "snippet Before long café source continues over several wrapped lines after"
+                            } else {
+                                "Before long café source continues over several wrapped lines after"
+                            }
+                        );
+                        let links: Vec<_> = children
+                            .into_iter()
+                            .filter(|node| node["aria"]["role"] == "Link")
+                            .collect();
+                        assert_eq!(links.len(), 1);
+                        assert_eq!(
+                            links[0]["aria"]["label"],
+                            "long café source continues over several wrapped lines"
+                        );
+                        gpui::accesskit::NodeId(
+                            links[0]["accesskit_id"].as_str().unwrap().parse().unwrap(),
+                        )
+                    })
+                    .unwrap();
+                assert_eq!(*identity.get_or_insert(node), node);
+                visual.simulate_accessibility_action(gpui::accesskit::ActionRequest {
+                    action: gpui::AccessibleAction::Click,
+                    target_tree: gpui::accesskit::TreeId::ROOT,
+                    target_node: node,
+                    data: None,
+                });
+                visual.run_until_parked();
+            }
+        }
+        assert_eq!(
+            *opened.borrow(),
+            vec!["/fixture/source.rs:5:1"; 6],
+            "accessible activation dispatches the original target after each reflow"
+        );
+    }
+
     #[test]
     fn preview_links_keep_their_document_base_and_display_text() {
         let runs = vec![

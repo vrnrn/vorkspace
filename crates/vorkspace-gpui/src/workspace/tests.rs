@@ -65,12 +65,12 @@ fn restore_keeps_empty_vorkspace_even_with_an_unrelated_saved_chat() {
 }
 
 #[test]
-fn archived_project_is_not_reopened_by_active_session_or_stale_metadata() {
+fn archived_project_is_not_reopened_by_active_session() {
     let saved = serde_json::json!({
-            "projects": ["/work/old", "/work/other"], "project": "/work/old", "active": 42,
-            "tabs": [42], "project_archive": {"/work/old": true},
-            "desktop_preferences_metadata": {"vorkspace.archivedProjects": "[{\"path\":\"/work/old/\"}]"}
-        }).to_string();
+        "projects": ["/work/old", "/work/other"], "project": "/work/old", "active": 42,
+        "tabs": [42], "project_archive": {"/work/old": true}
+    })
+    .to_string();
     let mut state = Workspace::restore(Some(&saved), &[(42, "/work/old".into())], "/work/old");
     assert_eq!(state.project, "/work/other");
     assert!(!state.projects.contains(&"/work/old".into()));
@@ -157,27 +157,6 @@ fn terminal_legacy_restore_preserves_other_tabs_and_upgrades_scope_identity() {
 }
 
 #[test]
-fn original_layout_is_used_for_fresh_and_previously_experimental_workspaces() {
-    assert!(Workspace::default().classic_layout);
-    assert!(
-        serde_json::from_str::<Workspace>("{}")
-            .unwrap()
-            .classic_layout
-    );
-    for classic in [false, true] {
-        let saved =
-            serde_json::json!({"classic_layout":classic,"new_layout_prompt_dismissed":false});
-        let restored = Workspace::restore(Some(&saved.to_string()), &[], "/work");
-        assert!(restored.classic_layout);
-        let reopened = Workspace::restore(
-            Some(&serde_json::to_string(&restored).unwrap()),
-            &[],
-            "/work",
-        );
-        assert!(reopened.classic_layout);
-    }
-}
-#[test]
 fn sidebar_navigation_normalizes_ids_and_preserves_disabled_slots_and_hidden_state() {
     let saved = serde_json::json!({
         "sidebar_navigation_order": ["notes", "unknown", "plugins", "github", "notes", "meetings", "automations"],
@@ -253,7 +232,6 @@ fn sidebar_navigation_normalizes_ids_and_preserves_disabled_slots_and_hidden_sta
         restored.sidebar_hidden_connectors,
         state.sidebar_hidden_connectors
     );
-    assert!(!restored.compact_session_cards);
     assert_eq!(SidebarNavigation::normalize(&[]), SidebarNavigation::ALL);
     assert!(state.reorder_sidebar_navigation(
         Provider(Connector::Gitlab),
@@ -291,94 +269,6 @@ fn deleted_project_stays_hidden_until_explicit_reopen() {
 }
 
 #[test]
-fn malformed_legacy_rail_remains_unmigrated_and_preserved() {
-    let source = serde_json::json!({"vorkspace.projectGroups":"not-json", "unrelated":"keep"});
-    let serialized = serde_json::json!({"desktop_preferences_metadata":source}).to_string();
-    let mut state = Workspace::restore(Some(&serialized), &[], "/work");
-    assert!(state.project_rail_state.is_none());
-    assert!(state.migrate_project_rail().is_err());
-    assert_eq!(state.desktop_preferences_metadata.unwrap(), source);
-}
-
-#[test]
-fn delayed_legacy_rail_merges_unrelated_data_and_keeps_native_overrides() {
-    let mut state = Workspace::default();
-    let rail = state.project_rail_mut();
-    rail.groups.push(ProjectRailGroup {
-        id: "native".into(),
-        name: "Native".into(),
-        collapsed: false,
-    });
-    rail.assignments.insert("/native".into(), "native".into());
-    rail.assignment_overrides
-        .insert("/native".into(), Some("native".into()));
-    rail.assignment_overrides.insert("/removed".into(), None);
-    rail.pin_overrides.insert("/removed".into(), false);
-    rail.pin_overrides.insert("/native".into(), true);
-    rail.pinned.insert("/native".into());
-    let saved = serde_json::to_string(&state).unwrap();
-    let mut state = Workspace::restore(Some(&saved), &[], "/native");
-    state.desktop_preferences_metadata = Some(serde_json::json!({
-        "vorkspace.projectGroups": "[{\"id\":\"legacy\",\"name\":\"Legacy\"}]",
-        "vorkspace.projectGroupAssignments": "{\"/legacy\":\"legacy\",\"/removed\":\"legacy\"}",
-        "vorkspace.projectRailPinned": "[\"/legacy\",\"/removed\"]"
-    }));
-    state.migrate_project_rail().unwrap();
-    let rail = state.project_rail_state.unwrap();
-    assert_eq!(
-        rail.groups
-            .iter()
-            .map(|g| g.id.as_str())
-            .collect::<Vec<_>>(),
-        vec!["legacy", "native"]
-    );
-    assert_eq!(
-        rail.assignments.get("/legacy").map(String::as_str),
-        Some("legacy")
-    );
-    assert_eq!(
-        rail.assignments.get("/native").map(String::as_str),
-        Some("native")
-    );
-    assert!(!rail.assignments.contains_key("/removed"));
-    assert!(rail.pinned.contains("/legacy") && rail.pinned.contains("/native"));
-    assert!(!rail.pinned.contains("/removed"));
-}
-
-#[test]
-fn project_rail_migration_and_native_edits_survive_stale_source_restart() {
-    let legacy = serde_json::json!({
-        "vorkspace.projectGroups": "[{\"id\":\"work\",\"name\":\"Work\",\"collapsed\":true}]",
-        "vorkspace.projectGroupAssignments": "{\"/work/\":\"work\"}",
-        "vorkspace.projectRailPinned": "[\"/work/\"]",
-        "unrelated": "preserved"
-    });
-    let saved = serde_json::json!({"desktop_preferences_metadata": legacy}).to_string();
-    let mut state = Workspace::restore(Some(&saved), &[], "/work");
-    let rail = state.project_rail_mut();
-    assert_eq!(rail.groups[0].name, "Work");
-    assert_eq!(
-        rail.assignments.get("/work").map(String::as_str),
-        Some("work")
-    );
-    assert!(rail.pinned.remove("/work"));
-    rail.assignments.remove("/work");
-    rail.groups[0].name = "Renamed".into();
-    state.project_group_collapsed.insert("work".into(), false);
-    let serialized = serde_json::to_string(&state).unwrap();
-    let reopened = Workspace::restore(Some(&serialized), &[], "/work");
-    let rail = reopened.project_rail_state.unwrap();
-    assert!(rail.pinned.is_empty());
-    assert!(rail.assignments.is_empty());
-    assert_eq!(rail.groups[0].name, "Renamed");
-    assert_eq!(reopened.project_group_collapsed.get("work"), Some(&false));
-    assert_eq!(
-        reopened.desktop_preferences_metadata.unwrap()["unrelated"],
-        "preserved"
-    );
-}
-
-#[test]
 fn sidebar_tools_keep_per_project_selection_and_normalize_main_tab_order() {
     assert_eq!(
         SidebarTab::normalize(&[SidebarTab::Changes, SidebarTab::Graph, SidebarTab::Changes]),
@@ -412,26 +302,7 @@ fn sidebar_tools_keep_per_project_selection_and_normalize_main_tab_order() {
     assert_eq!(state.sidebar_tab(), SidebarTab::Changes);
 }
 #[test]
-fn earlier_native_save_recovers_original_sidebar_from_retained_desktop_metadata() {
-    let saved = serde_json::json!({
-        "project":"/work",
-        "preferences":{"sounds":false},
-        "desktop_preferences_metadata":{
-            "vorkspace.projectRailOpen":"0",
-            "vorkspace.projectRailWidth":"246",
-            "vorkspace.projectSidebarTabs.v1":r#"{"/work":"files"}"#,
-            "vorkspace.sidebarTabOrder":r#"["changes","inbox","sessions"]"#
-        }
-    });
-    let state = Workspace::restore(Some(&saved.to_string()), &[], "/work");
-    assert!(!state.project_rail_open);
-    assert_eq!(state.project_rail_width, 246.);
-    assert_eq!(state.sidebar_tab(), SidebarTab::Files);
-    assert!(!state.preferences.sounds);
-    assert_eq!(
-        serde_json::to_value(state.desktop_preferences_metadata).unwrap(),
-        saved["desktop_preferences_metadata"]
-    );
+fn malformed_sidebar_fields_take_their_defaults() {
     let malformed = serde_json::json!({
         "project":"/work",
         "project_rail_open":"invalid",
@@ -583,7 +454,7 @@ fn terminal_docks_add_close_move_and_clamp_like_project_terminal() {
     assert_eq!(s.docks["/k"].terminals, ["/w"]);
 }
 #[test]
-fn terminal_docks_reorder_keeping_the_active_terminal_and_close_others() {
+fn terminal_docks_reorder_keeping_the_active_terminal() {
     let mut dock = TerminalDock::default();
     for cwd in ["/a", "/b", "/c", "/d"] {
         dock.add(cwd.into());
@@ -602,11 +473,6 @@ fn terminal_docks_reorder_keeping_the_active_terminal_and_close_others() {
     dock.reorder(3, 1);
     assert_eq!(dock.terminals, ["/b", "/a", "/c", "/d"]);
     assert_eq!(dock.active, 3);
-    dock.keep_only(2);
-    assert_eq!(
-        (dock.terminals.clone(), dock.active),
-        (vec!["/c".to_string()], 0)
-    );
 }
 #[test]
 fn restore_keeps_project_selection_and_prunes_stale_project_focus() {
@@ -651,31 +517,6 @@ fn restore_keeps_project_selection_and_prunes_stale_project_focus() {
     assert_eq!(fresh.project, "/a");
 }
 #[test]
-fn restoring_history_keeps_only_remembered_or_selected_projects() {
-    let saved = serde_json::json!({
-        "project": "/code/app",
-        "projects": ["/code/app", "/code/other"],
-        "tabs": [2],
-        "active": 2,
-        "desktop_project_preferences": {"projects": ["/code/app", "/code/other"]}
-    })
-    .to_string();
-    let sessions = vec![
-        (1, "/code/app".into()),
-        (2, "/tmp/internal-bot-chat".into()),
-        (3, "/private/var/folders/temporary".into()),
-    ];
-    let restored = Workspace::restore(Some(&saved), &sessions, "/code/app");
-    assert_eq!(restored.projects, ["/code/app", "/code/other"]);
-    assert_eq!(restored.project, "/code/app");
-    assert_eq!(restored.active, None);
-    let serialized = serde_json::to_value(restored).unwrap();
-    assert_eq!(
-        serialized["desktop_project_preferences"]["projects"],
-        serde_json::json!(["/code/app", "/code/other"])
-    );
-}
-#[test]
 fn restore_prunes_stale_tabs_and_preserves_an_intentionally_empty_workspace() {
     let mut s = Workspace::default();
     s.open(1);
@@ -692,10 +533,6 @@ fn restore_prunes_stale_tabs_and_preserves_an_intentionally_empty_workspace() {
     let s = Workspace::restore(Some("{}"), &[(1, "/work/a".into())], "/work/a");
     assert!(s.tabs.is_empty());
     assert!(
-        s.compact_session_cards,
-        "older workspaces retain compact cards"
-    );
-    assert!(
         s.sidebar_activity_visible,
         "the retired activity preference remains readable"
     );
@@ -703,35 +540,6 @@ fn restore_prunes_stale_tabs_and_preserves_an_intentionally_empty_workspace() {
         s.sidebar_subscriptions_visible,
         "existing users keep usage visible"
     );
-}
-#[test]
-fn desktop_snapshot_translation_deserializes_and_retains_unported_metadata() {
-    let source = serde_json::json!({
-        "projectCwd":"/work", "activeTabId":"tab",
-        "tabs":[{"id":"tab", "focusedId":"b", "groupId":"assigned", "editorPanes":[], "layout":{"type":"split", "dir":"down", "children":[{"type":"leaf","id":"a"},{"type":"leaf","id":"b"}], "sizes":[0.4,0.6]}}],
-        "projectTerminals":[{"projectPath":"/work", "side":"bottom", "size":240, "open":false, "pane":{"activeFileId":"term", "files":[{"id":"term", "terminal":true, "cwd":"/work/sub"}]}}]
-    });
-    let mapped = vorkspace_core::desktop_preferences::DesktopPreferences::workspace_snapshot(
-        &source,
-        |id| match id {
-            "a" => Some(1),
-            "b" => Some(2),
-            _ => None,
-        },
-    );
-    let saved = mapped.to_string();
-    let restored = Workspace::restore(
-        Some(&saved),
-        &[(1, "/work".into()), (2, "/work".into())],
-        "/work",
-    );
-    assert_eq!(restored.tabs, [1]);
-    assert_eq!(restored.active, Some(2));
-    assert!(restored.layouts[&1].is_split());
-    assert_eq!(restored.focused[&1], 2);
-    assert_eq!(restored.docks["/work"].terminals, ["/work/sub"]);
-    assert!(!restored.docks["/work"].open);
-    assert_eq!(restored.desktop_workspace_snapshot.as_ref(), Some(&source));
 }
 #[test]
 fn restore_drops_retired_channels_app_pane_without_losing_workspace_state() {

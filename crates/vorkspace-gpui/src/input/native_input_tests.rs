@@ -7,7 +7,7 @@ fn existing_field_and_composer_reink_after_theme_changes_without_losing_text(
 ) {
     cx.update(|cx| {
         let mut preferences = vorkspace_ui::preferences::Preferences::default();
-        vorkspace_ui::theme::configure(&preferences, false, true);
+        vorkspace_ui::theme::configure(&preferences, false);
         let field = cx.new(|cx| {
             Input::field(
                 "Search",
@@ -26,7 +26,7 @@ fn existing_field_and_composer_reink_after_theme_changes_without_losing_text(
         });
         for theme in ["light", "dark"] {
             preferences.theme = theme.into();
-            vorkspace_ui::theme::configure(&preferences, false, true);
+            vorkspace_ui::theme::configure(&preferences, false);
             let input = field.read(cx);
             assert_eq!(
                 input.text_color(true, vorkspace_ui::theme::content(1.)),
@@ -51,7 +51,7 @@ fn existing_field_and_composer_reink_after_theme_changes_without_losing_text(
                 );
             }
         }
-        vorkspace_ui::theme::configure(&Default::default(), false, true);
+        vorkspace_ui::theme::configure(&Default::default(), false);
     });
 }
 
@@ -377,7 +377,7 @@ fn secret_fields_preserve_unicode_value_and_mask_drawing_ime_and_clipboard(
     replace(window, secret, cx);
     window
         .update(cx, |input, window, cx| {
-            input.set_secret(true);
+            input.set_secret();
             let rendered = input.render(window, cx).into_element();
             assert_eq!(
                 gpui::Element::a11y_role(&rendered),
@@ -401,7 +401,7 @@ fn secret_fields_preserve_unicode_value_and_mask_drawing_ime_and_clipboard(
                 cx.read_from_clipboard().unwrap().text().as_deref(),
                 Some("existing clipboard")
             );
-            input.set_secret(false);
+            input.secret = false;
             assert_eq!(input.display_text().0.as_ref(), secret);
             input.copy(&Copy, window, cx);
             assert_eq!(
@@ -439,6 +439,15 @@ fn ime_replacement_and_grapheme_deletion(cx: &mut TestAppContext) {
             assert_eq!(input.content.as_ref(), "e\u{301}");
             input.backspace(&Backspace, w, cx);
             assert!(input.content.is_empty());
+            input.set_text("🇨🇦e\u{301}👩‍💻".into(), cx);
+            input.select_range("🇨".len().."🇨".len(), cx);
+            input.right(&Right, w, cx);
+            assert_eq!(input.cursor(), "🇨🇦".len());
+            input.right(&Right, w, cx);
+            assert_eq!(input.cursor(), "🇨🇦e\u{301}".len());
+            input.delete(&Delete, w, cx);
+            assert_eq!(input.content.as_ref(), "🇨🇦e\u{301}");
+            input.select_all(&SelectAll, w, cx);
             input.replace_text_in_range(None, "line one\nline two", w, cx);
             assert_eq!(input.take(cx).as_deref(), Some("line one\nline two"));
         })

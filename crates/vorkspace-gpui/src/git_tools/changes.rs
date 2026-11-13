@@ -1,9 +1,9 @@
-//! GitChangesPanel.tsx in the inset layout: the Changes header with branch
+//! The Changes panel in the inset layout: its header with branch
 //! actions, the commit box, sync and pull-request actions, and the staged
 //! and unstaged files as a list or a tree. Every Git call runs off-thread,
 //! one mutation at a time per checkout.
 use crate::{
-    git_status::{GitChanged, ProjectGit},
+    git_status::ProjectGit,
     input::{self, Input},
     panel_kit::*,
     popover::{
@@ -16,7 +16,7 @@ use gpui::{
 };
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     path::PathBuf,
     sync::{
         Arc,
@@ -199,12 +199,21 @@ struct OpenMenu {
     _events: Subscription,
 }
 
+#[derive(PartialEq, Eq)]
+struct CheckoutScope {
+    cwd: String,
+    revision: u64,
+    head: Option<String>,
+    branch: Option<String>,
+}
+
 pub(crate) struct Changes {
     git: Entity<ProjectGit>,
     cwd: String,
     enabled: bool,
     pub(crate) text_provider: Kind,
     message: Entity<Input>,
+    commit_drafts: HashMap<String, String>,
     amend: Option<(Option<String>, Option<String>)>,
     busy: Option<String>,
     status: Option<String>,
@@ -234,15 +243,15 @@ impl Changes {
         let message = cx.new(Input::commit_message);
         let subscriptions = vec![
             cx.observe(&git, |this, _, cx| this.index_changed(cx)),
-            cx.subscribe(&git, |this, _, _: &GitChanged, cx| this.index_changed(cx)),
             cx.subscribe(&message, |_, _, _: &input::Changed, cx| cx.notify()),
         ];
         let mut this = Self {
+            cwd: git.read(cx).project().to_owned(),
             git,
-            cwd: String::new(),
             enabled: false,
             text_provider: Kind::Claude,
             message,
+            commit_drafts: HashMap::new(),
             amend: None,
             busy: None,
             status: None,
@@ -288,31 +297,33 @@ impl Changes {
             self.load_pr(cx);
         }
     }
-    fn index(&self, cx: &App) -> Option<DiffIndex> {
-        self.git.read(cx).index.clone()
-    }
     fn index_changed(&mut self, cx: &mut Context<Self>) {
         let git = self.git.read(cx);
         let project = git.project().to_owned();
         if project != self.cwd {
-            // Checkouts don't share drafts or in-flight generation.
-            self.cwd = project;
+            let previous = std::mem::replace(&mut self.cwd, project);
+            let text = self.message.read(cx).content.to_string();
+            if !previous.is_empty() && !text.is_empty() {
+                self.commit_drafts.insert(previous, text);
+            }
             self.cancel_generate();
             self.amend = None;
+            self.status = None;
+            self.status_clear = None;
             self.pr = None;
             self.pr_branch = None;
+            self.pr_request += 1;
             self.selected = None;
-            self.message
-                .update(cx, |m, cx| m.set_text(String::new(), cx));
+            self.menu = None;
+            let text = self.commit_drafts.remove(&self.cwd).unwrap_or_default();
+            self.message.update(cx, |m, cx| m.set_text(text, cx));
         }
-        let index = self.git.read(cx).index.clone();
+        let index = self.git.read(cx).snapshot();
         if let Some((branch, head)) = &self.amend
             && (index.as_ref().map(|i| &i.branch) != Some(branch)
                 || index.as_ref().map(|i| &i.head) != Some(head))
         {
             self.amend = None;
-            self.message
-                .update(cx, |m, cx| m.set_text(String::new(), cx));
         }
         let branch = index.as_ref().and_then(|i| i.branch.clone());
         if self.enabled && branch != self.pr_branch {
@@ -324,12 +335,7 @@ impl Changes {
     fn load_pr(&mut self, cx: &mut Context<Self>) {
         self.pr_request += 1;
         let request = self.pr_request;
-        let branch = self
-            .git
-            .read(cx)
-            .index
-            .as_ref()
-            .and_then(|i| i.branch.clone());
+        let branch = self.git.read(cx).index().and_then(|i| i.branch.clone());
         if self.cwd.is_empty() || self.cwd == "~" || branch.is_none() {
             self.pr = None;
             return;
@@ -357,8 +363,8 @@ impl Changes {
         )
     }
     fn rebuild(&mut self, cx: &mut Context<Self>) {
-        let index = self.git.read(cx).index.clone();
-        let (staged, unstaged) = Self::staged_unstaged(index.as_ref());
+        let index = self.git.read(cx).snapshot();
+        let (staged, unstaged) = Self::staged_unstaged(index.as_deref());
         let files = index.as_ref().map_or(&[][..], |i| &i.files[..]);
         let mut lines = Vec::new();
         for (kind, members, open) in [
@@ -426,11 +432,9 @@ impl Changes {
     fn mutated(&mut self, cx: &mut Context<Self>) {
         self.git.update(cx, |git, cx| git.changed(cx));
     }
-    /// `window.alert`.
     fn fail(error: String, window: &mut Window, cx: &mut App) {
         drop(window.prompt(PromptLevel::Critical, &error, None, &["OK"], cx));
     }
-    /// confirmNative: Tauri's `ask` with the OK label it was given.
     fn confirm(
         message: String,
         ok: &'static str,
@@ -450,29 +454,76 @@ impl Changes {
         cx.background_executor()
             .spawn(async move { matches!(answer.await, Ok(0)) })
     }
-    /// Runs `work` against the checkout with `busy` held, then rereads.
-    fn run_git(
-        &mut self,
-        busy: String,
-        work: impl FnOnce(PathBuf) -> Result<(), String> + Send + 'static,
-        then: impl FnOnce(&mut Self, &mut Window, &mut Context<Self>) + 'static,
+    fn checkout_scope(&self, cx: &App) -> CheckoutScope {
+        let git = self.git.read(cx);
+        let index = git.index();
+        CheckoutScope {
+            cwd: git.project().to_owned(),
+            revision: git.checkout_revision(),
+            head: index.and_then(|i| i.head.clone()),
+            branch: index.and_then(|i| i.branch.clone()),
+        }
+    }
+
+    fn on_checkout(&self, scope: &CheckoutScope, cx: &App) -> bool {
+        let git = self.git.read(cx);
+        self.cwd == scope.cwd && git.checkout_revision() == scope.revision
+    }
+
+    fn after_confirmation(
+        &self,
+        questions: impl IntoIterator<Item = (String, &'static str)> + 'static,
+        action: impl FnOnce(&mut Self, &mut Window, &mut Context<Self>) + 'static,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.busy.is_some() {
+        let scope = self.checkout_scope(cx);
+        cx.spawn_in(window, async move |this, cx| {
+            for (question, label) in questions {
+                let Ok(Some(answer)) = this.update_in(cx, |this, window, cx| {
+                    (this.checkout_scope(cx) == scope)
+                        .then(|| Self::confirm(question, label, window, cx))
+                }) else {
+                    return;
+                };
+                if !answer.await {
+                    return;
+                }
+            }
+            let _ = this.update_in(cx, |this, window, cx| {
+                if this.checkout_scope(cx) == scope {
+                    action(this, window, cx);
+                }
+            });
+        })
+        .detach();
+    }
+
+    fn run_git<T: Send + 'static>(
+        &mut self,
+        busy: String,
+        work: impl FnOnce(PathBuf) -> Result<T, String> + Send + 'static,
+        then: impl FnOnce(&mut Self, T, &CheckoutScope, &mut Window, &mut Context<Self>) + 'static,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let scope = self.checkout_scope(cx);
+        if self.busy.is_some() || scope.cwd != self.cwd {
             return;
         }
         self.busy = Some(busy);
         cx.notify();
-        let path = PathBuf::from(&self.cwd);
+        let path = PathBuf::from(&scope.cwd);
         let task = cx.background_executor().spawn(async move { work(path) });
         cx.spawn_in(window, async move |this, cx| {
             let result = task.await;
             let _ = this.update_in(cx, |this, window, cx| {
                 this.busy = None;
-                this.mutated(cx);
+                if this.git.read(cx).project() == scope.cwd {
+                    this.mutated(cx);
+                }
                 match result {
-                    Ok(()) => then(this, window, cx),
+                    Ok(value) => then(this, value, &scope, window, cx),
                     Err(error) => Self::fail(error, window, cx),
                 }
                 cx.notify();
@@ -500,7 +551,7 @@ impl Changes {
                     FileAction::Unstage => scm::unstage_file(&path, &relative),
                     FileAction::Discard => scm::discard_file(&path, &relative),
                 },
-                |_, _, _| {},
+                |_, (), _, _, _| {},
                 window,
                 cx,
             );
@@ -511,22 +562,17 @@ impl Changes {
         }
         let name = basename(&file.relative).to_owned();
         let untracked = file.status == "untracked";
-        let ask = Self::confirm(
-            if untracked {
-                format!("Delete untracked file {name}?")
-            } else {
-                format!("Discard changes in {name}? This cannot be undone.")
-            },
-            if untracked { "Delete" } else { "Discard" },
+        let question = if untracked {
+            format!("Delete untracked file {name}?")
+        } else {
+            format!("Discard changes in {name}? This cannot be undone.")
+        };
+        self.after_confirmation(
+            [(question, if untracked { "Delete" } else { "Discard" })],
+            start,
             window,
             cx,
         );
-        cx.spawn_in(window, async move |this, cx| {
-            if ask.await {
-                let _ = this.update_in(cx, start);
-            }
-        })
-        .detach();
     }
     fn run_all(&mut self, action: FileAction, window: &mut Window, cx: &mut Context<Self>) {
         if self.busy.is_some() {
@@ -545,7 +591,7 @@ impl Changes {
                     FileAction::Unstage => scm::unstage_all(&path),
                     FileAction::Discard => scm::discard_all(&path),
                 },
-                |_, _, _| {},
+                |_, (), _, _, _| {},
                 window,
                 cx,
             );
@@ -554,8 +600,8 @@ impl Changes {
             start(self, window, cx);
             return;
         }
-        let index = self.index(cx);
-        let (_, unstaged) = Self::staged_unstaged(index.as_ref());
+        let index = self.git.read(cx).snapshot();
+        let (_, unstaged) = Self::staged_unstaged(index.as_deref());
         let Some(index) = index.filter(|_| !unstaged.is_empty()) else {
             return;
         };
@@ -572,18 +618,12 @@ impl Changes {
         } else {
             format!("Discard all unstaged changes in {n} files? This cannot be undone.")
         };
-        let ask = Self::confirm(
-            message,
-            if untracked_only { "Delete" } else { "Discard" },
+        self.after_confirmation(
+            [(message, if untracked_only { "Delete" } else { "Discard" })],
+            start,
             window,
             cx,
         );
-        cx.spawn_in(window, async move |this, cx| {
-            if ask.await {
-                let _ = this.update_in(cx, start);
-            }
-        })
-        .detach();
     }
     fn run_folder(
         &mut self,
@@ -602,14 +642,14 @@ impl Changes {
                     scm::unstage_file(&path, &relative)
                 }
             },
-            |_, _, _| {},
+            |_, (), _, _, _| {},
             window,
             cx,
         );
     }
 
     fn pull(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let index = self.index(cx);
+        let index = self.git.read(cx).snapshot();
         if !index.is_some_and(|i| i.remote.is_some() && i.upstream.is_some()) {
             return;
         }
@@ -617,7 +657,11 @@ impl Changes {
         self.run_git(
             "pull".into(),
             |path| scm::pull(&path),
-            |this, _, cx| this.set_status("Pull complete", cx),
+            |this, (), scope, _, cx| {
+                if this.on_checkout(scope, cx) {
+                    this.set_status("Pull complete", cx);
+                }
+            },
             window,
             cx,
         );
@@ -636,7 +680,11 @@ impl Changes {
         pick_text_harness(self.text_provider)
     }
     fn generate(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let has_files = self.index(cx).is_some_and(|i| !i.files.is_empty());
+        let has_files = self
+            .git
+            .read(cx)
+            .snapshot()
+            .is_some_and(|i| !i.files.is_empty());
         if !has_files || self.busy.is_some() || self.generate_cancel.is_some() {
             return;
         }
@@ -652,6 +700,7 @@ impl Changes {
         self.generate_cancel = Some(cancel.clone());
         self.busy = Some("generate".into());
         cx.notify();
+        let draft = self.message.read(cx).content.clone();
         let cwd = PathBuf::from(&self.cwd);
         let flag = cancel.clone();
         let work = cx
@@ -665,9 +714,11 @@ impl Changes {
                 }
                 this.generate_cancel = None;
                 this.busy = None;
-                match result {
-                    Ok(message) => this.message.update(cx, |m, cx| m.set_text(message, cx)),
-                    Err(error) => Self::fail(error, window, cx),
+                if this.message.read(cx).content == draft {
+                    match result {
+                        Ok(message) => this.message.update(cx, |m, cx| m.set_text(message, cx)),
+                        Err(error) => Self::fail(error, window, cx),
+                    }
                 }
                 cx.notify();
             });
@@ -675,36 +726,41 @@ impl Changes {
         .detach();
     }
     fn toggle_amend(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.busy.is_some() {
+            return;
+        }
         if self.amend.take().is_some() {
             cx.notify();
             return;
         }
-        let path = PathBuf::from(&self.cwd);
+        let scope = self.checkout_scope(cx);
+        let path = PathBuf::from(&scope.cwd);
         let work = cx
             .background_executor()
             .spawn(async move { scm::head_message(&path) });
         cx.spawn_in(window, async move |this, cx| {
             let result = work.await;
-            let _ = this.update_in(cx, |this, window, cx| match result {
-                Ok(head) => {
-                    if this.message.read(cx).content.trim().is_empty() {
-                        this.message.update(cx, |m, cx| m.set_text(head, cx));
-                    }
-                    let index = this.index(cx);
-                    this.amend = Some((
-                        index.as_ref().and_then(|i| i.branch.clone()),
-                        index.and_then(|i| i.head),
-                    ));
-                    cx.notify();
+            let _ = this.update_in(cx, |this, window, cx| {
+                if this.checkout_scope(cx) != scope {
+                    return;
                 }
-                Err(error) => Self::fail(error, window, cx),
+                match result {
+                    Ok(head) => {
+                        if this.message.read(cx).content.trim().is_empty() {
+                            this.message.update(cx, |m, cx| m.set_text(head, cx));
+                        }
+                        this.amend = Some((scope.branch, scope.head));
+                        cx.notify();
+                    }
+                    Err(error) => Self::fail(error, window, cx),
+                }
             });
         })
         .detach();
     }
 
     fn can_commit(&self, cx: &App) -> bool {
-        let index = self.git.read(cx).index.as_ref();
+        let index = self.git.read(cx).index();
         let staged = index.is_some_and(|i| i.files.iter().any(|f| f.staged));
         (staged || self.amend.is_some())
             && !self.message.read(cx).content.trim().is_empty()
@@ -717,10 +773,10 @@ impl Changes {
         if !self.can_commit(cx) {
             return;
         }
-        let index = self.index(cx);
+        let index = self.git.read(cx).snapshot();
         let mut questions = Vec::new();
         if (push || create_pr)
-            && Self::on_default(index.as_ref())
+            && Self::on_default(index.as_deref())
             && let Some(branch) = index.as_ref().and_then(|i| i.branch.clone())
         {
             questions.push((
@@ -739,22 +795,12 @@ impl Changes {
             ));
         }
         self.menu = None;
-        cx.spawn_in(window, async move |this, cx| {
-            for (question, ok) in questions {
-                let Ok(ask) =
-                    this.update_in(cx, |_, window, cx| Self::confirm(question, ok, window, cx))
-                else {
-                    return;
-                };
-                if !ask.await {
-                    return;
-                }
-            }
-            let _ = this.update_in(cx, |this, window, cx| {
-                this.commit_now(push, create_pr, window, cx)
-            });
-        })
-        .detach();
+        self.after_confirmation(
+            questions,
+            move |this, window, cx| this.commit_now(push, create_pr, window, cx),
+            window,
+            cx,
+        );
     }
     fn commit_now(
         &mut self,
@@ -763,71 +809,77 @@ impl Changes {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if !self.can_commit(cx) {
+            return;
+        }
         let message = self.message.read(cx).content.to_string();
+        let submitted = message.clone();
         let amend = self.amend.is_some();
         let pr = create_pr.then(|| self.text_harness());
         self.run_git(
             if create_pr { "pr" } else { "commit" }.into(),
             move |path| {
                 scm::commit(&path, &message, amend)?;
-                if push || create_pr {
-                    scm::push(&path)?;
+                if (push || create_pr)
+                    && let Err(error) = scm::push(&path)
+                {
+                    // A failed push leaves the local commit in place.
+                    return Ok(Some(Err(format!(
+                        "Commit created. Push failed.\n\n{error}"
+                    ))));
                 }
-                Ok(())
+                Ok(pr.map(|harness| create_pr_blocking(harness, &path)))
             },
-            move |this, window, cx| {
-                this.amend = None;
-                this.message
-                    .update(cx, |m, cx| m.set_text(String::new(), cx));
-                if let Some(harness) = pr {
-                    this.open_created_pr(harness, window, cx);
+            move |this, result, scope, window, cx| {
+                if this.cwd == scope.cwd {
+                    this.amend = None;
+                    if this.message.read(cx).content.as_ref() == submitted.as_str() {
+                        this.message
+                            .update(cx, |m, cx| m.set_text(String::new(), cx));
+                    }
+                } else if this.commit_drafts.get(&scope.cwd) == Some(&submitted) {
+                    this.commit_drafts.remove(&scope.cwd);
+                }
+                if let Some(result) = result {
+                    this.finish_publish(result, scope, window, cx);
                 }
             },
             window,
             cx,
         );
     }
-    /// generatePrContent, `gh pr create`, then the browser.
-    fn open_created_pr(
+    fn finish_publish(
         &mut self,
-        harness: Option<(Kind, PathBuf)>,
+        result: Result<String, String>,
+        scope: &CheckoutScope,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.busy = Some("pr".into());
-        cx.notify();
-        let cwd = PathBuf::from(&self.cwd);
-        let work = cx
-            .background_executor()
-            .spawn(async move { create_pr_blocking(harness, &cwd) });
-        cx.spawn_in(window, async move |this, cx| {
-            let result = work.await;
-            let _ = this.update_in(cx, |this, window, cx| {
-                this.busy = None;
-                this.mutated(cx);
-                this.load_pr(cx);
-                match result {
-                    Ok(url) => cx.open_url(url.trim()),
-                    Err(error) => Self::fail(error, window, cx),
-                }
-                cx.notify();
-            });
-        })
-        .detach();
+        if self.on_checkout(scope, cx) {
+            self.load_pr(cx);
+        }
+        match result {
+            Ok(url) => cx.open_url(url.trim()),
+            Err(error) => Self::fail(error, window, cx),
+        }
     }
     fn sync(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.run_git(
             "sync".into(),
             |path| scm::sync(&path),
-            |this, _, cx| this.load_pr(cx),
+            |this, (), scope, _, cx| {
+                if this.on_checkout(scope, cx) {
+                    this.load_pr(cx);
+                }
+            },
             window,
             cx,
         );
     }
     fn create_pr(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let index = self.index(cx);
+        let index = self.git.read(cx).snapshot();
         let ahead = index.as_ref().is_some_and(|i| i.ahead > 0);
-        let question = Self::on_default(index.as_ref()).then(|| {
+        let question = Self::on_default(index.as_deref()).then(|| {
             format!(
                 "Create a pull request from default branch \"{}\"?",
                 index
@@ -837,32 +889,25 @@ impl Changes {
             )
         });
         let harness = self.text_harness();
-        cx.spawn_in(window, async move |this, cx| {
-            if let Some(question) = question {
-                let Ok(ask) = this.update_in(cx, |_, window, cx| {
-                    Self::confirm(question, "OK", window, cx)
-                }) else {
-                    return;
-                };
-                if !ask.await {
-                    return;
-                }
-            }
-            let _ = this.update_in(cx, |this, window, cx| {
-                if ahead {
-                    this.run_git(
-                        "pr".into(),
-                        |path| scm::push(&path),
-                        move |this, window, cx| this.open_created_pr(harness, window, cx),
-                        window,
-                        cx,
-                    );
-                } else {
-                    this.open_created_pr(harness, window, cx);
-                }
-            });
-        })
-        .detach();
+        self.after_confirmation(
+            question.map(|question| (question, "OK")),
+            move |this, window, cx| {
+                this.run_git(
+                    "pr".into(),
+                    move |path| {
+                        if ahead {
+                            scm::push(&path)?;
+                        }
+                        Ok(create_pr_blocking(harness, &path))
+                    },
+                    Self::finish_publish,
+                    window,
+                    cx,
+                );
+            },
+            window,
+            cx,
+        );
     }
 
     fn open_menu(&mut self, kind: MenuKind, window: &mut Window, cx: &mut Context<Self>) {
@@ -872,7 +917,7 @@ impl Changes {
             return;
         }
         self.menu = None;
-        let index = self.index(cx);
+        let index = self.git.read(cx).snapshot();
         let items: Vec<MenuItem> = match kind {
             MenuKind::Branch => {
                 let can_pull = index
@@ -898,6 +943,9 @@ impl Changes {
                     MenuItem::Separator,
                     MenuAction::new("amend", "Amend last commit")
                         .checked(self.amend.is_some())
+                        .disabled(
+                            self.busy.is_some() || index.as_ref().is_none_or(|i| i.head.is_none()),
+                        )
                         .into(),
                 ]
             }
@@ -936,7 +984,7 @@ impl Changes {
         cx.notify();
     }
     fn push_options(&self, cx: &App) -> (bool, bool) {
-        let index = self.git.read(cx).index.as_ref();
+        let index = self.git.read(cx).index();
         let has_remote = index.is_some_and(|i| i.remote.is_some());
         let diverged = index.is_some_and(|i| i.ahead > 0 && i.behind > 0);
         let head_pushed = index.is_some_and(|i| i.head_pushed);
@@ -949,14 +997,15 @@ impl Changes {
     }
 
     fn header(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let index = self.git.read(cx).index.clone();
+        let index = self.git.read(cx).snapshot();
         let busy = self.busy.is_some();
         let menu_open = self
             .menu
             .as_ref()
             .is_some_and(|m| m.kind == MenuKind::Branch);
         let branch = index.as_ref().and_then(|i| i.branch.clone());
-        let index = index.unwrap_or_default();
+        let empty = DiffIndex::default();
+        let index = index.as_deref().unwrap_or(&empty);
         pane_header("changes-header", "Changes")
             .when_some(branch.clone(), |d, branch| {
                 d.child(
@@ -1030,7 +1079,7 @@ impl Changes {
                             d.hover(|s| s.bg(vorkspace_ui::fluid::hover(0.05)))
                         })
                         .child(if self.busy.as_deref() == Some("pull") {
-                            spinner("pull-spin", "loader", 14.)
+                            spinner("pull-spin", 14.)
                         } else {
                             icon("more-horizontal", 16.)
                                 .text_color(content(if menu_open { 1. } else { 0.5 }))
@@ -1047,7 +1096,7 @@ impl Changes {
     }
 
     fn commit_box(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let index = self.git.read(cx).index.clone();
+        let index = self.git.read(cx).snapshot();
         let has_files = index.as_ref().is_some_and(|i| !i.files.is_empty());
         let generating = self.busy.as_deref() == Some("generate");
         let can_generate = has_files && self.busy.is_none();
@@ -1131,7 +1180,7 @@ impl Changes {
                                         div()
                                             .absolute()
                                             .group_hover("generate", |s| s.opacity(0.))
-                                            .child(spinner("generate-spin", "loader", 14.)),
+                                            .child(spinner("generate-spin", 14.)),
                                     )
                                     .child(
                                         icon("x", 14.)
@@ -1309,7 +1358,7 @@ impl Changes {
                 d.child(
                     button("publish-branch", sync_title.clone(), !busy)
                         .child(if syncing {
-                            spinner("sync-spin", "loader", 14.)
+                            spinner("sync-spin", 14.)
                         } else {
                             glyph("cloud-upload")
                         })
@@ -1323,7 +1372,7 @@ impl Changes {
                 d.child(
                     button("sync-changes", sync_title.clone(), !busy)
                         .child(if syncing {
-                            spinner("sync-spin", "refresh-cw", 14.)
+                            spinner("sync-spin", 14.)
                         } else {
                             glyph("refresh-cw")
                         })
@@ -1364,7 +1413,7 @@ impl Changes {
                 d.child(
                     button("create-pr", title, enabled)
                         .child(if self.busy.as_deref() == Some("pr") {
-                            spinner("pr-spin", "loader", 14.)
+                            spinner("pr-spin", 14.)
                         } else {
                             glyph("git-pull-request")
                         })
@@ -1418,7 +1467,7 @@ impl Changes {
         }
     }
     fn line(&self, ix: usize, cx: &mut Context<Self>) -> AnyElement {
-        let index = self.git.read(cx).index.clone();
+        let index = self.git.read(cx).snapshot();
         let files = index.as_ref().map_or(&[][..], |i| &i.files[..]);
         let busy = self.busy.is_some();
         match self.lines[ix].clone() {
@@ -1453,62 +1502,7 @@ impl Changes {
                     .items_center()
                     .gap_1()
                     .px(px(6.))
-                    .child(
-                        div()
-                            .id(("section", ix))
-                            .role(Role::Button)
-                            .map(vorkspace_ui::theme::tab_reachable)
-                            .aria_label(title)
-                            .aria_expanded(open)
-                            .min_w_0()
-                            .flex_1()
-                            .flex()
-                            .items_center()
-                            .gap_1()
-                            .child(
-                                icon(
-                                    if open {
-                                        "chevron-down"
-                                    } else {
-                                        "chevron-right"
-                                    },
-                                    14.,
-                                )
-                                .text_color(content(0.5)),
-                            )
-                            .child(
-                                div()
-                                    .min_w_0()
-                                    .truncate()
-                                    .text_size(px(11.))
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .text_color(content(0.55))
-                                    .child(title),
-                            )
-                            .child(
-                                div()
-                                    .ml_1()
-                                    .h_4()
-                                    .min_w_4()
-                                    .flex_shrink_0()
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .rounded_full()
-                                    .bg(accent_color().opacity(0.8))
-                                    .px_1()
-                                    .text_size(px(8.))
-                                    .text_color(white(1.))
-                                    .child(count.to_string()),
-                            )
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                match kind {
-                                    Kind2::Staged => this.staged_open = !this.staged_open,
-                                    Kind2::Unstaged => this.changes_open = !this.changes_open,
-                                }
-                                this.rebuild(cx);
-                            })),
-                    )
+                    .child(Self::change_section_title(kind, title, open, count, ix, cx))
                     .child(
                         icon_action(
                             ("view", ix),
@@ -1566,53 +1560,9 @@ impl Changes {
                     .pr_2()
                     .text_color(content(1.))
                     .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.05)))
-                    .child(
-                        div()
-                            .id(("change-dir-toggle", ix))
-                            .role(Role::TreeItem)
-                            .aria_label(SharedString::from(path.clone()))
-                            .aria_expanded(open)
-                            .min_w_0()
-                            .flex_1()
-                            .flex()
-                            .items_center()
-                            .gap(px(6.))
-                            .child(
-                                div()
-                                    .size_4()
-                                    .flex_shrink_0()
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .child(
-                                        icon(
-                                            if open {
-                                                "chevron-down"
-                                            } else {
-                                                "chevron-right"
-                                            },
-                                            14.,
-                                        )
-                                        .text_color(content(0.5)),
-                                    ),
-                            )
-                            .child(file_type_icon(&name, true, open, 16.))
-                            .child(
-                                div()
-                                    .min_w_0()
-                                    .flex_1()
-                                    .truncate()
-                                    .text_size(px(13.))
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .child(name.clone()),
-                            )
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                if !this.collapsed.remove(&key) {
-                                    this.collapsed.insert(key.clone());
-                                }
-                                this.rebuild(cx);
-                            })),
-                    )
+                    .child(Self::change_directory_toggle(
+                        ix, key, &path, name, open, cx,
+                    ))
                     .child(
                         div()
                             .flex_shrink_0()
@@ -1665,15 +1615,7 @@ impl Changes {
                     .selected
                     .as_ref()
                     .is_some_and(|(rel, k)| rel == &file.relative && *k == kind);
-                let name = basename(&file.relative).to_owned();
-                let dir = if depth.is_some() {
-                    ""
-                } else {
-                    dirname(&file.relative)
-                };
-                let relative = file.relative.clone();
-                let open_path = file.path.clone();
-                let can_open = file.status != "deleted";
+
                 let row_file = file.clone();
                 let stage_file = file.clone();
                 div()
@@ -1696,59 +1638,7 @@ impl Changes {
                     .when(!active, |d| {
                         d.hover(|s| s.bg(vorkspace_ui::fluid::hover(0.05)))
                     })
-                    .child(
-                        div()
-                            .id(("change-open", ix))
-                            .role(Role::Button)
-                            .map(vorkspace_ui::theme::tab_reachable)
-                            .aria_label(SharedString::from(file.relative.clone()))
-                            .h_full()
-                            .min_w_0()
-                            .flex_1()
-                            .flex()
-                            .items_center()
-                            .gap(px(6.))
-                            .when(depth.is_some(), |d| d.child(div().size_4().flex_shrink_0()))
-                            .child(file_type_icon(&name, false, false, 16.))
-                            .child(
-                                div()
-                                    .min_w_0()
-                                    .flex_1()
-                                    .flex()
-                                    .items_baseline()
-                                    .overflow_hidden()
-                                    .whitespace_nowrap()
-                                    .child(
-                                        div()
-                                            .flex_shrink_0()
-                                            .text_size(px(13.))
-                                            .font_weight(FontWeight::MEDIUM)
-                                            .child(name),
-                                    )
-                                    .when(!dir.is_empty(), |d| {
-                                        d.child(
-                                            div()
-                                                .ml(px(6.))
-                                                .min_w_0()
-                                                .truncate()
-                                                .text_size(px(11.))
-                                                .text_color(content(0.4))
-                                                .child(dir.to_owned()),
-                                        )
-                                    }),
-                            )
-                            .when(can_open, |d| {
-                                d.on_click(cx.listener(move |this, _, _, cx| {
-                                    this.selected = Some((relative.clone(), kind));
-                                    cx.emit(ChangesEvent::OpenDiff {
-                                        cwd: this.cwd.clone(),
-                                        path: Some(open_path.clone()),
-                                        staged: kind == Kind2::Staged,
-                                    });
-                                    cx.notify();
-                                }))
-                            }),
-                    )
+                    .child(self.change_file_open(&file, depth, ix, kind, cx))
                     .child(
                         div()
                             .flex_shrink_0()
@@ -1817,6 +1707,196 @@ impl Changes {
                     .into_any_element()
             }
         }
+    }
+
+    fn change_section_title(
+        kind: Kind2,
+        title: &'static str,
+        open: bool,
+        count: usize,
+        ix: usize,
+        cx: &Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        div()
+            .id(("section", ix))
+            .role(Role::Button)
+            .map(vorkspace_ui::theme::tab_reachable)
+            .aria_label(title)
+            .aria_expanded(open)
+            .min_w_0()
+            .flex_1()
+            .flex()
+            .items_center()
+            .gap_1()
+            .child(
+                icon(
+                    if open {
+                        "chevron-down"
+                    } else {
+                        "chevron-right"
+                    },
+                    14.,
+                )
+                .text_color(content(0.5)),
+            )
+            .child(
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .text_size(px(11.))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(content(0.55))
+                    .child(title),
+            )
+            .child(
+                div()
+                    .ml_1()
+                    .h_4()
+                    .min_w_4()
+                    .flex_shrink_0()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded_full()
+                    .bg(accent_color().opacity(0.8))
+                    .px_1()
+                    .text_size(px(8.))
+                    .text_color(white(1.))
+                    .child(count.to_string()),
+            )
+            .on_click(cx.listener(move |this, _, _, cx| {
+                match kind {
+                    Kind2::Staged => this.staged_open = !this.staged_open,
+                    Kind2::Unstaged => this.changes_open = !this.changes_open,
+                }
+                this.rebuild(cx);
+            }))
+    }
+
+    fn change_directory_toggle(
+        ix: usize,
+        key: String,
+        path: &str,
+        name: String,
+        open: bool,
+        cx: &Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        div()
+            .id(("change-dir-toggle", ix))
+            .role(Role::TreeItem)
+            .aria_label(SharedString::from(path.to_owned()))
+            .aria_expanded(open)
+            .min_w_0()
+            .flex_1()
+            .flex()
+            .items_center()
+            .gap(px(6.))
+            .child(
+                div()
+                    .size_4()
+                    .flex_shrink_0()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(
+                        icon(
+                            if open {
+                                "chevron-down"
+                            } else {
+                                "chevron-right"
+                            },
+                            14.,
+                        )
+                        .text_color(content(0.5)),
+                    ),
+            )
+            .child(file_type_icon(&name, true, open, 16.))
+            .child(
+                div()
+                    .min_w_0()
+                    .flex_1()
+                    .truncate()
+                    .text_size(px(13.))
+                    .font_weight(FontWeight::MEDIUM)
+                    .child(name.clone()),
+            )
+            .on_click(cx.listener(move |this, _, _, cx| {
+                if !this.collapsed.remove(&key) {
+                    this.collapsed.insert(key.clone());
+                }
+                this.rebuild(cx);
+            }))
+    }
+
+    fn change_file_open(
+        &self,
+        file: &ChangedFile,
+        depth: Option<usize>,
+        ix: usize,
+        kind: Kind2,
+        cx: &Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        let name = basename(&file.relative).to_owned();
+        let dir = if depth.is_some() {
+            ""
+        } else {
+            dirname(&file.relative)
+        };
+        let relative = file.relative.clone();
+        let open_path = file.path.clone();
+        let row_cwd = self.cwd.clone();
+        div()
+            .id(("change-open", ix))
+            .role(Role::Button)
+            .map(vorkspace_ui::theme::tab_reachable)
+            .aria_label(SharedString::from(file.relative.clone()))
+            .h_full()
+            .min_w_0()
+            .flex_1()
+            .flex()
+            .items_center()
+            .gap(px(6.))
+            .when(depth.is_some(), |d| d.child(div().size_4().flex_shrink_0()))
+            .child(file_type_icon(&name, false, false, 16.))
+            .child(
+                div()
+                    .min_w_0()
+                    .flex_1()
+                    .flex()
+                    .items_baseline()
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .text_size(px(13.))
+                            .font_weight(FontWeight::MEDIUM)
+                            .child(name),
+                    )
+                    .when(!dir.is_empty(), |d| {
+                        d.child(
+                            div()
+                                .ml(px(6.))
+                                .min_w_0()
+                                .truncate()
+                                .text_size(px(11.))
+                                .text_color(content(0.4))
+                                .child(dir.to_owned()),
+                        )
+                    }),
+            )
+            .on_click(cx.listener(move |this, _, _, cx| {
+                if this.cwd != row_cwd {
+                    return;
+                }
+                this.selected = Some((relative.clone(), kind));
+                cx.emit(ChangesEvent::OpenDiff {
+                    cwd: row_cwd.clone(),
+                    path: Some(open_path.clone()),
+                    staged: kind == Kind2::Staged,
+                });
+                cx.notify();
+            }))
     }
 }
 
@@ -1890,8 +1970,7 @@ pub(crate) fn create_pr_blocking(
     scm::pr_create(cwd, &title, &body, &range.base, &range.head)
 }
 
-/// A read-only one-shot turn, as the React text harness runs: the final
-/// assistant message's text.
+/// A read-only one-shot turn, returning the final assistant message's text.
 fn text_prompt(
     kind: Kind,
     binary: PathBuf,
@@ -1940,7 +2019,7 @@ impl Render for Changes {
                 .child("No project folder")
                 .into_any_element();
         }
-        let index = self.git.read(cx).index.clone();
+        let index = self.git.read(cx).snapshot();
         let empty = match &index {
             None => Some("Loading changes…".to_owned()),
             Some(i) if i.files.is_empty() => Some(if i.ahead > 0 || i.behind > 0 {
@@ -2000,6 +2079,52 @@ impl Render for Changes {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[gpui::test]
+    fn switching_checkouts_keeps_each_commit_draft_and_retires_old_confirmations(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let first = tempfile::tempdir().unwrap();
+        let second = tempfile::tempdir().unwrap();
+        let first = first.path().to_string_lossy().into_owned();
+        let second = second.path().to_string_lossy().into_owned();
+        let window = cx.update(|cx| {
+            cx.open_window(Default::default(), |window, cx| {
+                let git = cx.new(|cx| ProjectGit::new(first.clone(), cx));
+                cx.new(|cx| Changes::new(git, window, cx))
+            })
+            .unwrap()
+        });
+        let previous = window
+            .update(cx, |changes, _, cx| {
+                changes
+                    .message
+                    .update(cx, |input, cx| input.set_text("First draft".into(), cx));
+                let previous = changes.checkout_scope(cx);
+                changes
+                    .git
+                    .update(cx, |git, cx| git.set_project(second, cx));
+                previous
+            })
+            .unwrap();
+        window
+            .update(cx, |changes, _, cx| {
+                assert!(changes.message.read(cx).content.is_empty());
+                changes
+                    .message
+                    .update(cx, |input, cx| input.set_text("Second draft".into(), cx));
+                changes.git.update(cx, |git, cx| git.set_project(first, cx));
+            })
+            .unwrap();
+        window
+            .update(cx, |changes, _, cx| {
+                assert_eq!(changes.message.read(cx).content.to_string(), "First draft");
+                assert!(!changes.on_checkout(&previous, cx));
+                assert!(previous != changes.checkout_scope(cx));
+            })
+            .unwrap();
+    }
+
     #[gpui::test]
     fn stale_text_layout_ranges_do_not_abort_a_changes_panel_frame(cx: &mut gpui::TestAppContext) {
         let window = cx.update(|cx| {

@@ -13,7 +13,8 @@ use vorkspace_ui::theme::*;
 pub(super) struct DocumentData {
     metadata: Option<String>,
     rows: Vec<MarkdownRow>,
-    source: Vec<String>,
+    source: String,
+    source_bounds: Vec<usize>,
 }
 impl DocumentData {
     /// Run on the file-reading worker, once per selected file.
@@ -24,14 +25,30 @@ impl DocumentData {
             .iter()
             .flat_map(|block| markdown::rows(&block.block))
             .collect();
-        let lines: Vec<_> = text.split_inclusive('\n').collect();
-        let source = lines.chunks(24).map(|lines| lines.concat()).collect();
+        let source_bounds = source_bounds(&text);
         Arc::new(Self {
             metadata: metadata.map(str::to_owned),
             rows,
-            source,
+            source: text,
+            source_bounds,
         })
     }
+}
+
+fn source_bounds(text: &str) -> Vec<usize> {
+    const LINES_PER_ROW: usize = 24;
+    let mut bounds = vec![0];
+    let mut end = 0;
+    for (index, line) in text.split_inclusive('\n').enumerate() {
+        end += line.len();
+        if (index + 1).is_multiple_of(LINES_PER_ROW) {
+            bounds.push(end);
+        }
+    }
+    if bounds.last().copied() != Some(end) {
+        bounds.push(end);
+    }
+    bounds
 }
 
 pub(super) struct SkillDocument {
@@ -43,7 +60,7 @@ pub(super) struct SkillDocument {
 impl SkillDocument {
     pub fn new(data: Arc<DocumentData>, source: bool) -> Self {
         let count = if source {
-            data.source.len()
+            data.source_bounds.len() - 1
         } else {
             data.rows.len() + usize::from(data.metadata.is_some())
         };
@@ -57,7 +74,8 @@ impl SkillDocument {
     fn row(&mut self, ix: usize, cx: &mut Context<Self>) -> AnyElement {
         let frame = div().px_4().w_full().min_w_0();
         if self.source {
-            let text = self.data.source[ix].clone();
+            let bounds = &self.data.source_bounds;
+            let text = &self.data.source[bounds[ix]..bounds[ix + 1]];
             let mut offset = 0;
             let headings: Vec<_> = text
                 .split_inclusive('\n')
@@ -86,7 +104,7 @@ impl SkillDocument {
                 .text_size(px(13.))
                 .line_height(px(20.))
                 .text_color(content(0.85))
-                .child(gpui::StyledText::new(text).with_highlights(headings))
+                .child(gpui::StyledText::new(SharedString::from(text)).with_highlights(headings))
                 .into_any_element();
         }
         if ix == 0
@@ -161,7 +179,7 @@ impl SkillDocument {
                 .border_color(content(0.1))
                 .bg(content(0.03))
                 .py_2()
-                .child(markdown::code_lines(fence, lines.clone(), None, "", false))
+                .child(markdown::code_lines(fence, lines.clone(), None, ""))
                 .into_any_element(),
             _ => markdown::body(row, id, Tone::Normal, None, Instant::now()),
         };
@@ -253,5 +271,19 @@ mod tests {
         assert!(!view.metadata_open);
         assert_eq!(view.list.logical_scroll_top().item_ix, 0);
         assert!(frontmatter("---\nunterminated").0.is_none());
+    }
+
+    #[test]
+    fn source_bounds_preserve_complete_utf8_and_partial_rows() {
+        for text in [
+            String::new(),
+            "## café\r\n".repeat(24),
+            format!("{}終", "\n".repeat(48)),
+        ] {
+            let bounds = source_bounds(&text);
+            let chunks = bounds.windows(2).map(|pair| &text[pair[0]..pair[1]]);
+            let lines: Vec<_> = text.split_inclusive('\n').collect();
+            assert!(chunks.eq(lines.chunks(24).map(|lines| lines.concat())));
+        }
     }
 }

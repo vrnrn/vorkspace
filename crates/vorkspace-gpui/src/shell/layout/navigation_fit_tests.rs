@@ -202,10 +202,10 @@ fn to_dos_open_from_the_sidebar_and_the_project_switcher(cx: &mut TestAppContext
     window
         .update(visual, |shell, _, cx| {
             assert_eq!(
-                shell.active_app_view,
+                shell.pages.active_app_view,
                 Some(crate::workspace::AppView::Todos)
             );
-            let page = shell.todos_page.as_ref().unwrap().read(cx);
+            let page = shell.page_tabs.todos_page.as_ref().unwrap().read(cx);
             assert_eq!(page.selected(cx), Some(TodoBoard::Personal));
         })
         .unwrap();
@@ -218,7 +218,7 @@ fn to_dos_open_from_the_sidebar_and_the_project_switcher(cx: &mut TestAppContext
     vorkspace_ui::clock::settle_animations(window, visual);
     window
         .update(visual, |shell, _, cx| {
-            let page = shell.todos_page.as_ref().unwrap().read(cx);
+            let page = shell.page_tabs.todos_page.as_ref().unwrap().read(cx);
             assert!(matches!(page.selected(cx), Some(TodoBoard::Project(_))));
         })
         .unwrap();

@@ -33,7 +33,7 @@ fn native_annotation_capture() {
             )))
         },
     );
-    let store = vorkspace_core::store::Store::open(std::path::Path::new(":memory:")).unwrap();
+    let store = vorkspace_core::store::Store::test(std::path::Path::new(":memory:")).unwrap();
     let session = store.create("codex", "/missing/capture").unwrap();
     for (width, height) in [(1000., 700.), (560., 450.)] {
         let owner = cx.update(|cx| {
@@ -41,7 +41,7 @@ fn native_annotation_capture() {
                 crate::conversation::Conversation::new(
                     session.clone(),
                     Arc::new(std::sync::Mutex::new(
-                        vorkspace_core::store::Store::open(std::path::Path::new(":memory:"))
+                        vorkspace_core::store::Store::test(std::path::Path::new(":memory:"))
                             .unwrap(),
                     )),
                     cx,
@@ -149,14 +149,14 @@ fn annotation_preview_matches_flattened_text_at_zoom() {
             )))
         },
     );
-    let store = vorkspace_core::store::Store::open(std::path::Path::new(":memory:")).unwrap();
+    let store = vorkspace_core::store::Store::test(std::path::Path::new(":memory:")).unwrap();
     let session = store.create("codex", "/missing/text-preview").unwrap();
     let owner = cx.update(|cx| {
         cx.new(|cx| {
             crate::conversation::Conversation::new(
                 session.clone(),
                 Arc::new(std::sync::Mutex::new(
-                    vorkspace_core::store::Store::open(std::path::Path::new(":memory:")).unwrap(),
+                    vorkspace_core::store::Store::test(std::path::Path::new(":memory:")).unwrap(),
                 )),
                 cx,
             )
@@ -195,9 +195,10 @@ fn annotation_preview_matches_flattened_text_at_zoom() {
             text: "Wi".into(),
         },
     ];
-    let flattened = image::load_from_memory(&annotation::png(&original, &[], &texts).unwrap())
-        .unwrap()
-        .into_rgba8();
+    let flattened =
+        image::load_from_memory(&annotation::flatten(&original, &[], &texts).unwrap().png)
+            .unwrap()
+            .into_rgba8();
     window
         .update(&mut cx, |view, _, cx| {
             assert!(view.original.is_some());
@@ -315,7 +316,7 @@ fn drawing_tracks_image_coordinates_and_clear_across_zoom_and_resize(cx: &mut Te
     image::RgbaImage::from_pixel(800, 400, image::Rgba([255, 255, 255, 255]))
         .save(&path)
         .unwrap();
-    let store = vorkspace_core::store::Store::open(std::path::Path::new(":memory:")).unwrap();
+    let store = vorkspace_core::store::Store::test(std::path::Path::new(":memory:")).unwrap();
     let session = store.create("codex", "/missing/test").unwrap();
     let owner = cx.new(|cx| {
         crate::conversation::Conversation::new(session, Arc::new(std::sync::Mutex::new(store)), cx)

@@ -1,4 +1,4 @@
-//! Preset colors from workspaceThemes.ts, including surface tints and accents.
+//! Preset workspace theme colors, including surface tints and accents.
 #[derive(Clone, Copy)]
 pub struct Palette {
     pub surface: u32,
@@ -207,7 +207,7 @@ pub const PALETTES: &[(&str, &str, Palette, Palette)] = &[
         },
     ),
 ];
-pub fn palette(id: &str, light: bool) -> Palette {
+pub(crate) fn palette(id: &str, light: bool) -> Palette {
     let row = PALETTES.iter().find(|r| r.0 == id).unwrap_or(&PALETTES[0]);
     if light { row.3 } else { row.2 }
 }

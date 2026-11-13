@@ -3,10 +3,7 @@
 use crate::conversation::Conversation;
 use gpui::{App, Entity, Window};
 use serde_json::Value;
-use std::collections::HashMap;
-use vorkspace_core::{
-    agent::Settings, project_appearance::ProjectAppearance, session_groups::Groups, store::Session,
-};
+use vorkspace_core::{agent::Settings, session_groups::Groups, store::Session};
 use vorkspace_model::pane_layout::Edge;
 
 pub(crate) struct BotSession {
@@ -82,6 +79,5 @@ pub(crate) trait BotsHost {
         window: &mut Window,
         cx: &mut App,
     ) -> gpui::Result<Result<Value, String>>;
-    fn project_appearance(&self, project: &str, cx: &App) -> Option<ProjectAppearance>;
-    fn projects(&self, cx: &App) -> (Vec<String>, HashMap<String, ProjectAppearance>);
+    fn projects(&self, cx: &App) -> Vec<String>;
 }

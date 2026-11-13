@@ -2,6 +2,7 @@
 use super::{ToolCall, ToolState};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::borrow::Cow;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -31,7 +32,7 @@ pub enum TaskStatus {
     Cancelled,
 }
 impl TaskStatus {
-    pub fn parse(value: &str) -> Self {
+    pub(crate) fn parse(value: &str) -> Self {
         match value.to_lowercase().replace([' ', '-', '_'], "").as_str() {
             "completed" | "complete" | "done" => Self::Completed,
             "inprogress" | "active" | "running" => Self::InProgress,
@@ -69,7 +70,7 @@ impl TaskList {
             )
         }
     }
-    pub fn from_value(value: &Value) -> Option<Self> {
+    pub(crate) fn from_value(value: &Value) -> Option<Self> {
         let rows = value
             .get("todos")
             .or_else(|| value.get("plan"))
@@ -134,7 +135,7 @@ pub struct AgentStep {
 }
 impl AgentStep {
     /// Mirror a child call without reducing its file/command metadata to prose.
-    pub fn from_tool_call(call: &ToolCall) -> Self {
+    pub(crate) fn from_tool_call(call: &ToolCall) -> Self {
         let (action, target) = call.summary();
         let mut display = call
             .display
@@ -149,10 +150,12 @@ impl AgentStep {
         let text = format!("{action} {target}").trim().to_owned();
         let tool_kind = string(&display["kind"])
             .filter(|kind| kind != "other")
-            .or_else(|| matches!(call.panel(), Some(Panel::Agent(_))).then(|| "agent".into()))
+            .or_else(|| {
+                matches!(call.panel().as_deref(), Some(Panel::Agent(_))).then(|| "agent".into())
+            })
             .unwrap_or_else(|| call.name.clone());
         let detail = if call.output.is_empty() {
-            desktop_detail(&display)
+            block_detail(&display)
         } else {
             call.output.clone()
         };
@@ -223,7 +226,7 @@ impl AgentStep {
         let mut call = ToolCall::new(&self.id, &name);
         call.input = input;
         call.output = if self.detail.is_empty() {
-            desktop_detail(&display)
+            block_detail(&display)
         } else {
             self.detail.clone()
         };
@@ -242,7 +245,7 @@ impl AgentStep {
     }
 }
 impl AgentRun {
-    pub fn from_input(input: &Value) -> Self {
+    pub(crate) fn from_input(input: &Value) -> Self {
         Self {
             name: string(&input["name"])
                 .or_else(|| string(&input["agentName"]))
@@ -255,13 +258,13 @@ impl AgentRun {
             ..Self::default()
         }
     }
-    pub fn title(&self) -> &str {
+    pub(crate) fn title(&self) -> &str {
         self.name
             .as_deref()
             .or_else(|| self.brief.lines().next().filter(|s| !s.is_empty()))
             .unwrap_or("Subagent")
     }
-    /// The entire brief belongs on the row's tooltip, as in the React transcript.
+    /// The entire brief belongs on the row's tooltip.
     pub fn display_brief(&self) -> String {
         let brief = self
             .name
@@ -293,7 +296,7 @@ impl AgentRun {
         if name.encode_utf16().count() <= LIMIT {
             return name.into();
         }
-        // Keep React's UTF-16 length while never cutting a surrogate pair in half.
+        // Count UTF-16 units while never cutting a surrogate pair in half.
         let mut units = 0;
         let cut: String = name
             .chars()
@@ -339,10 +342,10 @@ impl AgentRun {
             return None;
         }
         crate::model_cache::cached_name(provider, id)
-            .or_else(|| desktop_model_name(id).map(str::to_owned))
+            .or_else(|| known_model_name(id).map(str::to_owned))
             .or_else(|| Some(id.into()))
     }
-    pub fn upsert(&mut self, mut step: AgentStep) {
+    pub(crate) fn upsert(&mut self, mut step: AgentStep) {
         // Bound child detail without claiming the retained window is the whole run.
         bound(&mut step.text, 16 * 1024);
         bound(&mut step.detail, 16 * 1024);
@@ -403,8 +406,8 @@ fn is_false(value: &bool) -> bool {
     !*value
 }
 
-// The React model picker's built-in labels; live catalogs take precedence.
-fn desktop_model_name(id: &str) -> Option<&'static str> {
+// Built-in labels for known model ids; live catalogs take precedence.
+fn known_model_name(id: &str) -> Option<&'static str> {
     Some(match id {
         "claude:sonnet-5" | "claude-sonnet-5" => "Claude Sonnet 5",
         "claude:opus-5" | "claude-opus-5" => "Claude Opus 5",
@@ -433,7 +436,7 @@ fn desktop_model_name(id: &str) -> Option<&'static str> {
         _ => return None,
     })
 }
-pub fn bound(text: &mut String, limit: usize) {
+pub(crate) fn bound(text: &mut String, limit: usize) {
     if text.len() > limit {
         let mut at = text.len() - limit;
         while !text.is_char_boundary(at) {
@@ -492,7 +495,7 @@ fn is_agent_tool(kind: Option<&str>, title: &str) -> bool {
 }
 
 /// Recover the same output sources for parent calls and mirrored child steps.
-pub(crate) fn desktop_detail(meta: &Value) -> String {
+pub(crate) fn block_detail(meta: &Value) -> String {
     if let Some(detail) = meta["detail"].as_str().filter(|value| !value.is_empty()) {
         return detail.into();
     }
@@ -514,7 +517,7 @@ pub(crate) fn desktop_detail(meta: &Value) -> String {
         .get("nativePresentation")
         .filter(|display| display.is_object())
     {
-        let detail = desktop_detail(display);
+        let detail = block_detail(display);
         if !detail.is_empty() {
             return detail;
         }
@@ -547,10 +550,16 @@ impl ToolCall {
             .then(|| self.output.trim())
             .filter(|report| !report.is_empty())
     }
-    pub fn panel(&self) -> Option<Panel> {
-        if let Some(panel) = &self.panel {
-            return Some(panel.clone());
-        }
+    /// Borrow structured data already decoded by the caller. Older rows may
+    /// need a projection from their provider input.
+    pub fn panel(&self) -> Option<Cow<'_, Panel>> {
+        self.panel
+            .as_ref()
+            .map(Cow::Borrowed)
+            .or_else(|| self.infer_panel().map(Cow::Owned))
+    }
+
+    fn infer_panel(&self) -> Option<Panel> {
         let input: Value = serde_json::from_str(&self.input).unwrap_or_default();
         let name = self.name.to_lowercase().replace([' ', '-', '_'], "");
         if ["todowrite", "writetodos", "updatetodos", "updateplan"]
@@ -578,7 +587,7 @@ impl ToolCall {
         }
         None
     }
-    pub fn refresh_agent_input(&mut self) {
+    pub(crate) fn refresh_agent_input(&mut self) {
         if let Ok(value) = serde_json::from_str::<Value>(&self.input) {
             let input = AgentRun::from_input(&value);
             if let Some(run) = self.agent_mut() {
@@ -597,9 +606,9 @@ impl ToolCall {
             }
         }
     }
-    pub fn agent_mut(&mut self) -> Option<&mut AgentRun> {
+    pub(crate) fn agent_mut(&mut self) -> Option<&mut AgentRun> {
         if self.panel.is_none() {
-            self.panel = self.panel();
+            self.panel = self.infer_panel();
         }
         match self.panel.as_mut() {
             Some(Panel::Agent(run)) => Some(run),
@@ -608,8 +617,8 @@ impl ToolCall {
     }
 }
 
-/// Adapt desktop metadata and recognize legacy delegated-tool captions.
-pub fn from_desktop(block: &Value) -> Option<Panel> {
+/// Read saved block metadata and recognize legacy delegated-tool captions.
+pub(crate) fn from_block(block: &Value) -> Option<Panel> {
     if block["role"] == "tasks" {
         return TaskList::from_value(&block["taskList"]).map(Panel::Tasks);
     }
@@ -685,7 +694,7 @@ pub fn from_desktop(block: &Value) -> Option<Panel> {
                 display[key] = value.clone();
             }
         }
-        let detail = desktop_detail(step);
+        let detail = block_detail(step);
         let detail_omitted = detail.is_empty() && step["detailOmitted"] == true;
         // Source history already contains the full payload. Do not truncate a
         // stored result while projecting it into the native transcript.
@@ -716,7 +725,7 @@ pub fn from_desktop(block: &Value) -> Option<Panel> {
     Some(Panel::Agent(run))
 }
 
-pub fn desktop_agent(run: &AgentRun) -> Value {
+pub(crate) fn agent_block(run: &AgentRun) -> Value {
     serde_json::json!({
         "name":run.name.as_deref().filter(|name| !name.trim().is_empty()).unwrap_or_else(|| if run.brief.is_empty() { "Subagent" } else { &run.brief }),
         "model":run.model, "agentType":run.agent_type, "nativeIds":run.ids, "nativeBrief":run.brief,
@@ -750,7 +759,7 @@ mod tests {
             }]}
         });
         let original = block.clone();
-        let Some(Panel::Agent(run)) = from_desktop(&block) else {
+        let Some(Panel::Agent(run)) = from_block(&block) else {
             panic!()
         };
         assert_eq!(run.display_name(), "Explore Auth subagent");
@@ -759,13 +768,13 @@ mod tests {
         assert_eq!(block, original);
 
         block["agentRun"]["name"] = json!("Correctness review");
-        let Some(Panel::Agent(run)) = from_desktop(&block) else {
+        let Some(Panel::Agent(run)) = from_block(&block) else {
             panic!()
         };
         assert_eq!(run.display_name(), "Correctness review");
         block["agentRun"]["name"] = json!("Subagent");
         block["tool"]["nativeInput"] = json!("invalid input");
-        let Some(Panel::Agent(run)) = from_desktop(&block) else {
+        let Some(Panel::Agent(run)) = from_block(&block) else {
             panic!()
         };
         assert_eq!(run.display_name(), "Subagent");

@@ -29,15 +29,15 @@ fn wrapped_editor_keeps_unicode_selection_visual_navigation_and_resize_in_sync(
     cx.refresh().unwrap();
     let height = window
         .update(cx, |i, _, _| {
-            let code = i.code.as_ref().unwrap();
-            assert!(code.tops[1] - code.tops[0] > i.line_height * 2.);
+            let geometry = &i.code.as_ref().unwrap().geometry;
+            assert!(geometry.tops[1] - geometry.tops[0] > i.line_height * 2.);
             for (at, _) in text
                 .char_indices()
                 .take_while(|(at, _)| *at < text.find('\n').unwrap())
             {
                 assert_eq!(i.code_index(i.code_position(at)), at, "UTF-8 offset {at}");
             }
-            code.total()
+            geometry.total()
         })
         .unwrap();
     cx.simulate_keystrokes(window.into(), "down");
@@ -59,7 +59,7 @@ fn wrapped_editor_keeps_unicode_selection_visual_navigation_and_resize_in_sync(
     cx.refresh().unwrap();
     window
         .update(cx, |i, _, cx| {
-            assert!(i.code.as_ref().unwrap().total() > height);
+            assert!(i.code.as_ref().unwrap().geometry.total() > height);
             i.set_word_wrap(false, cx);
         })
         .unwrap();
@@ -68,7 +68,7 @@ fn wrapped_editor_keeps_unicode_selection_visual_navigation_and_resize_in_sync(
         .update(cx, |i, _, _| {
             assert_eq!(i.content.as_ref(), text);
             assert_eq!(
-                i.code.as_ref().unwrap().tops[1] - TOP_PADDING,
+                i.code.as_ref().unwrap().geometry.tops[1] - TOP_PADDING,
                 i.line_height
             );
         })
@@ -154,7 +154,7 @@ fn overview_markers_jump_and_the_thumb_drags_without_editing_or_selecting(cx: &m
             let code = i.code.as_ref().unwrap();
             let m = Metrics::new(
                 i.scroll_y.as_f32(),
-                code.total(),
+                code.geometry.total(),
                 rail.size.height.as_f32(),
                 rail.size.height.as_f32(),
             );

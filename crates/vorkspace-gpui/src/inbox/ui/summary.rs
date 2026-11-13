@@ -5,7 +5,7 @@ use vorkspace_ui::radius;
 impl Inbox {
     pub(super) fn summary_body_width(&self, window: &Window) -> Pixels {
         let inset = self.detail_inset(window);
-        (self.summary_width.get().min(px(page::DETAIL_MAX)) - inset - inset).max(px(1.))
+        (self.summary.width.get().min(px(page::DETAIL_MAX)) - inset - inset).max(px(1.))
     }
 
     pub(super) fn summary_view(
@@ -14,23 +14,23 @@ impl Inbox {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let discussion = self.thread.as_ref().is_some_and(|thread| {
+        let discussion = self.detail.thread.as_ref().is_some_and(|thread| {
             !thread.comments.is_empty() || !thread.commits.is_empty() || thread.truncated
         });
         let count = 2 + if discussion {
-            1 + self.activity.len()
+            1 + self.summary.activity.len()
         } else {
             0
         };
-        let mut rows = self.summary_rows.borrow_mut();
+        let mut rows = self.summary.rows.borrow_mut();
         if rows.keys.is_empty()
-            || rows.revision != self.activity_revision
+            || rows.revision != self.summary.activity_revision
             || rows.discussion != discussion
         {
             let mut keys: Vec<SharedString> = vec!["intro".into()];
             if discussion {
                 keys.push("activity".into());
-                keys.extend(self.activity.iter().map(|activity| match activity {
+                keys.extend(self.summary.activity.iter().map(|activity| match activity {
                     Activity::Comment(comment) => format!("comment:{}", comment.id).into(),
                     Activity::Commits(commits) => format!("push:{}", commits[0].oid).into(),
                 }));
@@ -50,19 +50,19 @@ impl Inbox {
                 .zip(keys[prefix..].iter().rev())
                 .take_while(|(old, new)| old == new)
                 .count();
-            self.summary_scroll.splice_focusable(
+            self.summary.scroll.splice_focusable(
                 prefix..rows.keys.len() - suffix,
                 (prefix..keys.len() - suffix)
-                    .map(|ix| (ix + 1 == count).then(|| self.comment.focus_handle(cx))),
+                    .map(|ix| (ix + 1 == count).then(|| self.composer.comment.focus_handle(cx))),
             );
             *rows = SummaryRows {
-                revision: self.activity_revision,
+                revision: self.summary.activity_revision,
                 discussion,
                 keys,
             };
         }
         drop(rows);
-        let width = self.summary_width.clone();
+        let width = self.summary.width.clone();
         let entity = cx.entity();
         let item = item.clone();
         div()
@@ -82,7 +82,7 @@ impl Inbox {
                 .size_full(),
             )
             .child(
-                list(self.summary_scroll.clone(), move |ix, window, cx| {
+                list(self.summary.scroll.clone(), move |ix, window, cx| {
                     entity.update(cx, |this, cx| {
                         this.summary_row(&item, ix, count, discussion, window, cx)
                     })
@@ -101,7 +101,9 @@ impl Inbox {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let can_post = !self.posting && !self.comment.read(cx).content.trim().is_empty();
+        let can_post = !self.composer.posting
+            && self.detail.target_error.is_none()
+            && !self.composer.comment.read(cx).content.trim().is_empty();
         let body = if ix == 0 {
             div()
                 .py(self.detail_inset(window))
@@ -117,16 +119,17 @@ impl Inbox {
                             .children(item.labels.iter().map(|label| label_badge(label, false))),
                     )
                 })
-                .when(self.detail_loading && self.details.is_none(), |d| {
+                .when(self.detail.loading && self.detail.details.is_none(), |d| {
                     d.child(message("Loading description…"))
                 })
                 .when(
-                    self.details
+                    self.detail
+                        .details
                         .as_ref()
                         .is_some_and(|d| d.body.trim().is_empty()),
                     |d| d.child(page::meta().child("No description")),
                 )
-                .when_some(self.document.clone(), |d, document| {
+                .when_some(self.detail.document.clone(), |d, document| {
                     d.child(
                         div()
                             .w_full()
@@ -138,8 +141,10 @@ impl Inbox {
                             )),
                     )
                 })
-                .when(self.thread.is_none(), |d| {
-                    d.when_some(self.thread_error.clone(), |d, text| d.child(error(text)))
+                .when(self.detail.thread.is_none(), |d| {
+                    d.when_some(self.detail.thread_error.clone(), |d, text| {
+                        d.child(error(text))
+                    })
                 })
                 .into_any_element()
         } else if ix + 1 == count {
@@ -155,7 +160,7 @@ impl Inbox {
                         .flex()
                         .flex_col()
                         .gap(px(8.))
-                        .when_some(self.reply.clone(), |d, (_, author)| {
+                        .when_some(self.composer.reply.clone(), |d, (_, author)| {
                             d.child(
                                 page::meta()
                                     .flex()
@@ -170,8 +175,8 @@ impl Inbox {
                                     .child(
                                         icon_button("inbox-cancel-reply", "Cancel reply", "close")
                                             .on_click(cx.listener(|this, _, _, cx| {
-                                                this.reply = None;
-                                                this.post_error = None;
+                                                this.composer.reply = None;
+                                                this.composer.post_error = None;
                                                 cx.notify();
                                             })),
                                     ),
@@ -189,13 +194,13 @@ impl Inbox {
                                     div()
                                         .px(px(12.))
                                         .py(px(8.))
-                                        .when(self.posting, |d| d.opacity(0.4))
-                                        .child(self.comment.clone()),
+                                        .when(self.composer.posting, |d| d.opacity(0.4))
+                                        .child(self.composer.comment.clone()),
                                 )
                                 .child({
-                                    let label = if self.posting {
+                                    let label = if self.composer.posting {
                                         "Posting…"
-                                    } else if self.reply.is_some() {
+                                    } else if self.composer.reply.is_some() {
                                         "Reply"
                                     } else {
                                         "Comment"
@@ -209,12 +214,18 @@ impl Inbox {
                                     )
                                 }),
                         )
-                        .when_some(self.post_error.clone(), |d, text| d.child(error(text))),
+                        .when_some(self.composer.post_error.clone(), |d, text| {
+                            d.child(error(text))
+                        }),
                 )
                 .into_any_element()
         } else if discussion && ix == 1 {
             div()
-                .pb(px(if self.activity.is_empty() { 16. } else { 12. }))
+                .pb(px(if self.summary.activity.is_empty() {
+                    16.
+                } else {
+                    12.
+                }))
                 .children(self.discussion_heading(item, window, cx))
                 .into_any_element()
         } else {
@@ -239,16 +250,19 @@ impl Inbox {
             .flex_1()
             .flex()
             .flex_col()
-            .when(self.extra_loading, |d| d.child(message("Loading changes…")))
-            .when_some(self.extra_error.clone(), |d, text| d.child(error(text)))
-            .when(self.diff.is_some(), |d| {
-                d.child(div().flex_1().min_h_0().child(self.diff_view.clone()))
+            .when(self.tabs.loading, |d| d.child(message("Loading changes…")))
+            .when_some(self.tabs.error.clone(), |d, text| d.child(error(text)))
+            .when(self.tabs.diff.is_some(), |d| {
+                d.child(div().flex_1().min_h_0().child(self.tabs.diff_view.clone()))
             })
-            .when(self.diff.as_ref().is_some_and(|diff| diff.truncated), |d| {
-                d.child(message(
-                    "This diff is truncated. Open the pull request to see all changes.",
-                ))
-            })
+            .when(
+                self.tabs.diff.as_ref().is_some_and(|diff| diff.truncated),
+                |d| {
+                    d.child(message(
+                        "This diff is truncated. Open the pull request to see all changes.",
+                    ))
+                },
+            )
             .into_any_element()
     }
 
@@ -258,9 +272,9 @@ impl Inbox {
             .max_w(px(page::DETAIL_MAX))
             .mx_auto()
             .p(inset)
-            .when(self.extra_loading, |d| d.child(message("Loading checks…")))
-            .when_some(self.extra_error.clone(), |d, text| d.child(error(text)))
-            .when_some(self.checks.as_ref(), |d, checks| {
+            .when(self.tabs.loading, |d| d.child(message("Loading checks…")))
+            .when_some(self.tabs.error.clone(), |d, text| d.child(error(text)))
+            .when_some(self.tabs.checks.as_ref(), |d, checks| {
                 let failed = checks
                     .checks
                     .iter()
@@ -290,7 +304,7 @@ impl Inbox {
                                         if let Some(mut item) = this.item() {
                                             if item.project_path.is_empty() {
                                                 item.project_path =
-                                                    this.start_project.to_string_lossy().into_owned();
+                                                    this.start.project.to_string_lossy().into_owned();
                                             }
                                             let evidence = failed
                                                 .iter()

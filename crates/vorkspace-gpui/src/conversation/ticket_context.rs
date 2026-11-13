@@ -35,8 +35,7 @@ impl Conversation {
     /// Return true while admission is pending or failed. The composer, files,
     /// selection, queue and transcript remain owned by their existing views.
     pub(super) fn prepare_ticket_context(&mut self, cx: &mut Context<Self>) -> bool {
-        if self.busy
-            || self.stopping
+        if self.turn_in_flight()
             || self.settings.bot.is_some()
             || self.settings.pending_provider_switch.is_some()
             || (!self.follow_ups.state.messages.is_empty() && !self.follow_ups.state.paused)
@@ -48,19 +47,7 @@ impl Conversation {
             self.ticket_context.cancel();
             return false;
         }
-        if self.is_remote()
-            && !self
-                .remote_state
-                .capabilities
-                .contains("sessions.preparedText")
-        {
-            self.ticket_context.cancel();
-            self.status =
-                "Update the remote host before sending ticket context. Your draft was preserved."
-                    .into();
-            cx.notify();
-            return true;
-        }
+
         if self
             .ticket_context
             .ready
@@ -119,8 +106,7 @@ impl Conversation {
                     || !this.pending_attachments.is_empty()
                     || this.settings.account.id != account
                     || this.summary.provider != provider
-                    || this.busy
-                    || this.stopping
+                    || this.turn_in_flight()
                 {
                     if this.status == "Loading ticket context…" {
                         this.status = "Ready".into();

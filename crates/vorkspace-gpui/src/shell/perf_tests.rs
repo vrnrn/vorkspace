@@ -50,7 +50,7 @@ fn native_perf_sample() {
     let database = directory.path().join("vorkspace.db");
     let mut metrics = Vec::new();
 
-    let mut store = Store::open(&database).unwrap();
+    let mut store = Store::test(&database).unwrap();
     let rows: Vec<_> = (0..HISTORY_ROWS).map(row).collect();
     let mut large = store.create("codex", PROJECT).unwrap();
     large.has_messages = true;
@@ -67,7 +67,7 @@ fn native_perf_sample() {
     drop(store);
 
     let start = Instant::now();
-    let store = Store::open(&database).unwrap();
+    let store = Store::test(&database).unwrap();
     metrics.push(("store_open", ms(start)));
     let start = Instant::now();
     store.sessions().unwrap();

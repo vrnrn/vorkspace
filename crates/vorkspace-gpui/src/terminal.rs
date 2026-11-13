@@ -13,6 +13,7 @@ use std::{
     borrow::Cow,
     cell::Cell,
     collections::HashMap,
+    os::fd::AsRawFd,
     rc::Rc,
     sync::{
         Arc, Mutex,
@@ -62,7 +63,12 @@ const PADDING: f32 = 8.;
 #[derive(Clone)]
 struct Listener {
     events: async_channel::Sender<TermEvent>,
-    repaint_pending: Arc<AtomicBool>,
+    repaint: Arc<Repaint>,
+}
+
+struct Repaint {
+    visible: AtomicBool,
+    pending: AtomicBool,
 }
 impl Listener {
     fn channel() -> (Self, async_channel::Receiver<TermEvent>) {
@@ -70,7 +76,10 @@ impl Listener {
         (
             Self {
                 events,
-                repaint_pending: Arc::default(),
+                repaint: Arc::new(Repaint {
+                    visible: AtomicBool::new(true),
+                    pending: AtomicBool::new(false),
+                }),
             },
             receiver,
         )
@@ -82,7 +91,9 @@ impl Listener {
             TermEvent::Wakeup => {
                 // The terminal grid already owns the latest output. Queue
                 // one request to observe it, regardless of output rate.
-                if self.repaint_pending.swap(true, Ordering::AcqRel) {
+                if !self.repaint.visible.load(Ordering::Acquire)
+                    || self.repaint.pending.swap(true, Ordering::AcqRel)
+                {
                     return;
                 }
                 TermEvent::Wakeup
@@ -138,9 +149,9 @@ pub(crate) struct Terminal {
     selection_pointer: Option<gpui::Point<gpui::Pixels>>,
     selection_scroll: Option<Task<()>>,
     scroll_remainder: f32,
-    pub(crate) visible: bool,
+    repaint: Arc<Repaint>,
     _events: Task<()>,
-    _poll: Task<()>,
+    foreground_poll: Option<Task<()>>,
 }
 impl EventEmitter<TerminalEvent> for Terminal {}
 impl Focusable for Terminal {
@@ -156,7 +167,7 @@ struct Spawned {
     master_owner: Option<Arc<std::fs::File>>,
     shell_pid: u32,
     events: async_channel::Receiver<TermEvent>,
-    repaint_pending: Arc<AtomicBool>,
+    repaint: Arc<Repaint>,
 }
 /// Start the login shell on a PTY with TerminalView's environment. A failure
 /// is written into the grid, as TerminalView prints it.
@@ -174,9 +185,9 @@ fn engine(size: GridSize) -> Arc<Mutex<Engine>> {
             .expect("allocate libghostty-vt terminal"),
     ))
 }
-fn spawn(cwd: &str, size: GridSize, _id: u64) -> Spawned {
+fn spawn(cwd: &str, size: GridSize) -> Spawned {
     let (listener, rx) = Listener::channel();
-    let repaint_pending = listener.repaint_pending.clone();
+    let repaint = listener.repaint.clone();
     let term = engine(size);
     let workdir = working_dir(cwd);
     let (program, args) = default_shell();
@@ -194,7 +205,6 @@ fn spawn(cwd: &str, size: GridSize, _id: u64) -> Spawned {
     let (sender, master_owner, master_fd, shell_pid) =
         match pty::Pty::spawn(&program, &args, &workdir, env, size, term.clone(), listener) {
             Ok(pty) => {
-                use std::os::fd::AsRawFd;
                 let fd = pty.master.as_raw_fd();
                 (Some(pty.sender), Some(pty.master), fd, pty.shell_pid)
             }
@@ -213,7 +223,7 @@ fn spawn(cwd: &str, size: GridSize, _id: u64) -> Spawned {
         master_owner,
         shell_pid,
         events: rx,
-        repaint_pending,
+        repaint,
     }
 }
 
@@ -226,7 +236,7 @@ fn detached(size: GridSize) -> Spawned {
         master_owner: None,
         shell_pid: 0,
         events: rx,
-        repaint_pending: listener.repaint_pending,
+        repaint: listener.repaint,
     }
 }
 
@@ -265,13 +275,13 @@ impl Terminal {
             master_owner,
             shell_pid,
             events: rx,
-            repaint_pending,
+            repaint,
         } = if cfg!(test) {
             // GPUI's deterministic test scheduler rejects wakeups from the
             // PTY thread; UI tests run the dock without a shell behind it.
             detached(size)
         } else {
-            spawn(&cwd, size, cx.entity_id().as_u64())
+            spawn(&cwd, size)
         };
         let events = cx.spawn(async move |this, cx| {
             while let Ok(event) = rx.recv().await {
@@ -283,11 +293,6 @@ impl Terminal {
                 if this
                     .update(cx, |this, cx| {
                         for event in batch {
-                            if matches!(event, TermEvent::Wakeup) {
-                                // Re-arm before observing the grid: output
-                                // arriving during paint must get a new wakeup.
-                                repaint_pending.store(false, Ordering::Release);
-                            }
                             this.on_event(event, cx);
                         }
                     })
@@ -297,39 +302,7 @@ impl Terminal {
                 }
             }
         });
-        // TerminalView's 1s foreground poll; a hidden dock has no title to paint.
-        let poll = cx.spawn(async move |this, cx| {
-            loop {
-                cx.background_executor().timer(Duration::from_secs(1)).await;
-                let Ok(Some((fd, pid))) = this.update(cx, |this, _| {
-                    (this.visible && !this.exited)
-                        .then_some((this.master_owner.clone(), this.shell_pid))
-                }) else {
-                    if this.update(cx, |_, _| ()).is_err() {
-                        break;
-                    }
-                    continue;
-                };
-                let label = cx
-                    .background_executor()
-                    .spawn(async move {
-                        use std::os::fd::AsRawFd;
-                        fd.and_then(|fd| foreground_label(fd.as_raw_fd(), pid))
-                    })
-                    .await;
-                if this
-                    .update(cx, |this, cx| {
-                        if this.visible && !this.exited {
-                            this.set_foreground(label, cx);
-                        }
-                    })
-                    .is_err()
-                {
-                    break;
-                }
-            }
-        });
-        Self {
+        let mut terminal = Self {
             term,
             sender,
             focus: cx.focus_handle(),
@@ -346,16 +319,77 @@ impl Terminal {
             selection_pointer: None,
             selection_scroll: None,
             scroll_remainder: 0.,
-            visible: true,
+            repaint,
             _events: events,
-            _poll: poll,
+            foreground_poll: None,
+        };
+        terminal.start_foreground_poll(cx);
+        terminal
+    }
+
+    pub(crate) fn is_visible(&self) -> bool {
+        self.repaint.visible.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn set_visible(&mut self, visible: bool, cx: &mut Context<Self>) {
+        self.set_activity(visible, visible, cx);
+    }
+
+    /// A dock can show foreground status even when the grid is folded away.
+    pub(crate) fn set_activity(
+        &mut self,
+        visible: bool,
+        monitor_foreground: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if monitor_foreground {
+            self.start_foreground_poll(cx);
+        } else {
+            self.foreground_poll = None;
         }
+        if self.is_visible() == visible {
+            return;
+        }
+        self.repaint.visible.store(visible, Ordering::Release);
+        if visible {
+            cx.notify();
+        } else {
+            self.stop_selection();
+        }
+    }
+
+    fn start_foreground_poll(&mut self, cx: &mut Context<Self>) {
+        if self.foreground_poll.is_some() || self.exited {
+            return;
+        }
+        let Some(master) = self.master_owner.clone() else {
+            return;
+        };
+        let pid = self.shell_pid;
+        self.foreground_poll = Some(cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(Duration::from_secs(1)).await;
+                let master = master.clone();
+                let label = cx
+                    .background_executor()
+                    .spawn(async move { foreground_label(master.as_raw_fd(), pid) })
+                    .await;
+                if this
+                    .update(cx, |this, cx| this.set_foreground(label, cx))
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        }));
     }
 
     fn on_event(&mut self, event: TermEvent, cx: &mut Context<Self>) {
         match event {
             TermEvent::Wakeup => {
-                if self.visible {
+                // Output during painting must be able to queue the next wakeup.
+                self.repaint.pending.store(false, Ordering::Release);
+                if self.is_visible() {
                     cx.notify();
                 }
             }
@@ -376,6 +410,7 @@ impl Terminal {
         if !self.exited {
             self.exited = true;
             self.sender = None;
+            self.foreground_poll = None;
             self.set_foreground(None, cx);
             cx.emit(TerminalEvent::Changed);
         }
@@ -571,7 +606,7 @@ impl Terminal {
     /// Keep extending the same selection through scrollback at either edge,
     /// even when the pointer is held still outside the terminal.
     fn scroll_selection(&mut self, cx: &mut Context<Self>) -> bool {
-        if !self.selecting || !self.visible {
+        if !self.selecting || !self.is_visible() {
             self.selecting = false;
             self.selection_pointer = None;
             return false;
@@ -1051,7 +1086,7 @@ fn indexed_rgb(index: u8) -> u32 {
     }
 }
 /// Bytes a keystroke sends, or None to leave it to the app's bindings.
-/// Includes terminalKeys.ts's macOS editing shortcuts.
+/// Includes the macOS editing shortcuts.
 #[cfg(test)]
 fn key_bytes(keystroke: &Keystroke, term: &mut Engine) -> Option<Vec<u8>> {
     encode_key(keystroke, term, KeyAction::Press)

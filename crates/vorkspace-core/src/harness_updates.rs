@@ -30,13 +30,13 @@ fn package(kind: Kind) -> Option<&'static str> {
         _ => None,
     }
 }
-pub fn parse_version(text: &str) -> Option<String> {
+pub(crate) fn parse_version(text: &str) -> Option<String> {
     regex::Regex::new(r"\d+\.\d+\.\d+")
         .ok()?
         .find(text)
         .map(|m| m.as_str().to_owned())
 }
-pub fn compare_versions(a: &str, b: &str) -> Ordering {
+pub(crate) fn compare_versions(a: &str, b: &str) -> Ordering {
     let parts = |s: &str| {
         s.split('.')
             .map(|n| n.parse::<u64>().unwrap_or(0))
@@ -58,7 +58,7 @@ fn installed(kind: Kind) -> Result<String, String> {
     )?;
     parse_version(&output).ok_or("CLI returned no version".into())
 }
-pub fn latest_version(kind: Kind) -> Result<String, String> {
+pub(crate) fn latest_version(kind: Kind) -> Result<String, String> {
     let package = package(kind).ok_or("No update feed for harness")?;
     let text = ureq::AgentBuilder::new()
         .timeout(Duration::from_secs(10))

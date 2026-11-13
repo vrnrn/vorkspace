@@ -1,4 +1,5 @@
-//! React's command names, defaults, scopes, filter and shortcut recorder.
+//! Keybinding command names, defaults, scopes, filter and shortcut recorder.
+
 use crate::settings::{Preferences, SettingsView};
 use gpui::{AnyElement, Context, Focusable, FontWeight, Role, Window, div, prelude::*, px};
 use vorkspace_ui::radius;
@@ -312,13 +313,6 @@ pub(crate) const BINDINGS: &[Binding] = &[
         fixed: false,
     },
 ];
-pub(super) fn quick_composer_label(p: &Preferences) -> String {
-    p.keybindings
-        .get("App: Quick Composer")
-        .and_then(|s| s.clone())
-        .map(|s| shortcut_label(&s))
-        .unwrap_or_else(|| "⌘⇧Space".into())
-}
 /// A command's shortcut as shown, honoring the user's rebinding; `None`
 /// once they have disabled it.
 pub(crate) fn command_shortcut(p: &Preferences, command: &str) -> Option<String> {
@@ -376,39 +370,7 @@ impl SettingsView {
             })
             .copied()
             .collect();
-        let action = div()
-            .flex()
-            .items_center()
-            .flex_wrap()
-            .max_w_full()
-            .gap_3()
-            .child(
-                div()
-                    .text_size(px(12.))
-                    .text_color(content(0.4))
-                    .child(format!(
-                        "{} {}",
-                        rows.len(),
-                        if rows.len() == 1 {
-                            "binding"
-                        } else {
-                            "bindings"
-                        }
-                    )),
-            )
-            .child(
-                crate::controls::page::search_frame(&self.keybinding_filter.focus_handle(cx))
-                    .w(px(176.))
-                    .max_w_full()
-                    .child(icon("search-01", 14.))
-                    .child(
-                        div()
-                            .min_w_0()
-                            .flex_1()
-                            .child(self.keybinding_filter.clone()),
-                    ),
-            )
-            .into_any_element();
+        let action = self.keybinding_filter_action(&rows, cx);
         let mut action = Some(action);
         let mut children = vec![if narrow {
             div()
@@ -460,128 +422,7 @@ impl SettingsView {
                         .into_any_element(),
                 );
             }
-            let recording = self.recording.as_deref() == Some(command);
-            let modified = self.prefs.keybindings.contains_key(command);
-            let disabled = self.prefs.keybindings.get(command) == Some(&None);
-            let label = if recording {
-                if self.recording_preview.is_empty() {
-                    "Record…".into()
-                } else {
-                    self.recording_preview.clone()
-                }
-            } else {
-                self.binding_label(&row)
-            };
-            children.push(
-                div()
-                    .flex()
-                    .map(|d| {
-                        if narrow {
-                            d.flex_col().items_start().gap_1().py_2()
-                        } else {
-                            d.h(px(36.)).items_center()
-                        }
-                    })
-                    .border_b_1()
-                    .border_color(content(0.05))
-                    .px_4()
-                    .text_size(px(12.))
-                    .child(
-                        div()
-                            .min_w_0()
-                            .when(narrow, |d| d.w_full())
-                            .when(!narrow, |d| d.flex_1())
-                            .truncate()
-                            .text_color(content(if disabled { 0.45 } else { 1. }))
-                            .child(name),
-                    )
-                    .child(
-                        div()
-                            .w(px(160.))
-                            .max_w_full()
-                            .flex_shrink_0()
-                            .flex()
-                            .items_center()
-                            .gap(px(2.))
-                            .child(
-                                div()
-                                    .id(gpui::SharedString::from(format!("shortcut-{command}")))
-                                    .debug_selector(move || format!("shortcut-{command}"))
-                                    .role(if row.fixed { Role::Label } else { Role::Button })
-                                    .aria_label(format!("Change {command} shortcut"))
-                                    .aria_description(format!("Available {}", row.when))
-                                    .h(px(24.))
-                                    .w(px(112.))
-                                    .flex()
-                                    .items_center()
-                                    .truncate()
-                                    .rounded(px(radius::CONTROL))
-                                    .border_1()
-                                    .border_color(if recording {
-                                        accent_color()
-                                    } else {
-                                        content(0.15)
-                                    })
-                                    .px(px(6.))
-                                    // The system font draws ⌘ ⇧ ⌥ at text size;
-                                    // Obel Mono falls back to a tiny glyph.
-                                    .text_size(px(12.))
-                                    .font_features(crate::panel_kit::tabular())
-                                    .text_color(content(if disabled {
-                                        0.35
-                                    } else if row.fixed {
-                                        0.6
-                                    } else {
-                                        0.8
-                                    }))
-                                    .child(label)
-                                    .when(!row.fixed, |d| {
-                                        d.map(vorkspace_ui::theme::tab_reachable)
-                                            .cursor_pointer()
-                                            .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.1)))
-                                            .on_click(cx.listener(move |this, _, window, cx| {
-                                                this.recording = Some(command.into());
-                                                this.recording_preview.clear();
-                                                this.recording_error = None;
-                                                window.focus(&this.recorder_focus, cx);
-                                                cx.notify();
-                                            }))
-                                    }),
-                            )
-                            .when(modified, |d| {
-                                d.child(
-                                    div()
-                                        .id(gpui::SharedString::from(format!("reset-{command}")))
-                                        .debug_selector(move || format!("reset-shortcut-{command}"))
-                                        .role(Role::Button)
-                                        .map(vorkspace_ui::theme::tab_reachable)
-                                        .aria_label(format!("Reset {command} shortcut"))
-                                        .p_1()
-                                        .rounded(px(radius::CONTROL))
-                                        .cursor_pointer()
-                                        .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.1)))
-                                        .child(icon("rotate-ccw", 14.))
-                                        .on_click(cx.listener(move |this, _, _, cx| {
-                                            this.update(cx, |p| {
-                                                p.keybindings.remove(command);
-                                            })
-                                        })),
-                                )
-                            }),
-                    )
-                    .when(!narrow, |d| {
-                        d.child(
-                            div()
-                                .w(px(150.))
-                                .flex_shrink_0()
-                                .truncate()
-                                .text_size(px(12.))
-                                .text_color(content(0.45))
-                                .child(row.when),
-                        )
-                    })
-                    .into_any_element(),
-            );
+            children.push(self.keybinding_row(row, name, narrow, cx));
         }
         if let Some(error) = &self.recording_error {
             children.push(
@@ -594,8 +435,184 @@ impl SettingsView {
                     .into_any_element(),
             );
         }
-        vec![self.group(None,true,"Shortcuts",Some("Click a shortcut to record new keys. Press Delete while recording to disable it.".into()),action,children)]
+        vec![self.group(None,true,"Shortcuts", Some("Click a shortcut to record new keys. Press Delete while recording to disable it.".into()),action,children)]
     }
+
+    fn keybinding_filter_action(&self, rows: &[Binding], cx: &mut Context<Self>) -> AnyElement {
+        div()
+            .flex()
+            .items_center()
+            .flex_wrap()
+            .max_w_full()
+            .gap_3()
+            .child(
+                div()
+                    .text_size(px(12.))
+                    .text_color(content(0.4))
+                    .child(format!(
+                        "{} {}",
+                        rows.len(),
+                        if rows.len() == 1 {
+                            "binding"
+                        } else {
+                            "bindings"
+                        }
+                    )),
+            )
+            .child(
+                crate::controls::page::search_frame(&self.keybinding_filter.focus_handle(cx))
+                    .w(px(176.))
+                    .max_w_full()
+                    .child(icon("search-01", 14.))
+                    .child(
+                        div()
+                            .min_w_0()
+                            .flex_1()
+                            .child(self.keybinding_filter.clone()),
+                    ),
+            )
+            .into_any_element()
+    }
+
+    fn keybinding_row(
+        &self,
+        row: Binding,
+        name: &'static str,
+        narrow: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let command = row.command;
+        let recording = self.recording.as_deref() == Some(command);
+        let modified = self.prefs.keybindings.contains_key(command);
+        let disabled = self.prefs.keybindings.get(command) == Some(&None);
+        let label = if recording {
+            if self.recording_preview.is_empty() {
+                "Record…".into()
+            } else {
+                self.recording_preview.clone()
+            }
+        } else {
+            self.binding_label(&row)
+        };
+        div()
+            .flex()
+            .map(|d| {
+                if narrow {
+                    d.flex_col().items_start().gap_1().py_2()
+                } else {
+                    d.h(px(36.)).items_center()
+                }
+            })
+            .border_b_1()
+            .border_color(content(0.05))
+            .px_4()
+            .text_size(px(12.))
+            .child(
+                div()
+                    .min_w_0()
+                    .when(narrow, |d| d.w_full())
+                    .when(!narrow, |d| d.flex_1())
+                    .truncate()
+                    .text_color(content(if disabled { 0.45 } else { 1. }))
+                    .child(name),
+            )
+            .child(
+                div()
+                    .w(px(160.))
+                    .max_w_full()
+                    .flex_shrink_0()
+                    .flex()
+                    .items_center()
+                    .gap(px(2.))
+                    .child(Self::shortcut_recorder(row, recording, disabled, label, cx))
+                    .when(modified, |d| {
+                        d.child(
+                            div()
+                                .id(gpui::SharedString::from(format!("reset-{command}")))
+                                .debug_selector(move || format!("reset-shortcut-{command}"))
+                                .role(Role::Button)
+                                .map(vorkspace_ui::theme::tab_reachable)
+                                .aria_label(format!("Reset {command} shortcut"))
+                                .p_1()
+                                .rounded(px(radius::CONTROL))
+                                .cursor_pointer()
+                                .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.1)))
+                                .child(icon("rotate-ccw", 14.))
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.update(cx, |p| {
+                                        p.keybindings.remove(command);
+                                    })
+                                })),
+                        )
+                    }),
+            )
+            .when(!narrow, |d| {
+                d.child(
+                    div()
+                        .w(px(150.))
+                        .flex_shrink_0()
+                        .truncate()
+                        .text_size(px(12.))
+                        .text_color(content(0.45))
+                        .child(row.when),
+                )
+            })
+            .into_any_element()
+    }
+
+    fn shortcut_recorder(
+        row: Binding,
+        recording: bool,
+        disabled: bool,
+        label: String,
+        cx: &mut Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        let command = row.command;
+        div()
+            .id(gpui::SharedString::from(format!("shortcut-{command}")))
+            .debug_selector(move || format!("shortcut-{command}"))
+            .role(if row.fixed { Role::Label } else { Role::Button })
+            .aria_label(format!("Change {command} shortcut"))
+            .aria_description(format!("Available {}", row.when))
+            .h(px(24.))
+            .w(px(112.))
+            .flex()
+            .items_center()
+            .truncate()
+            .rounded(px(radius::CONTROL))
+            .border_1()
+            .border_color(if recording {
+                accent_color()
+            } else {
+                content(0.15)
+            })
+            .px(px(6.))
+            // The system font draws ⌘ ⇧ ⌥ at text size;
+            // Obel Mono falls back to a tiny glyph.
+            .text_size(px(12.))
+            .font_features(crate::panel_kit::tabular())
+            .text_color(content(if disabled {
+                0.35
+            } else if row.fixed {
+                0.6
+            } else {
+                0.8
+            }))
+            .child(label)
+            .when(!row.fixed, |d| {
+                d.map(vorkspace_ui::theme::tab_reachable)
+                    .cursor_pointer()
+                    .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.1)))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.recording = Some(command.into());
+                        this.recording_preview.clear();
+                        this.recording_error = None;
+                        window.focus(&this.recorder_focus, cx);
+                        cx.notify();
+                    }))
+            })
+    }
+
     fn binding_label(&self, row: &Binding) -> String {
         command_shortcut(&self.prefs, row.command).unwrap_or_else(|| "Disabled".into())
     }

@@ -1,4 +1,4 @@
-//! Context-window accounting, matching sessions/model/contextUsage.ts.
+//! Context-window accounting for a conversation.
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -23,7 +23,7 @@ impl Usage {
     }
 }
 
-pub fn claude_used(usage: &Value) -> Option<u64> {
+pub(crate) fn claude_used(usage: &Value) -> Option<u64> {
     let used = [
         "input_tokens",
         "cache_creation_input_tokens",

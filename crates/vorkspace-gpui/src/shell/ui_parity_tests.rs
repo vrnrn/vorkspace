@@ -1,16 +1,15 @@
 //! Opt-in pixel parity. Renders the main surfaces offscreen so a refactor can be
 //! compared byte for byte against the captures of the commit before it.
 use super::*;
-use crate::{panel_kit::RightTab, settings::Section};
+use crate::{settings::Section, workspace::SidebarTab};
 use vorkspace_core::store::Store;
 
-const PROJECT: &str = "/tmp/vorkspace-ui-parity";
 type Open = fn(&mut Shell, &mut Window, &mut Context<Shell>);
 
-fn git(args: &[&str]) {
+fn git(project: &str, args: &[&str]) {
     let status = std::process::Command::new("git")
         .args(args)
-        .current_dir(PROJECT)
+        .current_dir(project)
         .env("GIT_AUTHOR_DATE", "2026-01-01T00:00:00Z")
         .env("GIT_COMMITTER_DATE", "2026-01-01T00:00:00Z")
         .status()
@@ -18,42 +17,33 @@ fn git(args: &[&str]) {
     assert!(status.success());
 }
 
-/// A fixed repository: the right panel only opens for a checkout, and its
-/// contents must not vary between the two runs being compared.
-fn project() {
-    let _ = std::fs::remove_dir_all(PROJECT);
-    std::fs::create_dir_all(format!("{PROJECT}/src")).unwrap();
-    git(&["init", "-q", "-b", "main"]);
-    git(&["config", "user.name", "Parity"]);
-    git(&["config", "user.email", "parity@example.invalid"]);
-    std::fs::write(format!("{PROJECT}/README.md"), "# Parity\n").unwrap();
-    std::fs::write(format!("{PROJECT}/src/main.rs"), "fn main() {}\n").unwrap();
-    git(&["add", "."]);
-    git(&["commit", "-q", "-m", "Add the parity fixture"]);
+/// A fixed repository supplies identical project tool contents to each capture.
+fn init_project(project: &str) {
+    std::fs::create_dir_all(format!("{project}/src")).unwrap();
+    git(project, &["init", "-q", "-b", "main"]);
+    git(project, &["config", "user.name", "Parity"]);
+    git(project, &["config", "user.email", "parity@example.invalid"]);
+    std::fs::write(format!("{project}/README.md"), "# Parity\n").unwrap();
+    std::fs::write(format!("{project}/src/main.rs"), "fn main() {}\n").unwrap();
+    git(project, &["add", "."]);
+    git(project, &["commit", "-q", "-m", "Add the parity fixture"]);
     std::fs::write(
-        format!("{PROJECT}/src/main.rs"),
+        format!("{project}/src/main.rs"),
         "fn main() {\n    println!(\"changed\");\n}\n",
     )
     .unwrap();
 }
 
-fn right_tab(shell: &mut Shell, tab: RightTab, window: &mut Window, cx: &mut Context<Shell>) {
-    shell.set_right_panel_open(true, window, cx);
-    if let Some(panel) = &shell.right_panel {
-        panel.update(cx, |panel, cx| panel.select(tab, cx));
-    }
-}
-
 const SURFACES: &[(&str, Open)] = &[
     ("chat", |_, _, _| {}),
     ("explorer", |shell, window, cx| {
-        right_tab(shell, RightTab::Files, window, cx)
+        shell.select_classic_sidebar(SidebarTab::Files, window, cx)
     }),
     ("changes", |shell, window, cx| {
-        right_tab(shell, RightTab::Changes, window, cx)
+        shell.select_classic_sidebar(SidebarTab::Changes, window, cx)
     }),
     ("graph", |shell, window, cx| {
-        right_tab(shell, RightTab::Graph, window, cx)
+        shell.select_classic_sidebar(SidebarTab::Graph, window, cx)
     }),
     ("notes", |shell, window, cx| shell.open_notes(window, cx)),
     ("todos", |shell, window, cx| shell.open_todos(window, cx)),
@@ -66,9 +56,6 @@ const SURFACES: &[(&str, Open)] = &[
     }),
     ("settings-general", |shell, window, cx| {
         shell.open_settings(Section::General, window, cx)
-    }),
-    ("settings-connections", |shell, window, cx| {
-        shell.open_settings(Section::Connections, window, cx)
     }),
     ("settings-appearance", |shell, window, cx| {
         shell.open_settings(Section::Appearance, window, cx)
@@ -95,13 +82,16 @@ const SURFACES: &[(&str, Open)] = &[
 fn ui_parity_capture() {
     let output = std::path::PathBuf::from(std::env::var_os("VORKSPACE_UI_PARITY_DIR").unwrap());
     assert!(output.is_absolute() && output.is_dir());
-    project();
+    let fixture = tempfile::tempdir().unwrap();
+    let project = fixture.path().join("vorkspace-ui-parity");
+    let project = project.to_str().unwrap();
+    init_project(project);
     let store = Arc::new(Mutex::new(
-        Store::open(std::path::Path::new(":memory:")).unwrap(),
+        Store::test(std::path::Path::new(":memory:")).unwrap(),
     ));
     let session = {
         let mut store = locked(&store).unwrap();
-        let mut session = store.create("codex", PROJECT).unwrap();
+        let mut session = store.create("codex", project).unwrap();
         store
             .write_rows(
                 session.id,
@@ -139,15 +129,15 @@ fn ui_parity_capture() {
         for (name, open) in SURFACES {
             let mut state = Workspace::default();
             state.preferences.theme = theme.into();
-            state.add_project(PROJECT);
-            state.project = PROJECT.into();
+            state.add_project(project);
+            state.project = project.into();
             state.open(session.id);
             let saved = serde_json::to_string(&state).unwrap();
             let store = store.clone();
             let summaries = vec![session.clone()];
             let window = cx
                 .open_window(gpui::size(px(1400.), px(900.)), |_, cx| {
-                    cx.new(|cx| Shell::new(store, summaries, PROJECT.into(), Some(saved), cx))
+                    cx.new(|cx| Shell::new(store, summaries, project.into(), Some(saved), cx))
                 })
                 .unwrap();
             cx.run_until_parked();

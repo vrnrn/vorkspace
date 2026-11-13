@@ -34,7 +34,16 @@ fn workspace_fallback<A: Action>(cx: &mut App) {
                 {
                     return;
                 }
-                let focus = modal.clone().unwrap_or_else(|| shell.menu_focus());
+                // AppKit can deliver a menu action after deactivation. Keep
+                // the retained editor target used by ordinary key dispatch.
+                let focus = modal
+                    .clone()
+                    .or_else(|| {
+                        window
+                            .focused(cx)
+                            .filter(|focus| window.is_action_available_in(action.as_ref(), focus))
+                    })
+                    .unwrap_or_else(|| shell.menu_focus());
                 if !window.is_action_available_in(action.as_ref(), &focus) {
                     return;
                 }
@@ -72,7 +81,8 @@ actions!(
         ShowAll,
         Repository,
         ReportBug,
-        RequestFeature
+        RequestFeature,
+        ShowRunningWork,
     ]
 );
 
@@ -97,6 +107,7 @@ pub(crate) fn init(cx: &mut App) {
     cx.on_action(|_: &crate::CloseWindow, cx| {
         with_workspace(cx, shell::Shell::request_close_window);
     });
+    cx.on_action(|_: &ShowRunningWork, cx| with_workspace(cx, shell::Shell::show_running_work));
     cx.on_action(|_: &crate::NextWindow, cx| {
         let windows: Vec<_> = cx
             .windows()
@@ -168,6 +179,14 @@ pub(crate) fn init(cx: &mut App) {
         shell::FocusPaneUp,
         shell::FocusPaneDown,
         shell::OpenAppearance,
+        editor::Find,
+        editor::Replace,
+        editor::Format,
+        editor::ToggleWordWrap,
+        input::FoldCode,
+        input::UnfoldCode,
+        input::FoldAll,
+        input::UnfoldAll,
         image_lightbox::ZoomIn,
         image_lightbox::ZoomOut,
         image_lightbox::ResetZoom,
@@ -300,6 +319,7 @@ pub(crate) fn build(prefs: &Preferences) -> Vec<Menu> {
             MenuItem::action("Automations", shell::ShowAutomations),
             MenuItem::action("Toggle Terminal", shell::ToggleTerminal),
             MenuItem::action("Switch Model…", shell::SwitchModel),
+            MenuItem::action("Running Work…", ShowRunningWork),
             MenuItem::separator(),
             MenuItem::action("Back", shell::VisitBack),
             MenuItem::action("Forward", shell::VisitForward),

@@ -1,5 +1,7 @@
 //! AppearancePage, ChatBackgroundCard, workspace themes and AccentColorPicker.
 use crate::popover::{Align, Anchor, Side, popover};
+use crate::settings::Preferences;
+
 use crate::settings::{SettingsEvent, SettingsView, SliderKind, widgets::secondary_button};
 use gpui::{
     AnyElement, Context, Focusable, Role, SharedString, Window, div, linear_color_stop,
@@ -92,6 +94,185 @@ impl SettingsView {
                     cx.window_appearance(),
                     gpui::WindowAppearance::Light | gpui::WindowAppearance::VibrantLight
                 ));
+        let theme = self.appearance_theme_rows(&p, light, cx);
+        let mut page = vec![self.group(None, true, "Theme", None, None, theme)];
+        let color = self.appearance_color_rows(&p, light, cx);
+        page.push(self.group(None, false, "Color", None, None, color));
+        let translucency_disabled = light;
+        let translucency = self.appearance_translucency_rows(&p, translucency_disabled, light, cx);
+        page.push(self.group(
+            None,
+            false,
+            "Translucency",
+            light.then(|| "Available in dark mode.".into()),
+            None,
+            translucency,
+        ));
+        page.push(self.chat_background_card(cx));
+        let layout = self.appearance_layout_rows(&p, cx);
+        page.push(self.group(None, false, "Layout", None, None, layout));
+        page
+    }
+
+    fn appearance_layout_rows(&self, p: &Preferences, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let scale_options = UI_SCALE_PERCENTS
+            .iter()
+            .map(|percent| {
+                (
+                    percent.to_string(),
+                    SharedString::from(format!("{percent}%")),
+                    None,
+                )
+            })
+            .collect();
+        vec![
+                    self.row(
+                        Some("collapsed-project-rail"),
+                        true,
+                        "Collapsed project rail",
+                        Some("Show project icons or hide navigation when collapsed.".into()),
+                        vec![self.segmented(
+                            "collapsed-project-rail",
+                            "Collapsed project rail",
+                            &p.collapsed_project_rail,
+                            &[("compact", "Icon rail"), ("hidden", "Hidden")],
+                            cx,
+                            |this, v, cx| this.update(cx, |p| p.collapsed_project_rail = v.into()),
+                        )],
+                    ),
+                    self.row(
+                        Some("interface-scale"),
+                        false,
+                        "Interface scale",
+                        Some("Zoom the whole interface. You can also use Ctrl+=, Ctrl+-, and Ctrl+0 (Cmd on macOS).".into()),
+                        vec![self.select("interface-scale", "Interface scale", &p.ui_scale.to_string(),
+                            scale_options,
+                            None,
+                            cx,
+                            |this, v, cx| {
+                                if let Ok(v) = v.parse() {
+                                    this.update(cx, |p| p.ui_scale = v)
+                                }
+                            },
+                        )],
+                    ),
+                    self.row(
+                        Some("show-excluded-files"),
+                        false,
+                        "Show excluded files",
+                        Some("Include files ignored by Git in Explorer.".into()),
+                        vec![self.toggle(
+                            "show-excluded-files",
+                            "Show excluded files",
+                            p.show_excluded_files,
+                            false,
+                            cx,
+                            |this, on, cx| this.update(cx, |p| p.show_excluded_files = on),
+                        )],
+                    ),
+                ]
+    }
+
+    fn appearance_translucency_rows(
+        &self,
+        p: &Preferences,
+        translucency_disabled: bool,
+        light: bool,
+        cx: &mut Context<Self>,
+    ) -> Vec<AnyElement> {
+        vec![
+                        self.row(
+                            Some("sidebar-opacity"),
+                            true,
+                            "Sidebar opacity",
+                            Some("How much of the desktop shows through the project navigation and sidebar.".into()),
+                            vec![self.slider(
+                                SliderKind::SidebarOpacity,
+                                format!("{}%", p.sidebar_opacity),
+                                translucency_disabled,
+                                cx,
+                            )],
+                        ),
+                        self.row(
+                            Some("blur"),
+                            false,
+                            "Blur radius",
+                            Some("Blur the desktop behind translucent surfaces.".into()),
+                            vec![self.slider(
+                                SliderKind::SidebarBlur,
+                                p.sidebar_blur.to_string(),
+                                translucency_disabled,
+                                cx,
+                            )],
+                        ),
+                        self.row(
+                            Some("main-pane-glass"),
+                            false,
+                            "Main pane glass",
+                            Some("Extend the translucent treatment to the main pane behind sessions and editors.".into()),
+                            vec![self.toggle(
+                                "main-pane-glass",
+                                "Main pane glass",
+                                p.body_glass,
+                                light,
+                                cx,
+                                |this, on, cx| this.update(cx, |p| p.body_glass = on),
+                            )],
+                        ),
+                    ]
+    }
+
+    fn appearance_color_rows(
+        &self,
+        p: &Preferences,
+        light: bool,
+        cx: &mut Context<Self>,
+    ) -> Vec<AnyElement> {
+        vec![
+                        self.row(
+                            Some("hue"),
+                            true,
+                            "Hue",
+                            Some("Base hue for the window and main-pane surfaces.".into()),
+                            vec![self.slider(SliderKind::Hue, format!("{}°", p.theme_hue), false, cx)],
+                        ),
+                        self.row(
+                            Some("saturation"),
+                            false,
+                            "Saturation",
+                            Some("How strongly the hue tints the interface. Zero keeps it neutral.".into()),
+                            vec![self.slider(
+                                SliderKind::Saturation,
+                                format!("{}%", p.theme_saturation),
+                                false,
+                                cx,
+                            )],
+                        ),
+                        self.row(
+                            Some("dark-lightness"),
+                            false,
+                            "Dark-mode lightness",
+                            Some(if light {
+                                "This only affects dark mode. Your dark-mode value is preserved.".into()
+                            } else {
+                                "Base brightness of the dark theme. Lower values are darker; zero is true black.".into()
+                            }),
+                            vec![self.slider(
+                                SliderKind::DarkLightness,
+                                format!("{}%", p.theme_dark_lightness),
+                                light,
+                                cx,
+                            )],
+                        ),
+                    ]
+    }
+
+    fn appearance_theme_rows(
+        &mut self,
+        p: &Preferences,
+        light: bool,
+        cx: &mut Context<Self>,
+    ) -> Vec<AnyElement> {
         let mut theme = vec![self.row(
             Some("theme"),
             true,
@@ -163,156 +344,8 @@ impl SettingsView {
                 |this, v, cx| this.update(cx, |p| p.diff_palette = v.into()),
             )],
         ));
-        let mut page = vec![self.group(None, true, "Theme", None, None, theme)];
-        let color = vec![
-                self.row(
-                    Some("hue"),
-                    true,
-                    "Hue",
-                    Some("Base hue for the window and main-pane surfaces.".into()),
-                    vec![self.slider(SliderKind::Hue, format!("{}°", p.theme_hue), false, cx)],
-                ),
-                self.row(
-                    Some("saturation"),
-                    false,
-                    "Saturation",
-                    Some("How strongly the hue tints the interface. Zero keeps it neutral.".into()),
-                    vec![self.slider(
-                        SliderKind::Saturation,
-                        format!("{}%", p.theme_saturation),
-                        false,
-                        cx,
-                    )],
-                ),
-                self.row(
-                    Some("dark-lightness"),
-                    false,
-                    "Dark-mode lightness",
-                    Some(if light {
-                        "This only affects dark mode. Your dark-mode value is preserved.".into()
-                    } else {
-                        "Base brightness of the dark theme. Lower values are darker; zero is true black.".into()
-                    }),
-                    vec![self.slider(
-                        SliderKind::DarkLightness,
-                        format!("{}%", p.theme_dark_lightness),
-                        light,
-                        cx,
-                    )],
-                ),
-            ];
-        page.push(self.group(None, false, "Color", None, None, color));
-        let translucency_disabled = light;
-        let translucency = vec![
-                self.row(
-                    Some("sidebar-opacity"),
-                    true,
-                    "Sidebar opacity",
-                    Some("How much of the desktop shows through the project navigation and sidebar.".into()),
-                    vec![self.slider(
-                        SliderKind::SidebarOpacity,
-                        format!("{}%", p.sidebar_opacity),
-                        translucency_disabled,
-                        cx,
-                    )],
-                ),
-                self.row(
-                    Some("blur"),
-                    false,
-                    "Blur radius",
-                    Some("Blur the desktop behind translucent surfaces.".into()),
-                    vec![self.slider(
-                        SliderKind::SidebarBlur,
-                        p.sidebar_blur.to_string(),
-                        translucency_disabled,
-                        cx,
-                    )],
-                ),
-                self.row(
-                    Some("main-pane-glass"),
-                    false,
-                    "Main pane glass",
-                    Some("Extend the translucent treatment to the main pane behind sessions and editors.".into()),
-                    vec![self.toggle(
-                        "main-pane-glass",
-                        "Main pane glass",
-                        p.body_glass,
-                        light,
-                        cx,
-                        |this, on, cx| this.update(cx, |p| p.body_glass = on),
-                    )],
-                ),
-            ];
-        page.push(self.group(
-            None,
-            false,
-            "Translucency",
-            light.then(|| "Available in dark mode.".into()),
-            None,
-            translucency,
-        ));
-        page.push(self.chat_background_card(cx));
-        let scale_options = UI_SCALE_PERCENTS
-            .iter()
-            .map(|percent| {
-                (
-                    percent.to_string(),
-                    SharedString::from(format!("{percent}%")),
-                    None,
-                )
-            })
-            .collect();
-        let layout = vec![
-            self.row(
-                Some("collapsed-project-rail"),
-                true,
-                "Collapsed project rail",
-                Some("Show project icons or hide navigation when collapsed.".into()),
-                vec![self.segmented(
-                    "collapsed-project-rail",
-                    "Collapsed project rail",
-                    &p.collapsed_project_rail,
-                    &[("compact", "Icon rail"), ("hidden", "Hidden")],
-                    cx,
-                    |this, v, cx| this.update(cx, |p| p.collapsed_project_rail = v.into()),
-                )],
-            ),
-            self.row(
-                Some("interface-scale"),
-                false,
-                "Interface scale",
-                Some("Zoom the whole interface. You can also use Ctrl+=, Ctrl+-, and Ctrl+0 (Cmd on macOS).".into()),
-                vec![self.select(
-                    "interface-scale",
-                    "Interface scale",
-                    &p.ui_scale.to_string(),
-                    scale_options,
-                    None,
-                    cx,
-                    |this, v, cx| {
-                        if let Ok(v) = v.parse() {
-                            this.update(cx, |p| p.ui_scale = v)
-                        }
-                    },
-                )],
-            ),
-            self.row(
-                Some("show-excluded-files"),
-                false,
-                "Show excluded files",
-                Some("Include files ignored by Git in Explorer.".into()),
-                vec![self.toggle(
-                    "show-excluded-files",
-                    "Show excluded files",
-                    p.show_excluded_files,
-                    false,
-                    cx,
-                    |this, on, cx| this.update(cx, |p| p.show_excluded_files = on),
-                )],
-            ),
-        ];
-        page.push(self.group(None, false, "Layout", None, None, layout));
-        page
+
+        theme
     }
 
     /// AccentColorPicker: Default plus six presets and a custom color.
@@ -332,7 +365,7 @@ impl SettingsView {
         let weak = cx.weak_entity();
         // The choice is a ring around the swatch with a gap, as macOS draws
         // it: a border on the swatch itself vanished on the ink swatch.
-        let dot = |_selected: bool, color: gpui::Hsla| div().size(px(12.)).rounded_full().bg(color);
+        let dot = |color: gpui::Hsla| div().size(px(12.)).rounded_full().bg(color);
         let ring = |selected: bool| {
             move |d: gpui::Stateful<gpui::Div>| {
                 d.border_2()
@@ -377,7 +410,7 @@ impl SettingsView {
                                     .rounded_full()
                                     .cursor_pointer()
                                     .map(ring(preset == Some(ix)))
-                                    .child(dot(preset == Some(ix), color))
+                                    .child(dot(color))
                                     .on_click(cx.listener(move |this, _, _, cx| {
                                         this.accent_custom_open = false;
                                         let hex = hex.clone();
@@ -385,90 +418,106 @@ impl SettingsView {
                                     }))
                             }),
                     )
-                    .child(
-                        div()
-                            .id("accent-custom")
-                            .role(Role::Button)
-                            .map(vorkspace_ui::theme::tab_reachable)
-                            .aria_label("Custom color")
-                            .aria_expanded(self.accent_custom_open)
-                            .size(px(20.))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .rounded_full()
-                            .cursor_pointer()
-                            .map(ring(custom.is_some() || self.accent_custom_open))
-                            .child(
-                                div()
-                                    .size(px(12.))
-                                    .rounded_full()
-                                    .overflow_hidden()
-                                    .map(|d| match custom {
-                                        Some(c) => d.bg(rgb(c)),
-                                        None => d.bg(linear_gradient(
-                                            135.,
-                                            linear_color_stop(rgb(0xff4d4d), 0.),
-                                            linear_color_stop(rgb(0x4d6bff), 1.),
-                                        )),
-                                    }),
-                            )
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.accent_custom_open = !this.accent_custom_open;
-                                if this.accent_custom_open {
-                                    let text = this
-                                        .prefs
-                                        .accent_color
-                                        .clone()
-                                        .unwrap_or_else(|| "#4da3f5".into());
-                                    this.accent_custom.update(cx, |i, cx| {
-                                        i.set_text(text, cx);
-                                        i.select_range(0..i.content.len(), cx);
-                                    });
-                                    window.focus(&this.accent_custom.focus_handle(cx), cx);
-                                }
-                                cx.notify();
-                            })),
-                    ),
+                    .child(self.accent_custom_button(custom, ring, cx)),
             )
             .when(self.accent_custom_open, |d| {
-                d.child(
-                    popover(
-                        "accent-custom-popover",
-                        Anchor::Slot(self.accent_anchor.clone()),
-                    )
-                    .side(Side::Bottom)
-                    .align(Align::End)
-                    .width(248.)
-                    .padding(8.)
-                    .on_dismiss(move |_, cx| {
-                        let _ = weak.update(cx, |this, cx| {
-                            this.accent_custom_open = false;
-                            cx.notify();
-                        });
-                    })
-                    .child(
-                        div()
-                            .h(px(30.))
-                            .px_2()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .rounded(px(radius::CONTROL))
-                            .border_1()
-                            .border_color(content(0.1))
-                            .child(
-                                div()
-                                    .size(px(14.))
-                                    .flex_shrink_0()
-                                    .rounded_full()
-                                    .bg(rgb(custom.unwrap_or(0x4da3f5))),
-                            )
-                            .child(div().flex_1().min_w_0().child(self.accent_custom.clone())),
-                    ),
-                )
+                d.child(self.accent_custom_popover(custom, weak))
             })
             .into_any_element()
+    }
+
+    fn accent_custom_popover(
+        &self,
+        custom: Option<u32>,
+        weak: gpui::WeakEntity<Self>,
+    ) -> crate::popover::Popover {
+        popover(
+            "accent-custom-popover",
+            Anchor::Slot(self.accent_anchor.clone()),
+        )
+        .side(Side::Bottom)
+        .align(Align::End)
+        .width(248.)
+        .padding(8.)
+        .on_dismiss(move |_, cx| {
+            let _ = weak.update(cx, |this, cx| {
+                this.accent_custom_open = false;
+                cx.notify();
+            });
+        })
+        .child(
+            div()
+                .h(px(30.))
+                .px_2()
+                .flex()
+                .items_center()
+                .gap_2()
+                .rounded(px(radius::CONTROL))
+                .border_1()
+                .border_color(content(0.1))
+                .child(
+                    div()
+                        .size(px(14.))
+                        .flex_shrink_0()
+                        .rounded_full()
+                        .bg(rgb(custom.unwrap_or(0x4da3f5))),
+                )
+                .child(div().flex_1().min_w_0().child(self.accent_custom.clone())),
+        )
+    }
+
+    fn accent_custom_button<R>(
+        &self,
+        custom: Option<u32>,
+        ring: impl Fn(bool) -> R,
+        cx: &mut Context<Self>,
+    ) -> gpui::Stateful<gpui::Div>
+    where
+        R: FnOnce(gpui::Stateful<gpui::Div>) -> gpui::Stateful<gpui::Div>,
+    {
+        div()
+            .id("accent-custom")
+            .role(Role::Button)
+            .map(vorkspace_ui::theme::tab_reachable)
+            .aria_label("Custom color")
+            .aria_expanded(self.accent_custom_open)
+            .size(px(20.))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded_full()
+            .cursor_pointer()
+            .map(ring(custom.is_some() || self.accent_custom_open))
+            .child(
+                div()
+                    .size(px(12.))
+                    .rounded_full()
+                    .overflow_hidden()
+                    .map(|d| match custom {
+                        Some(c) => d.bg(rgb(c)),
+                        None => d.bg(linear_gradient(
+                            135.,
+                            linear_color_stop(rgb(0xff4d4d), 0.),
+                            linear_color_stop(rgb(0x4d6bff), 1.),
+                        )),
+                    }),
+            )
+            .on_click(cx.listener(|this, _, window, cx| {
+                this.accent_custom_open = !this.accent_custom_open;
+                if this.accent_custom_open {
+                    let text = this
+                        .prefs
+                        .accent_color
+                        .clone()
+                        .unwrap_or_else(|| "#4da3f5".into());
+                    this.accent_custom.update(cx, |i, cx| {
+                        i.set_text(text, cx);
+                        i.select_range(0..i.content.len(), cx);
+                    });
+                    window.focus(&this.accent_custom.focus_handle(cx), cx);
+                }
+                cx.notify();
+            }))
     }
 
     /// ChatBackgroundCard: the global image behind every chat pane.
@@ -485,7 +534,77 @@ impl SettingsView {
         preview.update(cx, |preview, cx| {
             preview.configure(settings, true, None, cx)
         });
-        let preview = div()
+        let preview = self
+            .chat_background_preview_card(&p, &image, empty, cx)
+            .into_any_element();
+        let mut rows = vec![preview];
+        if image.is_some() {
+            rows.push(self.row(
+                None,
+                false,
+                "Background effect",
+                Some(effect_description(&p.chat_background_effect).into()),
+                vec![self.segmented(
+                    "background-effect",
+                    "Background effect",
+                    &p.chat_background_effect,
+                    &EFFECTS,
+                    cx,
+                    |this, v, cx| this.update(cx, |p| p.chat_background_effect = v.into()),
+                )],
+            ));
+            rows.push(self.row(
+                None,
+                false,
+                "Show on",
+                Some("Empty sessions only, or every conversation.".into()),
+                vec![self.segmented(
+                    "background-scope",
+                    "Show background on",
+                    &p.chat_background_scope,
+                    &[("empty", "Empty only"), ("all", "All sessions")],
+                    cx,
+                    |this, v, cx| this.update(cx, |p| p.chat_background_scope = v.into()),
+                )],
+            ));
+            rows.push(self.row(
+                None,
+                false,
+                "Empty chat visibility",
+                Some("Background strength before a chat has messages.".into()),
+                vec![self.slider(SliderKind::BackgroundEmpty, format!("{empty}%"), false, cx)],
+            ));
+            rows.push(self.row(
+                None,
+                false,
+                "Session visibility",
+                Some("Background strength once the conversation has messages.".into()),
+                vec![self.slider(
+                    SliderKind::BackgroundSession,
+                    format!("{session}%"),
+                    false,
+                    cx,
+                )],
+            ));
+        }
+        self.group(
+            Some("chat-background"),
+            false,
+            "Chat background",
+            Some("An image behind your chat panes. It stays on this device.".into()),
+            None,
+            rows,
+        )
+    }
+
+    fn chat_background_preview_card(
+        &self,
+        p: &Preferences,
+        image: &Option<String>,
+        empty: u32,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
+        div()
             .p_4()
             .child(
                 div()
@@ -565,65 +684,6 @@ impl SettingsView {
                         ),
                 )
             })
-            .into_any_element();
-        let mut rows = vec![preview];
-        if image.is_some() {
-            rows.push(self.row(
-                None,
-                false,
-                "Background effect",
-                Some(effect_description(&p.chat_background_effect).into()),
-                vec![self.segmented(
-                    "background-effect",
-                    "Background effect",
-                    &p.chat_background_effect,
-                    &EFFECTS,
-                    cx,
-                    |this, v, cx| this.update(cx, |p| p.chat_background_effect = v.into()),
-                )],
-            ));
-            rows.push(self.row(
-                None,
-                false,
-                "Show on",
-                Some("Empty sessions only, or every conversation.".into()),
-                vec![self.segmented(
-                    "background-scope",
-                    "Show background on",
-                    &p.chat_background_scope,
-                    &[("empty", "Empty only"), ("all", "All sessions")],
-                    cx,
-                    |this, v, cx| this.update(cx, |p| p.chat_background_scope = v.into()),
-                )],
-            ));
-            rows.push(self.row(
-                None,
-                false,
-                "Empty chat visibility",
-                Some("Background strength before a chat has messages.".into()),
-                vec![self.slider(SliderKind::BackgroundEmpty, format!("{empty}%"), false, cx)],
-            ));
-            rows.push(self.row(
-                None,
-                false,
-                "Session visibility",
-                Some("Background strength once the conversation has messages.".into()),
-                vec![self.slider(
-                    SliderKind::BackgroundSession,
-                    format!("{session}%"),
-                    false,
-                    cx,
-                )],
-            ));
-        }
-        self.group(
-            Some("chat-background"),
-            false,
-            "Chat background",
-            Some("An image behind your chat panes. It stays on this device.".into()),
-            None,
-            rows,
-        )
     }
 }
 
@@ -676,6 +736,8 @@ mod continuity_tests {
         let blur = visual.debug_bounds("settings-slider-blur").unwrap();
         visual.simulate_click(blur.center(), Default::default());
         visual.run_until_parked();
+        visual.simulate_keystrokes("right right left");
+        visual.run_until_parked();
         assert!(
             visual
                 .debug_bounds("settings-toggle-main-pane-glass")
@@ -690,7 +752,7 @@ mod continuity_tests {
         window
             .update(visual, |settings, _, _| {
                 assert_eq!(settings.prefs.sidebar_opacity, 43);
-                assert_eq!(settings.prefs.sidebar_blur, 50);
+                assert_eq!(settings.prefs.sidebar_blur, 51);
             })
             .unwrap();
     }

@@ -15,7 +15,7 @@ impl Shell {
         id: i64,
         cx: &mut Context<Self>,
     ) -> Option<Entity<crate::git_tools::review::ReviewPane>> {
-        if let Some(review) = self.reviews.get(&id) {
+        if let Some(review) = self.review.reviews.get(&id) {
             return Some(review.clone());
         }
         let state = self.workspace.reviews.get(&id)?.clone();
@@ -33,8 +33,9 @@ impl Shell {
     ) -> Entity<crate::git_tools::review::ReviewPane> {
         use crate::git_tools::review::ReviewEvent;
         let git = self.git.clone();
+        let cache = self.review.cache.clone();
         let review = cx.new(|cx| {
-            let mut pane = crate::git_tools::review::ReviewPane::new(git, state, cx);
+            let mut pane = crate::git_tools::review::ReviewPane::new(git, cache, state, cx);
             pane.pane_draggable = true;
             pane
         });
@@ -42,6 +43,7 @@ impl Shell {
             &review,
             move |this, review, event: &ReviewEvent, cx| {
                 let Some(id) = this
+                    .review
                     .reviews
                     .iter()
                     .find_map(|(id, pane)| (pane == &review).then_some(*id))
@@ -84,8 +86,8 @@ impl Shell {
                     }
                     ReviewEvent::Empty => this.close_review(id, cx),
                     ReviewEvent::DragPane(position) => {
-                        this.tab_drag = None;
-                        this.pane_drag = Some(PaneDrag {
+                        this.tabs.drag = None;
+                        this.panes.drag = Some(PaneDrag {
                             source: DragSource::Review(id),
                             start: *position,
                             position: *position,
@@ -98,7 +100,7 @@ impl Shell {
                 cx.notify();
             },
         ));
-        self.reviews.insert(id, review.clone());
+        self.review.reviews.insert(id, review.clone());
         review
     }
 
@@ -213,18 +215,19 @@ impl Shell {
                 let review = self.make_review(id, Default::default(), cx);
                 let ratio = review.read(cx).state.ratio;
                 let distance = self.split_width() * ratio;
-                let slide = match self.review_slide.take() {
+                let slide = match self.review.slide.take() {
                     Some((sid, slide, _)) if sid == id => {
                         slide.retarget(ratio, vorkspace_ui::clock::Instant::now())
                     }
                     _ => PaneSlide::new(0., ratio, distance),
                 };
-                self.review_slide = Some((id, slide, review.clone()));
+                self.review.slide = Some((id, slide, review.clone()));
                 review
             }
         };
         let entering = self
-            .review_slide
+            .review
+            .slide
             .as_ref()
             .is_some_and(|(sid, slide, _)| *sid == id && slide.opening());
         review.update(cx, |r, cx| {
@@ -256,7 +259,7 @@ impl Shell {
             self.open(id, window, cx);
             return;
         }
-        self.review_focused = true;
+        self.review.focused = true;
         review.update(cx, |r, cx| r.focus_active(window, cx));
         cx.notify();
     }
@@ -274,7 +277,7 @@ impl Shell {
         self.leave_app_views(cx);
         self.workspace.open(id);
         self.history.record(id);
-        self.review_focused = true;
+        self.review.focused = true;
         review.update(cx, |review, cx| review.set_visible(true, cx));
         self.remember_title_tab(TitleTab::Workspace(self.workspace.tab_of(id).unwrap()));
         self.finish_app_pane_open(window, cx);
@@ -283,7 +286,7 @@ impl Shell {
     /// The pane's last tab closed: it slides out, and a tab without its
     /// chat closes with it.
     pub(super) fn close_review(&mut self, id: i64, cx: &mut Context<Self>) {
-        let Some(review) = self.reviews.remove(&id) else {
+        let Some(review) = self.review.reviews.remove(&id) else {
             return;
         };
         review.update(cx, |r, cx| r.cache_closed(cx));
@@ -291,7 +294,7 @@ impl Shell {
         let ratio = review.read(cx).state.ratio;
         self.workspace.reviews.remove(&id);
         if self.workspace.active == Some(id) {
-            self.review_focused = false;
+            self.review.focused = false;
             if !chat_hidden {
                 // The closing pane stays mounted for its slide-out. Move focus
                 // before it disappears, rather than leaving keys in its editor.
@@ -306,7 +309,7 @@ impl Shell {
                     let Some(tab) = this.workspace.tab_of(id) else {
                         return;
                     };
-                    if this.reviews.contains_key(&id) {
+                    if this.review.reviews.contains_key(&id) {
                         return;
                     }
                     if this.workspace.layout(tab).is_split() {
@@ -319,30 +322,30 @@ impl Shell {
             .detach();
         } else if self.workspace.active == Some(id) {
             let distance = self.split_width() * ratio;
-            let slide = match self.review_slide.take() {
+            let slide = match self.review.slide.take() {
                 Some((sid, slide, _)) if sid == id => {
                     slide.retarget(0., vorkspace_ui::clock::Instant::now())
                 }
                 _ => PaneSlide::new(ratio, 0., distance),
             };
-            self.review_slide = Some((id, slide, review));
+            self.review.slide = Some((id, slide, review));
         }
         self.persist(cx);
         cx.notify();
     }
     pub(super) fn drag_review(&mut self, event: &MouseMoveEvent, cx: &mut Context<Self>) {
-        if !self.review_drag {
+        if !self.review.drag {
             return;
         }
         if event.pressed_button != Some(MouseButton::Left) {
-            self.review_drag = false;
+            self.review.drag = false;
             self.persist(cx);
             return;
         }
         let bounds = self
             .workspace
             .active
-            .and_then(|id| self.split_bounds.get(&id))
+            .and_then(|id| self.panes.split_bounds.get(&id))
             .and_then(AnchorSlot::get);
         let (Some(bounds), Some(review)) = (bounds, self.active_review(cx)) else {
             return;

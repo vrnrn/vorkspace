@@ -1,3 +1,4 @@
+// Modified by Vorkspace for native cursor and text input ownership. See NOTICE.
 use crate::{
     BoolExt, MacDisplay, NSRange, NSStringExt, TISCopyCurrentKeyboardInputSource,
     TISGetInputSourceProperty, WindowFrameSource, events::platform_input_from_native,
@@ -3745,15 +3746,16 @@ extern "C" fn attributed_substring_for_proposed_range(
         let mut adjusted: Option<Range<usize>> = None;
 
         let selected_text = input_handler.text_for_range(range.clone(), &mut adjusted)?;
-        if let Some(adjusted) = adjusted
-            && adjusted != range
-        {
-            unsafe { (actual_range as *mut NSRange).write(NSRange::from(adjusted)) };
-        }
         unsafe {
             let string: id = msg_send![class!(NSAttributedString), alloc];
             let string: id = msg_send![string, initWithString: ns_string(&selected_text)];
-            Some(string)
+            // AppKit supplies optional output storage for the returned substring.
+            if !string.is_null() && !actual_range.is_null() {
+                actual_range
+                    .cast::<NSRange>()
+                    .write(adjusted.unwrap_or(range).into());
+            }
+            Some(msg_send![string, autorelease])
         }
     })
     .flatten()

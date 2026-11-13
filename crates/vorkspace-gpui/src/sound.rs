@@ -1,15 +1,21 @@
-//! Cuelume's success/arrival recipes used by React, rendered as quiet PCM cues.
+//! Cuelume's success/arrival recipes, rendered as quiet PCM cues.
 //! Recipe attribution: Daniel Belyi, cuelume (MIT); see NOTICE.
+use vorkspace_runtime::runtime::Database;
+
 #[derive(Clone, Copy)]
 pub(crate) enum Cue {
     Finished,
     Input,
     LinkedActivity,
 }
-pub(crate) fn play(cue: Cue) {
+pub(crate) fn play(cue: Cue, store: Database) {
     #[cfg(not(test))]
     std::thread::spawn(move || {
-        let directory = crate::data_dir().join("sounds");
+        let Ok(Some(directory)) = vorkspace_runtime::runtime::locked(&store)
+            .map(|store| store.data_dir().map(|path| path.join("sounds")))
+        else {
+            return;
+        };
         if std::fs::create_dir_all(&directory).is_err() {
             return;
         }
@@ -31,7 +37,7 @@ pub(crate) fn play(cue: Cue) {
         let _ = command.status();
     });
     #[cfg(test)]
-    let _ = cue;
+    let _ = (cue, store);
 }
 fn wave(cue: Cue) -> Vec<u8> {
     type Layer = (f32, f32, f32, f32, f32, f32);

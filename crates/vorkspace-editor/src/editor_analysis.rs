@@ -1,10 +1,11 @@
-//! The Tauri editor's CodeMirror/Lezer analysis, without a web view. The bundled
-//! parsers and editorLint.ts run in a bounded interpreter on a background worker.
+//! Native CodeMirror/Lezer analysis and Prettier formatting. The bundled
+//! parsers run in a bounded interpreter on a background worker.
 //! Languages with a Tree-sitter grammar are analysed natively by editor_syntax.
-use gpui::SharedString;
-use rquickjs::{Context, Function, Promise, Runtime};
+use rquickjs::{Context, Ctx, Function, Object, Promise, Runtime};
 use serde::Deserialize;
 use std::{ops::Range, time::Duration};
+
+include!("../assets/native-format-plugins.rs");
 
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct Analysis {
@@ -17,7 +18,57 @@ pub struct Analysis {
 pub struct Token {
     pub from: usize,
     pub to: usize,
-    pub kind: SharedString,
+    pub kind: TokenKind,
+}
+
+/// Semantic highlighting shared by both parsers. The JS wire names remain
+/// compatible with the embedded language definitions and desktop theme.
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
+pub enum TokenKind {
+    #[serde(rename = "var(--syntax-keyword)")]
+    Keyword,
+    #[serde(rename = "var(--syntax-callable)")]
+    Callable,
+    #[serde(rename = "var(--syntax-string)")]
+    String,
+    #[serde(rename = "var(--syntax-type)")]
+    Type,
+    #[serde(rename = "var(--syntax-tag)")]
+    Tag,
+    #[serde(rename = "var(--syntax-number)")]
+    Number,
+    #[serde(rename = "var(--syntax-comment)")]
+    Comment,
+    #[serde(rename = "var(--syntax-property)")]
+    Property,
+    #[serde(rename = "var(--syntax-meta)")]
+    Meta,
+    #[serde(rename = "var(--color-markdown-heading)")]
+    Heading,
+    #[serde(rename = "var(--syntax-invalid)")]
+    Invalid,
+    #[default]
+    #[serde(other)]
+    Text,
+}
+
+impl AsRef<str> for TokenKind {
+    fn as_ref(&self) -> &str {
+        match self {
+            Self::Keyword => "var(--syntax-keyword)",
+            Self::Callable => "var(--syntax-callable)",
+            Self::String => "var(--syntax-string)",
+            Self::Type => "var(--syntax-type)",
+            Self::Tag => "var(--syntax-tag)",
+            Self::Number => "var(--syntax-number)",
+            Self::Comment => "var(--syntax-comment)",
+            Self::Property => "var(--syntax-property)",
+            Self::Meta => "var(--syntax-meta)",
+            Self::Heading => "var(--color-markdown-heading)",
+            Self::Invalid => "var(--syntax-invalid)",
+            Self::Text => "",
+        }
+    }
 }
 #[derive(Clone, Debug, Deserialize)]
 pub struct Diagnostic {
@@ -138,17 +189,19 @@ pub fn search(
     let (_runtime, context) = runtime()?;
     let json = context
         .with(|ctx| -> rquickjs::Result<String> {
-            ctx.eval::<(), _>(include_str!("../assets/native-editor.js"))?;
+            ctx.eval::<(), _>(include_str!("../assets/native-search.js"))?;
             let function: Function = ctx.globals().get("vorkspaceSearch")?;
             function.call((source, query, replacement, case, word, regex))
         })
         .map_err(|e| e.to_string())?;
     let mut result: SearchResult = serde_json::from_str(&json).map_err(|e| e.to_string())?;
     // Convert all positions in one pass, including large replace-all results.
-    let offsets = byte_offsets(source);
-    for m in &mut result.matches {
-        m.from = offsets[m.from.min(offsets.len() - 1)];
-        m.to = offsets[m.to.min(offsets.len() - 1)];
+    if !result.matches.is_empty() {
+        let offsets = byte_offsets(source);
+        for m in &mut result.matches {
+            m.from = offsets[m.from.min(offsets.len() - 1)];
+            m.to = offsets[m.to.min(offsets.len() - 1)];
+        }
     }
     Ok(result)
 }
@@ -157,7 +210,6 @@ pub fn chunk_action(
     current: &str,
     at: usize,
     selection: Range<usize>,
-    stage: bool,
 ) -> Result<Option<String>, String> {
     let (_runtime, context) = runtime()?;
     let json = context
@@ -170,52 +222,73 @@ pub fn chunk_action(
                 utf16(current, at),
                 utf16(current, selection.start),
                 utf16(current, selection.end),
-                stage,
             ))
         })
         .map_err(|e| e.to_string())?;
     serde_json::from_str(&json).map_err(|e| e.to_string())
 }
 pub fn format(path: &str, source: &str, at: usize) -> Result<Option<Formatted>, String> {
-    transform(
-        "vorkspaceFormat",
-        path,
-        source,
-        at,
-        include_str!("../assets/native-format.js"),
-    )
-}
-pub fn emmet(path: &str, source: &str, at: usize) -> Result<Option<Formatted>, String> {
-    transform(
-        "vorkspaceEmmet",
-        path,
-        source,
-        at,
-        include_str!("../assets/native-editor.js"),
-    )
-}
-fn transform(
-    name: &str,
-    path: &str,
-    source: &str,
-    at: usize,
-    bundle: &str,
-) -> Result<Option<Formatted>, String> {
+    let extension = path.rsplit('.').next().unwrap_or(path).to_lowercase();
+    let parser = match extension.as_str() {
+        "js" | "jsx" | "mjs" | "cjs" => "babel",
+        "ts" | "tsx" | "mts" | "cts" => "typescript",
+        "json" => "json",
+        "css" => "css",
+        "html" | "htm" => "html",
+        "md" | "markdown" => "markdown",
+        "mdx" => "mdx",
+        _ => return Ok(None),
+    };
+    const MAX_UNITS: usize = 512 * 1024;
+    if source.encode_utf16().take(MAX_UNITS + 1).count() > MAX_UNITS {
+        return Ok(None);
+    }
     let (_runtime, context) = runtime()?;
     let json = context
         .with(|ctx| -> rquickjs::Result<String> {
-            ctx.eval::<(), _>(bundle)?;
-            let function: Function = ctx.globals().get(name)?;
-            if name == "vorkspaceFormat" || name == "vorkspaceEmmet" {
-                function
-                    .call::<_, Promise>((path, source, utf16(source, at)))?
-                    .finish()
-            } else {
-                function.call((path, source, utf16(source, at)))
-            }
+            ctx.globals().set(
+                "vorkspaceLoadFormatPlugin",
+                Function::new(ctx.clone(), load_format_plugin)?,
+            )?;
+            ctx.eval::<(), _>(include_str!("../assets/native-format.js"))?;
+            let function: Function = ctx.globals().get("vorkspaceFormat")?;
+            function
+                .call::<_, Promise>((path, source, utf16(source, at), parser))?
+                .finish()
         })
         .map_err(|e| e.to_string())?;
-    let mut result: Option<Formatted> = serde_json::from_str(&json).map_err(|e| e.to_string())?;
+    formatted_result(&json)
+}
+
+fn load_format_plugin<'js>(ctx: Ctx<'js>, name: String) -> rquickjs::Result<Object<'js>> {
+    let (_, source) = FORMAT_PLUGINS
+        .iter()
+        .find(|(id, _)| *id == name)
+        .ok_or_else(|| {
+            rquickjs::Error::new_from_js_message(
+                "string",
+                "formatter plugin",
+                "Unknown embedded formatter plugin",
+            )
+        })?;
+    ctx.eval::<(), _>(*source)?;
+    ctx.globals().get("vorkspaceFormatPlugin")
+}
+pub fn emmet(path: &str, source: &str, at: usize) -> Result<Option<Formatted>, String> {
+    let (_runtime, context) = runtime()?;
+    let json = context
+        .with(|ctx| -> rquickjs::Result<String> {
+            ctx.eval::<(), _>(include_str!("../assets/native-editor.js"))?;
+            let function: Function = ctx.globals().get("vorkspaceEmmet")?;
+            function
+                .call::<_, Promise>((path, source, utf16(source, at)))?
+                .finish()
+        })
+        .map_err(|e| e.to_string())?;
+    formatted_result(&json)
+}
+fn formatted_result(json: &str) -> Result<Option<Formatted>, String> {
+    let mut result: Option<Formatted> = serde_json::from_str(json).map_err(|e| e.to_string())?;
     if let Some(result) = &mut result {
         result.cursor = byte(&result.formatted, result.cursor);
     }
@@ -270,7 +343,7 @@ impl Edit {
     /// Where `from..to` lands after the edit. Ranges around the edit stretch
     /// over the new text, ranges cut by it are trimmed, and ranges inside the
     /// replaced text are gone.
-    pub fn map(&self, from: usize, to: usize) -> Option<(usize, usize)> {
+    pub(crate) fn map(&self, from: usize, to: usize) -> Option<(usize, usize)> {
         let shift = |at: usize| at - self.old_end + self.new_end;
         if to <= self.start {
             return Some((from, to));
@@ -303,7 +376,7 @@ impl Analysis {
                 Some(Token {
                     from,
                     to,
-                    kind: t.kind.clone(),
+                    kind: t.kind,
                 })
             })
             .collect();
@@ -436,6 +509,30 @@ fn analyze_within(
 mod tests {
     use super::*;
     #[test]
+    fn token_classes_decode_to_semantic_kinds_and_unknown_classes_keep_plain_text() {
+        for kind in [
+            TokenKind::Keyword,
+            TokenKind::Callable,
+            TokenKind::String,
+            TokenKind::Type,
+            TokenKind::Tag,
+            TokenKind::Number,
+            TokenKind::Comment,
+            TokenKind::Property,
+            TokenKind::Meta,
+            TokenKind::Heading,
+            TokenKind::Invalid,
+        ] {
+            let wire = serde_json::to_string(kind.as_ref()).unwrap();
+            assert_eq!(serde_json::from_str::<TokenKind>(&wire).unwrap(), kind);
+        }
+        assert_eq!(
+            serde_json::from_str::<TokenKind>("\"var(--future-style)\"").unwrap(),
+            TokenKind::Text
+        );
+        assert_eq!(TokenKind::Text.as_ref(), "");
+    }
+    #[test]
     fn frontend_parsers_report_real_syntax_errors_and_keep_grammar_gap_filters() {
         for (path, source) in [
             ("a.tsx", "export const App = () => <div>hello</div>;"),
@@ -509,7 +606,7 @@ mod edit_tests {
         let token = |from, to| Token {
             from,
             to,
-            kind: "var(--syntax-string)".into(),
+            kind: TokenKind::String,
         };
         let analysis = Analysis {
             tokens: vec![token(0, 3), token(4, 9), token(10, 12)],

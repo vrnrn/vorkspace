@@ -1,4 +1,4 @@
-//! ReminderNotices.tsx. Persistence and opening sessions belong to the host.
+//! Reminder notices. Persistence and opening sessions belong to the host.
 use crate::popover::{Anchor, AnchorSlot, Menu, MenuAction, MenuEvent, menu_popover};
 use chrono::{Local, TimeZone};
 use gpui::{Context, Entity, EventEmitter, Role, Subscription, Window, div, prelude::*, px};
@@ -127,18 +127,17 @@ impl Render for View {
             .enumerate()
             .map(|(ix, reminder)| {
                 let target = (reminder.session_id, reminder.due_at);
+                let row_id = reminder.session_id as usize;
                 let anchor = AnchorSlot::default();
                 let trigger = anchor.clone();
                 div()
-                    .id(("due-reminder", ix))
+                    .id(("due-reminder", row_id))
                     .px_3()
                     .py(px(10.))
                     .when(ix > 0, |d| d.border_t_1().border_color(content(0.1)))
                     .child(
                         div()
-                            .id(("due-reminder-title", ix))
-                            .role(Role::Button)
-                            .map(vorkspace_ui::theme::tab_reachable)
+                            .id(("due-reminder-title", row_id))
                             .cursor_pointer()
                             .w_full()
                             .on_click(cx.listener(move |_, _, _, cx| {
@@ -175,8 +174,9 @@ impl Render for View {
                             .text_size(px(11.))
                             .child(
                                 div()
-                                    .id(("due-reminder-open", ix))
+                                    .id(("due-reminder-open", row_id))
                                     .role(Role::Button)
+                                    .aria_label(format!("Open {}", reminder.title))
                                     .map(vorkspace_ui::theme::tab_reachable)
                                     .cursor_pointer()
                                     .rounded(px(radius::CONTROL))
@@ -194,10 +194,10 @@ impl Render for View {
                             )
                             .child(
                                 div()
-                                    .id(("due-reminder-snooze", ix))
+                                    .id(("due-reminder-snooze", row_id))
                                     .role(Role::Button)
                                     .map(vorkspace_ui::theme::tab_reachable)
-                                    .aria_label("Snooze")
+                                    .aria_label(format!("Snooze reminder for {}", reminder.title))
                                     .cursor_pointer()
                                     .relative()
                                     .rounded(px(radius::CONTROL))
@@ -214,8 +214,9 @@ impl Render for View {
                             .child(div().flex_1())
                             .child(
                                 div()
-                                    .id(("due-reminder-dismiss", ix))
+                                    .id(("due-reminder-dismiss", row_id))
                                     .role(Role::Button)
+                                    .aria_label(format!("Dismiss reminder for {}", reminder.title))
                                     .map(vorkspace_ui::theme::tab_reachable)
                                     .cursor_pointer()
                                     .rounded(px(radius::CONTROL))
@@ -299,6 +300,7 @@ impl Render for View {
                                     div()
                                         .id("reminder-retry")
                                         .role(Role::Button)
+                                        .aria_label("Retry loading reminders")
                                         .map(vorkspace_ui::theme::tab_reachable)
                                         .cursor_pointer()
                                         .underline()
@@ -321,6 +323,7 @@ impl Render for View {
                             div()
                                 .id("reminder-settings")
                                 .role(Role::Button)
+                                .aria_label("Enable desktop alerts in Settings")
                                 .map(vorkspace_ui::theme::tab_reachable)
                                 .cursor_pointer()
                                 .w_full()

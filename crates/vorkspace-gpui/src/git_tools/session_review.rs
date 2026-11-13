@@ -1,4 +1,4 @@
-//! SessionReview.tsx: the latest turn's recorded workspace changes, under its
+//! Session review: the latest turn's recorded workspace changes, under its
 //! reply, with Undo, Keep and Review. The checkpoint runs off the UI thread.
 use crate::panel_kit::{format_integer, tabular};
 use gpui::{
@@ -13,9 +13,12 @@ const COLLAPSED: usize = 3;
 
 pub(crate) enum SessionReviewEvent {
     /// Review the session's changes, focused on one file when given.
-    Open { path: Option<String> },
+    Open {
+        path: Option<String>,
+        turn_id: String,
+    },
     /// Undo or Keep rewrote the workspace.
-    Changed,
+    Changed { cwd: String },
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -28,7 +31,9 @@ pub(crate) struct SessionReview {
     session: i64,
     cwd: String,
     files: Vec<CheckpointFile>,
+    turn_id: Option<String>,
     error: Option<String>,
+    action_error: Option<String>,
     expanded: bool,
     acting: Option<Action>,
     /// The card represents a settled turn, so it hides while one runs.
@@ -46,7 +51,9 @@ impl SessionReview {
             session,
             cwd,
             files: Vec::new(),
+            turn_id: None,
             error: None,
+            action_error: None,
             expanded: false,
             acting: None,
             busy: false,
@@ -65,6 +72,8 @@ impl SessionReview {
     pub(crate) fn set_cwd(&mut self, cwd: String, cx: &mut Context<Self>) {
         if self.cwd != cwd {
             self.cwd = cwd;
+            self.generation += 1;
+            self._load = None;
             self.publish(Ok(CheckpointStatus::default()), cx);
             self.refresh(cx);
         }
@@ -95,7 +104,7 @@ impl SessionReview {
     }
     /// Reread the recorded turn, as after a turn, Git change or reload.
     pub(crate) fn refresh(&mut self, cx: &mut Context<Self>) {
-        if !self.valid() || self.busy {
+        if !self.valid() || self.busy || self.acting.is_some() {
             return;
         }
         let Some(store) = vorkspace_core::checkpoint::store() else {
@@ -117,53 +126,84 @@ impl SessionReview {
         }));
     }
     fn publish(&mut self, status: Result<CheckpointStatus, String>, cx: &mut Context<Self>) {
-        let (files, error) = match status {
-            Ok(status) => (status.files, None),
-            Err(error) => (Vec::new(), Some(error)),
+        let (files, turn_id, error) = match status {
+            Ok(status) => (status.files, status.turn_id, None),
+            Err(error) => (Vec::new(), None, Some(error)),
         };
         if files.len() <= COLLAPSED {
             self.expanded = false;
         }
-        if self.files != files || self.error != error {
+        if self.turn_id != turn_id {
+            self.action_error = None;
+        }
+        if self.files != files || self.error != error || self.turn_id != turn_id {
             self.files = files;
+            self.turn_id = turn_id;
             self.error = error;
             cx.notify();
         }
     }
-    fn run(&mut self, action: Action, cx: &mut Context<Self>) {
-        if self.acting.is_some() {
+    fn run(&mut self, action: Action, expected: &str, cx: &mut Context<Self>) {
+        if self.acting.is_some()
+            || self.busy
+            || self.turn_id.as_deref() != Some(expected)
+            || (action == Action::Undo && self.undo_locked)
+        {
             return;
         }
         let Some(store) = vorkspace_core::checkpoint::store() else {
             return;
         };
         self.acting = Some(action);
+        self.action_error = None;
+        self._load = None;
         cx.notify();
         self.generation += 1;
         let generation = self.generation;
         let (session, cwd) = (self.session.to_string(), self.cwd.clone());
+        let turn_id = expected.to_owned();
+        let destination = cwd.clone();
         let work = cx.background_executor().spawn(async move {
-            store.exclusive(|s| match action {
-                Action::Keep => s.keep(&session, &cwd, None),
-                Action::Undo => s.undo(&session, &cwd, None),
-            })
+            match action {
+                Action::Keep => store.keep(&session, &cwd, &turn_id, None),
+                Action::Undo => store.undo(&session, &cwd, &turn_id, None),
+            }
         });
-        self._load = Some(cx.spawn(async move |this, cx| {
+        cx.spawn(async move |this, cx| {
             let status = work.await;
             let _ = this.update(cx, |this, cx| {
                 this.acting = None;
                 match status {
-                    Ok(status) if this.generation == generation => {
-                        this.publish(Ok(status), cx);
-                        cx.emit(SessionReviewEvent::Changed);
+                    Ok(status) => {
+                        if this.generation == generation {
+                            this.publish(Ok(status), cx);
+                        } else {
+                            this.refresh(cx);
+                        }
+                        if action == Action::Undo {
+                            cx.emit(SessionReviewEvent::Changed { cwd: destination });
+                        }
                     }
-                    Ok(_) => cx.emit(SessionReviewEvent::Changed),
-                    // The workspace moved underneath; show what remains.
-                    Err(_) => this.refresh(cx),
+                    Err(error) => {
+                        if this.generation == generation {
+                            this.action_error = Some(error);
+                        }
+                        this.refresh(cx);
+                    }
                 }
                 cx.notify();
             });
-        }));
+        })
+        .detach();
+    }
+
+    fn open(&self, expected: &str, path: Option<String>, cx: &mut Context<Self>) {
+        if !self.busy && self.turn_id.as_deref() == Some(expected) {
+            cx.emit(SessionReviewEvent::Open {
+                path,
+                turn_id: expected.to_owned(),
+            });
+        }
     }
 }
 
@@ -246,9 +286,12 @@ impl Render for SessionReview {
                 )
                 .into_any_element();
         }
-        if self.files.is_empty() {
+        let Some(turn_id) = self.turn_id.clone().filter(|_| !self.files.is_empty()) else {
             return div().into_any_element();
-        }
+        };
+        let undo_turn = turn_id.clone();
+        let keep_turn = turn_id.clone();
+        let review_turn = turn_id.clone();
         let disabled = self.acting.is_some();
         let can_undo = !self.undo_locked && self.files.iter().all(|f| f.undoable);
         let visible = if self.expanded {
@@ -322,7 +365,7 @@ impl Render for SessionReview {
                             })
                             .when(!disabled && can_undo, |d| {
                                 d.on_click(
-                                    cx.listener(|this, _, _, cx| this.run(Action::Undo, cx)),
+                                    cx.listener(move |this, _, _, cx| this.run(Action::Undo, &undo_turn, cx)),
                                 )
                             }),
                     )
@@ -331,7 +374,7 @@ impl Render for SessionReview {
                             .aria_label("Keep the recorded changes and dismiss this card")
                             .when(!disabled, |d| {
                                 d.on_click(
-                                    cx.listener(|this, _, _, cx| this.run(Action::Keep, cx)),
+                                    cx.listener(move |this, _, _, cx| this.run(Action::Keep, &keep_turn, cx)),
                                 )
                             }),
                     )
@@ -353,8 +396,8 @@ impl Render for SessionReview {
                             .cursor_pointer()
                             .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.12)).text_color(content(1.)))
                             .child("Review")
-                            .on_click(cx.listener(|_, _, _, cx| {
-                                cx.emit(SessionReviewEvent::Open { path: None })
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.open(&review_turn, None, cx);
                             })),
                     ),
             );
@@ -366,6 +409,7 @@ impl Render for SessionReview {
                     |n| n.to_string_lossy().into_owned(),
                 );
             let path = file.path.clone();
+            let turn_id = turn_id.clone();
             let group: SharedString = format!("session-review-file-{ix}").into();
             div()
                 .id(("session-review-file", ix))
@@ -396,21 +440,9 @@ impl Render for SessionReview {
                         .text_size(px(12.))
                         .child(file.relative.clone()),
                 )
-                .child(if file.exact {
-                    counts(file.additions, file.deletions, 8.).into_any_element()
-                } else {
-                    div()
-                        .flex_shrink_0()
-                        .text_size(px(11.))
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(content(0.45))
-                        .child("Diff unavailable")
-                        .into_any_element()
-                })
-                .on_click(cx.listener(move |_, _, _, cx| {
-                    cx.emit(SessionReviewEvent::Open {
-                        path: Some(path.clone()),
-                    })
+                .child(counts(file.additions, file.deletions, 8.))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.open(&turn_id, Some(path.clone()), cx);
                 }))
         });
         let list = div()
@@ -425,6 +457,18 @@ impl Render for SessionReview {
             .id("session-review")
             .overflow_hidden()
             .child(header)
+            .when_some(self.action_error.clone(), |d, error| {
+                d.child(
+                    div()
+                        .id("session-review-action-error")
+                        .role(Role::Alert)
+                        .px_3()
+                        .pb_2()
+                        .text_size(px(11.))
+                        .text_color(status(StatusColor::Danger, 1.))
+                        .child(error),
+                )
+            })
             .child(list)
             .when(count > COLLAPSED, |d| {
                 d.child(

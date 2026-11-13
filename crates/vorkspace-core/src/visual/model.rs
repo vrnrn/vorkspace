@@ -1,8 +1,8 @@
 //! A bounded native component tree. This is data, never HTML, CSS, or a host API.
 use serde::{Deserialize, Serialize};
 
-pub const MAX_SOURCE_BYTES: usize = 64 * 1024;
-pub const MAX_NODES: usize = 512;
+pub(crate) const MAX_SOURCE_BYTES: usize = 64 * 1024;
+pub(crate) const MAX_NODES: usize = 512;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -32,7 +32,7 @@ impl VisualDocument {
     }
 }
 
-pub fn validate_source(source: &str) -> Result<(), String> {
+pub(crate) fn validate_source(source: &str) -> Result<(), String> {
     if source.trim().is_empty() || source.len() > MAX_SOURCE_BYTES {
         return Err(format!(
             "Visual source must contain 1–{MAX_SOURCE_BYTES} bytes"
@@ -184,7 +184,7 @@ pub enum Node {
     },
 }
 
-pub const MAX_SVG_BYTES: usize = 256 * 1024;
+pub(crate) const MAX_SVG_BYTES: usize = 256 * 1024;
 pub const MAX_MERMAID_BYTES: usize = 50_000;
 
 /// Static SVG only: one <svg> root, no scripts or embedded HTML.
@@ -290,7 +290,7 @@ impl Default for Camera {
 }
 
 impl Node {
-    pub fn validate(&self) -> Result<(), String> {
+    pub(crate) fn validate(&self) -> Result<(), String> {
         let mut budget = Budget::default();
         self.validate_with(0, &mut budget)
     }

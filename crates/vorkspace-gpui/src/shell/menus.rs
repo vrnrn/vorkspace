@@ -105,18 +105,18 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> (SharedString, Vec<MenuItem>, f32, MenuStyle) {
-        if let Some(menu) = self.terminal_menu_items(target, cx) {
-            return menu;
-        }
         let title = |id: &i64| {
-            self.session_summaries
-                .get(id)
+            self.session_summary(*id, cx)
                 .map(|_| self.session_metadata(*id, cx).display_title())
                 .unwrap_or_default()
         };
         match target {
-            // Answered by terminal_menu_items above.
-            MenuTarget::TerminalTab(_) => ("".into(), Vec::new(), 160., MenuStyle::Explorer),
+            MenuTarget::TerminalTab(id) => (
+                "Terminal tab actions".into(),
+                self.terminal_tab_menu(*id),
+                160.,
+                MenuStyle::Explorer,
+            ),
             MenuTarget::Tabs(tabs) => {
                 let selected = self.active_title_tab(cx);
                 let mut items: Vec<MenuItem> = tabs
@@ -191,8 +191,7 @@ impl Shell {
                 // Closing a tab keeps its session; archive also hides it from
                 // the active history while preserving everything on disk.
                 if let Some(id) = tab.session().filter(|id| {
-                    self.session_summaries.contains_key(id)
-                        && self.session_metadata(*id, cx).summary.has_messages
+                    self.has_session(*id, cx) && self.session_metadata(*id, cx).summary.has_messages
                 }) {
                     items.extend([
                         MenuItem::Separator,
@@ -263,8 +262,6 @@ impl Shell {
                         &self.workspace.project,
                         cx,
                     )
-                    .appearance(self.workspace.project_appearance.clone())
-                    .allow_remote()
                 });
                 events.push(cx.subscribe_in(
                     &picker,
@@ -276,10 +273,6 @@ impl Shell {
                                 this.open_project_from_user(path.clone(), window, cx)
                             }
                             ProjectPicked::New => this.open_project(cx),
-                            ProjectPicked::Remote => {
-                                this.open_remote_project(window, cx);
-                                return;
-                            }
                         }
                         this.focus_active(window, cx);
                         this.invalidate_chrome(cx);
@@ -353,7 +346,7 @@ impl Shell {
                     MenuAction::new("reveal", REVEAL_LABEL)
                         .icon("folder-open")
                         .into(),
-                    self.external_editor_menu(path).into(),
+                    self.external_editor_menu().into(),
                     MenuItem::Separator,
                     self.project_notification_menu(path).into(),
                     MenuItem::Separator,
@@ -393,7 +386,7 @@ impl Shell {
             return;
         }
         match target {
-            MenuTarget::TerminalTab(ix) => self.run_terminal_tab_menu(ix, action, window, cx),
+            MenuTarget::TerminalTab(id) => self.run_terminal_tab_menu(id, action, window, cx),
             MenuTarget::TerminalDock => {
                 let side = match action {
                     "top" => DockSide::Top,
@@ -427,8 +420,6 @@ impl Shell {
                 // "Project settings" opens the project's menu beside its row.
                 if action == "settings" {
                     self.open_settings(crate::settings::Section::General, window, cx);
-                } else if action == "open-remote-project" {
-                    self.open_remote_project(window, cx);
                 } else if action == "project-settings" {
                     let at = row
                         .map_or_else(Point::default, |r| Point::new(r.right(), r.top() - px(8.)));
@@ -440,28 +431,13 @@ impl Shell {
                 }
             }
             MenuTarget::Project { path, .. } => {
-                if action == "pin"
-                    && let Err(error) = self.workspace.migrate_project_rail()
-                {
-                    self.error = Some(format!(
-                        "Cannot change project rail state: {error}. Existing preferences were kept."
-                    ));
-                    cx.notify();
-                    return;
-                }
                 if action == "codebase-enabled" {
                     self.configure_codebase(path, window, cx);
                 } else if action == "pin" {
                     let key = vorkspace_core::files::path_key(&path);
                     let rail = self.workspace.project_rail_mut();
-                    let value = if rail.pinned.remove(&key) {
-                        false
-                    } else {
-                        rail.pinned.insert(key.clone());
-                        true
-                    };
-                    if rail.awaiting_legacy_pins {
-                        rail.pin_overrides.insert(key, value);
+                    if !rail.pinned.remove(&key) {
+                        rail.pinned.insert(key);
                     }
                     self.persist(cx);
                     self.invalidate_chrome(cx);
@@ -471,12 +447,7 @@ impl Shell {
                 } else if action == "delete" {
                     self.confirm_delete_project(path, window, cx);
                 } else if action == "reveal" {
-                    if path.starts_with("remote://") {
-                        self.error = Some("Remote folders stay on their host machine.".into());
-                        cx.notify();
-                    } else {
-                        cx.reveal_path(std::path::Path::new(&path));
-                    }
+                    cx.reveal_path(std::path::Path::new(&path));
                 } else if let Some(editor) = action.strip_prefix("external-editor:") {
                     self.open_in_external_editor(editor, &path, cx);
                 } else if action == "project-settings" {

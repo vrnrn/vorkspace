@@ -115,7 +115,6 @@ fn native_diagrams_capture() {
                     ..Default::default()
                 },
                 false,
-                theme == "dark",
             )
         });
         let source = svg();

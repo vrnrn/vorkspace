@@ -2,6 +2,7 @@
 use super::*;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use vorkspace_core::store::NativeHistoryRequest;
 use vorkspace_core::{
     agent::TurnInfo,
     context::Usage,
@@ -22,7 +23,7 @@ pub struct Finished {
     pub commands: Option<Vec<provider::NativeCommand>>,
 }
 
-pub fn run(
+pub(super) fn run(
     summary: Session,
     settings: Settings,
     store: Database,
@@ -66,38 +67,7 @@ pub(super) fn run_using(
     let mut context = Usage::default();
     let mut commands = None;
     let result = (|| {
-        let kind = Kind::from_id(&summary.provider);
-        if !provider::supports_compact(kind) {
-            return Err(format!(
-                "Context compaction is not supported by the native {} transport.",
-                kind.label()
-            ));
-        }
-        let thread = summary
-            .provider_id
-            .as_deref()
-            .ok_or("Send a message before compacting this chat.")?;
-        {
-            let owner = locked(&store)?;
-            if owner.remote_session(id)?.is_some() {
-                return Err("Remote transcripts are owned by the host".into());
-            }
-            if let Some(reason) = owner.edit_recovery_reason(id)? {
-                return Err(reason);
-            }
-            if account != vorkspace_core::accounts::DEFAULT {
-                if !owner.provider_accounts()?.exists(kind, &account) {
-                    return Err(
-                        "This provider account was removed. Choose another account to continue."
-                            .into(),
-                    );
-                }
-                if settings.account.root.is_none() {
-                    settings.account.root = owner.data_dir().map(PathBuf::from);
-                }
-            }
-        }
-        let history = native_history::before_turn(&store, &summary, &settings, &cancel)?;
+        let (kind, thread, history) = prepare(&summary, &mut settings, &store, &cancel, &account)?;
         if cancel.load(Ordering::Relaxed) {
             return Err("Stopped".into());
         }
@@ -145,7 +115,7 @@ pub(super) fn run_using(
                     .into(),
             );
         }
-        submissions.dispatch_initial()?;
+        submissions.dispatch_initial(None)?;
         let request = Request {
             kind,
             binary,
@@ -155,7 +125,7 @@ pub(super) fn run_using(
             model: settings.model.clone(),
             settings,
         };
-        vorkspace_core::process::owned_by(id, || {
+        vorkspace_core::process::owned_turn(id, &cancel, || {
             compact(request, cancel.clone(), &mut |events| {
                 for event in events {
                     match event {
@@ -173,7 +143,6 @@ pub(super) fn run_using(
             })
         })
     })();
-
     let mut row = None;
     let mut context_saved = false;
     let save = (|| {
@@ -218,6 +187,44 @@ pub(super) fn run_using(
         context: context_saved.then_some(context),
         commands: commands.filter(|_| context_saved),
     }
+}
+
+fn prepare<'a>(
+    summary: &'a Session,
+    settings: &mut Settings,
+    store: &Database,
+    cancel: &Arc<AtomicBool>,
+    account: &str,
+) -> Result<(Kind, &'a str, Option<NativeHistoryRequest>), String> {
+    let kind = Kind::from_id(&summary.provider);
+    if !provider::supports_compact(kind) {
+        return Err(format!(
+            "Context compaction is not supported by the native {} transport.",
+            kind.label()
+        ));
+    }
+    let thread = summary
+        .provider_id
+        .as_deref()
+        .ok_or("Send a message before compacting this chat.")?;
+    {
+        let owner = locked(store)?;
+        if let Some(reason) = owner.edit_recovery_reason(summary.id)? {
+            return Err(reason);
+        }
+        if account != vorkspace_core::accounts::DEFAULT {
+            if !owner.provider_accounts()?.exists(kind, account) {
+                return Err(
+                    "This provider account was removed. Choose another account to continue.".into(),
+                );
+            }
+            if settings.account.root.is_none() {
+                settings.account.root = owner.data_dir().map(PathBuf::from);
+            }
+        }
+    }
+    let history = native_history::before_turn(store, summary, settings, cancel)?;
+    Ok((kind, thread, history))
 }
 
 fn combine(result: Result<(), String>, save: Result<(), String>) -> Result<(), String> {

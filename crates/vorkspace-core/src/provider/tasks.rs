@@ -137,6 +137,11 @@ impl Protocol {
         let Some(id) = text(&item["id"]) else {
             return true;
         };
+        self.codex_agent_item(item, id, events);
+        self.replay_codex_children(events);
+        true
+    }
+    fn codex_agent_item(&mut self, item: &Value, id: &str, events: &mut Vec<Event>) {
         let action = item["tool"].as_str().unwrap_or("");
         let mut ids: Vec<String> = ["agentThreadId", "agent_thread_id"]
             .iter()
@@ -221,6 +226,8 @@ impl Protocol {
                 }
             }
         }
+    }
+    fn replay_codex_children(&mut self, events: &mut Vec<Event>) {
         let pending = std::mem::take(&mut self.activities.pending);
         for frame in pending {
             let thread =
@@ -239,7 +246,6 @@ impl Protocol {
                 self.activities.pending.push(frame);
             }
         }
-        true
     }
     fn codex_child(&mut self, parent: &str, method: &str, params: &Value, events: &mut Vec<Event>) {
         if method == "thread/started" {
@@ -371,90 +377,7 @@ impl Protocol {
     fn claude_activity(&mut self, value: &Value, events: &mut Vec<Event>) -> bool {
         let parent = text(&value["parent_tool_use_id"]);
         if let Some(parent) = parent {
-            match value["type"].as_str() {
-                Some("assistant") => {
-                    let model = text(&value["message"]["model"]);
-                    let message_id = text(&value["message"]["id"]);
-                    for (index, block) in value["message"]["content"]
-                        .as_array()
-                        .into_iter()
-                        .flatten()
-                        .enumerate()
-                    {
-                        match block["type"].as_str() {
-                            Some("tool_use") => {
-                                let Some(id) = text(&block["id"]) else {
-                                    continue;
-                                };
-                                let mut child =
-                                    ToolCall::new(id, block["name"].as_str().unwrap_or("Tool"));
-                                child.input = block["input"].to_string();
-                                self.agent_step(
-                                    parent,
-                                    AgentStep::from_tool_call(&child),
-                                    model,
-                                    events,
-                                );
-                            }
-                            Some("text" | "thinking") => {
-                                let Some(message_id) = message_id else {
-                                    continue;
-                                };
-                                let thinking = block["type"] == "thinking";
-                                let narration = block[if thinking { "thinking" } else { "text" }]
-                                    .as_str()
-                                    .unwrap_or("");
-                                if narration.is_empty() {
-                                    continue;
-                                }
-                                self.agent_step(
-                                    parent,
-                                    AgentStep {
-                                        id: format!("{message_id}:{index}"),
-                                        kind: if thinking { "reasoning" } else { "message" }.into(),
-                                        text: narration.into(),
-                                        state: None,
-                                        detail: String::new(),
-                                        ..AgentStep::default()
-                                    },
-                                    model,
-                                    events,
-                                );
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-                Some("user") => {
-                    for block in value["message"]["content"].as_array().into_iter().flatten() {
-                        if block["type"] != "tool_result" {
-                            continue;
-                        }
-                        let Some(id) = text(&block["tool_use_id"]) else {
-                            continue;
-                        };
-                        let Some(tool) = self.tools.get_mut(parent) else {
-                            continue;
-                        };
-                        let Some(run) = tool.agent_mut() else {
-                            continue;
-                        };
-                        let Some(step) = run.steps.iter_mut().find(|step| step.id == id) else {
-                            continue;
-                        };
-                        step.state = Some(if block["is_error"] == true {
-                            ToolState::Failed
-                        } else {
-                            ToolState::Completed
-                        });
-                        step.detail = text_content(&block["content"]);
-                        crate::tool::tasks::bound(&mut step.detail, 16 * 1024);
-                        events.push(Event::Tool(tool.clone()));
-                    }
-                }
-                Some("tool_progress") => self.claude_progress(value, parent, events),
-                _ => {}
-            }
+            self.claude_child_activity(value, parent, events);
             // Including nested stream deltas: the completed assistant snapshot
             // supplies stable message IDs and avoids duplicate streamed narration.
             return true;
@@ -466,102 +389,191 @@ impl Protocol {
             )
             && value["ambient"] != true
         {
-            let subtype = value["subtype"].as_str().unwrap_or("");
-            let patch = if subtype == "task_updated" {
-                &value["patch"]
-            } else {
-                value
-            };
-            if let Some(id) = text(&value["task_id"]) {
-                if patch["is_backgrounded"] == true {
-                    self.activities.claude_background.insert(
-                        id.into(),
-                        text(&patch["description"])
-                            .unwrap_or("Background task")
-                            .into(),
-                    );
-                } else if patch["is_backgrounded"] == false {
-                    self.activities.claude_background.remove(id);
-                }
-                if subtype == "task_started" {
-                    self.activities.claude_pending.insert(id.into());
-                }
-                if subtype == "task_notification" {
-                    let background = self.activities.claude_background.remove(id).is_some();
-                    self.activities.claude_pending.remove(id);
-                    if background && self.claude_result_seen {
-                        // Claude may wake itself after a background result. The
-                        // desktop adapter leaves a 15s window for that follow-up.
-                        self.claude_resume_at = Some(Instant::now() + Duration::from_secs(15));
-                    }
-                }
-            }
-            let owner = text(&value["tool_use_id"]).map(str::to_owned).or_else(|| {
-                text(&value["task_id"]).and_then(|id| self.activities.owners.get(id).cloned())
-            });
-            if let Some(tool) = owner.as_deref().and_then(|owner| self.tools.get_mut(owner)) {
-                if tool.agent_mut().is_some() {
-                    if let Some(id) = text(&value["task_id"]) {
-                        if let Some(run) = tool.agent_mut() {
-                            if !run.ids.iter().any(|old| old == id) {
-                                run.ids.push(id.into());
-                            }
-                        }
-                        self.activities.owners.insert(id.into(), tool.id.clone());
-                    }
-                    let subtype = value["subtype"].as_str().unwrap_or("");
-                    let patch = if subtype == "task_updated" {
-                        &value["patch"]
-                    } else {
-                        value
-                    };
-                    if patch["is_backgrounded"] == true {
-                        self.activities.background_calls.insert(tool.id.clone());
-                    } else if patch["is_backgrounded"] == false || subtype == "task_notification" {
-                        self.activities.background_calls.remove(&tool.id);
-                    }
-                    if let Some(status) = patch["status"].as_str().and_then(state) {
-                        tool.state = status;
-                    } else if subtype == "task_started" {
-                        tool.state = ToolState::Running;
-                    }
-                    if let Some(run) = tool.agent_mut() {
-                        // Match React: keep the run's name once its trail starts.
-                        if run.steps.is_empty() {
-                            if let Some(description) = text(&patch["description"]) {
-                                run.brief = description.into();
-                            }
-                        }
-                        if let Some(summary) =
-                            text(&value["summary"]).filter(|_| subtype == "task_progress")
-                        {
-                            if let Some(id) = text(&value["task_id"]) {
-                                run.upsert(AgentStep {
-                                    id: format!("task:{id}"),
-                                    kind: "message".into(),
-                                    text: summary.into(),
-                                    state: None,
-                                    detail: String::new(),
-                                    ..AgentStep::default()
-                                });
-                            }
-                        }
-                    }
-                    if subtype == "task_notification" {
-                        if let Some(summary) = text(&value["summary"]) {
-                            tool.output = summary.into();
-                            tool.bound_output();
-                        }
-                    } else if let Some(error) = text(&patch["error"]) {
-                        tool.output = error.into();
-                        tool.bound_output();
-                    }
-                    events.push(Event::Tool(tool.clone()));
-                }
-            }
+            self.claude_task_activity(value, events);
             return true;
         }
         false
+    }
+    fn claude_child_activity(&mut self, value: &Value, parent: &str, events: &mut Vec<Event>) {
+        match value["type"].as_str() {
+            Some("assistant") => {
+                let model = text(&value["message"]["model"]);
+                let message_id = text(&value["message"]["id"]);
+                for (index, block) in value["message"]["content"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .enumerate()
+                {
+                    match block["type"].as_str() {
+                        Some("tool_use") => {
+                            let Some(id) = text(&block["id"]) else {
+                                continue;
+                            };
+                            let mut child =
+                                ToolCall::new(id, block["name"].as_str().unwrap_or("Tool"));
+                            child.input = block["input"].to_string();
+                            self.agent_step(
+                                parent,
+                                AgentStep::from_tool_call(&child),
+                                model,
+                                events,
+                            );
+                        }
+                        Some("text" | "thinking") => {
+                            let Some(message_id) = message_id else {
+                                continue;
+                            };
+                            let thinking = block["type"] == "thinking";
+                            let narration = block[if thinking { "thinking" } else { "text" }]
+                                .as_str()
+                                .unwrap_or("");
+                            if narration.is_empty() {
+                                continue;
+                            }
+                            self.agent_step(
+                                parent,
+                                AgentStep {
+                                    id: format!("{message_id}:{index}"),
+                                    kind: if thinking { "reasoning" } else { "message" }.into(),
+                                    text: narration.into(),
+                                    state: None,
+                                    detail: String::new(),
+                                    ..AgentStep::default()
+                                },
+                                model,
+                                events,
+                            );
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            Some("user") => {
+                for block in value["message"]["content"].as_array().into_iter().flatten() {
+                    if block["type"] != "tool_result" {
+                        continue;
+                    }
+                    let Some(id) = text(&block["tool_use_id"]) else {
+                        continue;
+                    };
+                    let Some(tool) = self.tools.get_mut(parent) else {
+                        continue;
+                    };
+                    let Some(run) = tool.agent_mut() else {
+                        continue;
+                    };
+                    let Some(step) = run.steps.iter_mut().find(|step| step.id == id) else {
+                        continue;
+                    };
+                    step.state = Some(if block["is_error"] == true {
+                        ToolState::Failed
+                    } else {
+                        ToolState::Completed
+                    });
+                    step.detail = text_content(&block["content"]);
+                    crate::tool::tasks::bound(&mut step.detail, 16 * 1024);
+                    events.push(Event::Tool(tool.clone()));
+                }
+            }
+            Some("tool_progress") => self.claude_progress(value, parent, events),
+            _ => {}
+        }
+    }
+    fn claude_task_activity(&mut self, value: &Value, events: &mut Vec<Event>) {
+        let subtype = value["subtype"].as_str().unwrap_or("");
+        let patch = if subtype == "task_updated" {
+            &value["patch"]
+        } else {
+            value
+        };
+        if let Some(id) = text(&value["task_id"]) {
+            if patch["is_backgrounded"] == true {
+                self.activities.claude_background.insert(
+                    id.into(),
+                    text(&patch["description"])
+                        .unwrap_or("Background task")
+                        .into(),
+                );
+            } else if patch["is_backgrounded"] == false {
+                self.activities.claude_background.remove(id);
+            }
+            if subtype == "task_started" {
+                self.activities.claude_pending.insert(id.into());
+            }
+            if subtype == "task_notification" {
+                let background = self.activities.claude_background.remove(id).is_some();
+                self.activities.claude_pending.remove(id);
+                if background && self.claude_result_seen {
+                    // Claude may wake itself after a background result. The
+                    // adapter leaves a 15s window for that follow-up.
+                    self.claude_resume_at = Some(Instant::now() + Duration::from_secs(15));
+                }
+            }
+        }
+        let owner = text(&value["tool_use_id"]).map(str::to_owned).or_else(|| {
+            text(&value["task_id"]).and_then(|id| self.activities.owners.get(id).cloned())
+        });
+        if let Some(tool) = owner.as_deref().and_then(|owner| self.tools.get_mut(owner)) {
+            if tool.agent_mut().is_some() {
+                if let Some(id) = text(&value["task_id"]) {
+                    if let Some(run) = tool.agent_mut() {
+                        if !run.ids.iter().any(|old| old == id) {
+                            run.ids.push(id.into());
+                        }
+                    }
+                    self.activities.owners.insert(id.into(), tool.id.clone());
+                }
+                let subtype = value["subtype"].as_str().unwrap_or("");
+                let patch = if subtype == "task_updated" {
+                    &value["patch"]
+                } else {
+                    value
+                };
+                if patch["is_backgrounded"] == true {
+                    self.activities.background_calls.insert(tool.id.clone());
+                } else if patch["is_backgrounded"] == false || subtype == "task_notification" {
+                    self.activities.background_calls.remove(&tool.id);
+                }
+                if let Some(status) = patch["status"].as_str().and_then(state) {
+                    tool.state = status;
+                } else if subtype == "task_started" {
+                    tool.state = ToolState::Running;
+                }
+                if let Some(run) = tool.agent_mut() {
+                    // Keep the run's name once its trail starts.
+                    if run.steps.is_empty() {
+                        if let Some(description) = text(&patch["description"]) {
+                            run.brief = description.into();
+                        }
+                    }
+                    if let Some(summary) =
+                        text(&value["summary"]).filter(|_| subtype == "task_progress")
+                    {
+                        if let Some(id) = text(&value["task_id"]) {
+                            run.upsert(AgentStep {
+                                id: format!("task:{id}"),
+                                kind: "message".into(),
+                                text: summary.into(),
+                                state: None,
+                                detail: String::new(),
+                                ..AgentStep::default()
+                            });
+                        }
+                    }
+                }
+                if subtype == "task_notification" {
+                    if let Some(summary) = text(&value["summary"]) {
+                        tool.output = summary.into();
+                        tool.bound_output();
+                    }
+                } else if let Some(error) = text(&patch["error"]) {
+                    tool.output = error.into();
+                    tool.bound_output();
+                }
+                events.push(Event::Tool(tool.clone()));
+            }
+        }
     }
     fn claude_progress(&mut self, value: &Value, parent: &str, events: &mut Vec<Event>) {
         let (Some(id), Some(name)) = (text(&value["tool_use_id"]), text(&value["tool_name"]))

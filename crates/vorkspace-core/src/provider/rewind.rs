@@ -27,22 +27,22 @@ impl std::fmt::Display for RewindError {
     }
 }
 impl std::error::Error for RewindError {}
-fn transport_error(message: String, mutating: bool) -> RewindError {
-    RewindError {
-        message,
-        provider_may_have_changed: mutating,
+impl RewindError {
+    fn uncertain(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            provider_may_have_changed: true,
+        }
     }
 }
 
 pub use crate::kind::supports_rewind;
 
-/// Runs on a worker, after the caller has reserved its conversation. Returns the
-/// provider binding to persist with the confirmed local truncation. Pi forks to
-/// a new session; Codex keeps the current thread. No prompt is sent here.
-pub fn rewind_last_turn(
+/// Check the saved provider context while the Store holds exclusive admission.
+pub fn prepare_rewind(
     request: Request,
     before_turn: Option<&str>,
-) -> Result<String, RewindError> {
+) -> Result<PreparedRewind, RewindError> {
     if !supports_rewind(request.kind) || request.settings.text_only {
         return Err("This provider does not support editing the last turn".into());
     }
@@ -50,7 +50,8 @@ pub fn rewind_last_turn(
         .provider_id
         .as_deref()
         .filter(|id| !id.trim().is_empty())
-        .ok_or("The conversation has no saved provider session to rewind")?;
+        .ok_or("The conversation has no saved provider session to rewind")?
+        .to_owned();
     // Remove the previous warm process before reverting its underlying session.
     // It must not later resume with a pre-revert in-memory context.
     parked::discard_session(&request);
@@ -69,35 +70,96 @@ pub fn rewind_last_turn(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     process::isolate(&mut command);
-    let mut wire = parked::Wire::spawn(&mut command, &request)?;
     let mut rpc = Rpc {
-        wire: &mut wire,
+        wire: parked::Wire::spawn(&mut command, &request)?,
         serial: 100,
         pi: request.kind.is_pi(),
     };
     if rpc.pi {
-        let state = rpc.call("get_state", json!({}))?;
-        if pi_binding(&state).as_deref() != Some(session) {
+        let state = rpc.call("get_state", json!({}), Effect::Read)?;
+        if pi_binding(&state).as_deref() != Some(session.as_str()) {
             return Err("Pi resumed a different session; history was preserved".into());
         }
         if state["isStreaming"] == true || state["isCompacting"] == true {
             return Err("Stop the current turn before editing the last message".into());
         }
-        let messages = rpc.call("get_fork_messages", json!({}))?;
-        let entry = last_fork_entry(&messages)?;
-        let fork = rpc.call("fork", json!({"entryId":entry}))?;
-        if fork["cancelled"] == true {
-            return Err("Edit cancelled".into());
-        }
-        let state = rpc.call("get_state", json!({}))?;
-        return pi_binding(&state).ok_or_else(|| "Pi did not expose the forked session".into());
+        let messages = rpc.call("get_fork_messages", json!({}), Effect::Read)?;
+        let target = Target::Pi {
+            original: session,
+            entry: last_fork_entry(&messages)?,
+        };
+        return Ok(PreparedRewind { rpc, target });
     }
-    rpc.call("initialize", json!({"clientInfo":{"name":"vorkspace_native","title":"vorkspace Native","version":env!("CARGO_PKG_VERSION")},"capabilities":{"experimentalApi":true}}))?;
+    rpc.call("initialize", json!({"clientInfo":{"name":"vorkspace_native","title":"vorkspace Native","version":env!("CARGO_PKG_VERSION")},"capabilities":{"experimentalApi":true}}), Effect::Read)?;
     write_json(&mut rpc.wire.stdin, json!({"method":"initialized"}))?;
-    let resumed = rpc.call(
-        "thread/resume",
-        json!({"threadId":session,"cwd":request.cwd}),
+    validate_codex_resume(
+        &rpc.call(
+            "thread/resume",
+            json!({"threadId":session,"cwd":request.cwd}),
+            Effect::Read,
+        )?,
+        &session,
     )?;
+    let before_turn = before_turn
+        .filter(|id| !id.trim().is_empty())
+        .ok_or("Codex did not expose an exact user turn to edit")?
+        .to_owned();
+    let target = Target::Codex {
+        session,
+        before_turn,
+    };
+    Ok(PreparedRewind { rpc, target })
+}
+
+enum Target {
+    Codex {
+        session: String,
+        before_turn: String,
+    },
+    Pi {
+        original: String,
+        entry: String,
+    },
+}
+
+pub struct PreparedRewind {
+    rpc: Rpc,
+    target: Target,
+}
+
+impl PreparedRewind {
+    /// Execute the mutation after the caller records dispatch. Return the
+    /// binding to commit with the local prefix. Pi forks, Codex rewinds in place.
+    pub fn rewind(mut self) -> Result<String, RewindError> {
+        match self.target {
+            Target::Codex {
+                session,
+                before_turn,
+            } => {
+                self.rpc.call(
+                    "thread/revert",
+                    json!({"threadId":session,"beforeTurnId":before_turn}),
+                    Effect::Change,
+                )?;
+                Ok(session)
+            }
+            Target::Pi { original, entry } => {
+                let fork = self
+                    .rpc
+                    .call("fork", json!({"entryId":entry}), Effect::Change)?;
+                if fork["cancelled"] == true {
+                    return Err("Edit cancelled".into());
+                }
+                let state = self.rpc.call("get_state", json!({}), Effect::AfterChange)?;
+                pi_binding(&state)
+                    .filter(|binding| binding != &original)
+                    .ok_or_else(|| RewindError::uncertain("Pi did not expose a new forked session"))
+            }
+        }
+    }
+}
+
+fn validate_codex_resume(resumed: &Value, session: &str) -> Result<(), RewindError> {
     if resumed["thread"]["id"].as_str() != Some(session) {
         return Err("Codex resumed a different thread; history was preserved".into());
     }
@@ -109,31 +171,7 @@ pub fn rewind_last_turn(
     {
         return Err("Stop the current turn before editing the last message".into());
     }
-    let before_turn = if let Some(id) = before_turn.filter(|id| !id.trim().is_empty()) {
-        id.to_owned()
-    } else {
-        let page = rpc.call(
-            "thread/turns/list",
-            json!({"threadId":session,"limit":100,"sortDirection":"desc","itemsView":"summary"}),
-        )?;
-        page["data"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .find(|turn| {
-                turn["items"]
-                    .as_array()
-                    .is_some_and(|items| items.iter().any(|item| item["type"] == "userMessage"))
-            })
-            .and_then(|turn| turn["id"].as_str())
-            .ok_or("Codex did not expose a user turn id to edit")?
-            .to_owned()
-    };
-    rpc.call(
-        "thread/revert",
-        json!({"threadId":session,"beforeTurnId":before_turn}),
-    )?;
-    Ok(session.into())
+    Ok(())
 }
 
 fn last_fork_entry(data: &Value) -> Result<String, String> {
@@ -157,14 +195,51 @@ fn pi_binding(state: &Value) -> Option<String> {
             .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-'))
     .then(|| id.to_owned())
 }
-struct Rpc<'a> {
-    wire: &'a mut parked::Wire,
+struct Rpc {
+    wire: parked::Wire,
     serial: u64,
     pi: bool,
 }
-impl Rpc<'_> {
-    fn call(&mut self, method: &str, params: Value) -> Result<Value, RewindError> {
-        let mutating = method == "thread/revert";
+
+#[derive(Clone, Copy)]
+enum Effect {
+    Read,
+    Change,
+    AfterChange,
+}
+
+impl Effect {
+    fn transport_error(self, message: String) -> RewindError {
+        match self {
+            Self::Read => message.into(),
+            Self::Change | Self::AfterChange => RewindError::uncertain(message),
+        }
+    }
+
+    fn rejected(self, message: String) -> RewindError {
+        match self {
+            Self::Read | Self::Change => message.into(),
+            Self::AfterChange => RewindError::uncertain(message),
+        }
+    }
+}
+
+impl Rpc {
+    fn call(&mut self, method: &str, params: Value, effect: Effect) -> Result<Value, RewindError> {
+        let timeout = Duration::from_secs(match method {
+            "get_state" | "thread/resume" | "thread/revert" => 45,
+            _ => 15,
+        });
+        self.call_with_timeout(method, params, effect, timeout)
+    }
+
+    fn call_with_timeout(
+        &mut self,
+        method: &str,
+        params: Value,
+        effect: Effect,
+        timeout: Duration,
+    ) -> Result<Value, RewindError> {
         self.serial += 1;
         let id = if self.pi {
             json!(format!("native-edit-{}", self.serial))
@@ -179,22 +254,18 @@ impl Rpc<'_> {
         } else {
             json!({"id":id,"method":method,"params":params})
         };
-        write_json(&mut self.wire.stdin, message)
-            .map_err(|error| transport_error(error, mutating))?;
-        let started = Instant::now();
+        write_json(&mut self.wire.stdin, message).map_err(|error| effect.transport_error(error))?;
+        let deadline = Instant::now() + timeout;
         loop {
-            let timeout = self
-                .pi
-                .then(|| Duration::from_secs(if method == "get_state" { 45 } else { 15 }));
-            if timeout.is_some_and(|timeout| started.elapsed() > timeout) {
-                return Err(transport_error(
-                    format!("Provider did not confirm {method}; local history was preserved"),
-                    mutating,
-                ));
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(effect.transport_error(format!(
+                    "Provider did not confirm {method}; local history was preserved"
+                )));
             }
-            match self.wire.rx.recv_timeout(TICK) {
+            match self.wire.rx.recv_timeout(remaining) {
                 Ok(Ok(line)) => {
-                    let Ok(value) = serde_json::from_slice::<Value>(&line) else {
+                    let Ok(mut value) = serde_json::from_slice::<Value>(&line) else {
                         continue;
                     };
                     if !self.pi
@@ -204,7 +275,7 @@ impl Rpc<'_> {
                         write_json(
                             &mut self.wire.stdin,
                             json!({"id":value["id"],"result":{"currentTimeAt":crate::time::now_ms()/1000}}),
-                        )?;
+                        ).map_err(|error| effect.transport_error(error))?;
                         continue;
                     }
                     if value["id"] != id {
@@ -214,32 +285,43 @@ impl Rpc<'_> {
                         .get("error")
                         .filter(|error| !self.pi && !error.is_null())
                     {
-                        return Err(codex_error(error, "Provider rejected rewind").into());
+                        return Err(effect.rejected(codex_error(error, "Provider rejected rewind")));
                     }
                     if self.pi {
                         if value["type"] != "response" {
                             continue;
                         }
-                        if value["success"] != true {
-                            return Err(value["error"]
-                                .as_str()
-                                .unwrap_or("Provider rejected rewind")
-                                .into());
+                        match value["success"].as_bool() {
+                            Some(true) => {
+                                return Ok(value
+                                    .get_mut("data")
+                                    .map(Value::take)
+                                    .unwrap_or_default())
+                            }
+                            Some(false) => {
+                                return Err(effect.rejected(
+                                    value["error"]
+                                        .as_str()
+                                        .unwrap_or("Provider rejected rewind")
+                                        .to_owned(),
+                                ))
+                            }
+                            None => {
+                                return Err(effect.transport_error(format!(
+                                    "Provider returned an invalid confirmation for {method}"
+                                )))
+                            }
                         }
-                        return Ok(value["data"].clone());
                     }
-                    if let Some(result) = value.get("result") {
-                        return Ok(result.clone());
+                    if let Some(result) = value.get_mut("result") {
+                        return Ok(result.take());
                     }
                 }
-                Ok(Err(error)) => return Err(transport_error(error, mutating)),
+                Ok(Err(error)) => return Err(effect.transport_error(error)),
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
-                    return Err(transport_error(
-                        format!(
-                            "Provider exited before confirming {method}; local history was preserved"
-                        ),
-                        mutating,
-                    ));
+                    return Err(effect.transport_error(format!(
+                        "Provider exited before confirming {method}; local history was preserved"
+                    )));
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
             }
@@ -250,11 +332,42 @@ impl Rpc<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    fn request(kind: Kind, binary: PathBuf, cwd: &Path) -> Request {
+        Request {
+            kind,
+            binary,
+            cwd: cwd.into(),
+            prompt: String::new(),
+            provider_id: Some("original".into()),
+            model: None,
+            settings: Default::default(),
+        }
+    }
+
     #[test]
     fn lost_destructive_confirmation_requires_recovery_but_explicit_rejection_does_not() {
-        assert!(transport_error("Lost reply".into(), true).provider_may_have_changed);
-        assert!(!transport_error("Resume failed".into(), false).provider_may_have_changed);
-        assert!(!RewindError::from("Provider rejected rewind").provider_may_have_changed);
+        assert!(
+            Effect::Change
+                .transport_error("Lost reply".into())
+                .provider_may_have_changed
+        );
+        assert!(
+            !Effect::Read
+                .transport_error("Resume failed".into())
+                .provider_may_have_changed
+        );
+        assert!(
+            !Effect::Change
+                .rejected("Provider rejected rewind".into())
+                .provider_may_have_changed
+        );
+        assert!(
+            Effect::AfterChange
+                .rejected("Provider rejected get_state".into())
+                .provider_may_have_changed
+        );
     }
     #[test]
     fn only_native_transports_with_an_explicit_rewind_protocol_advertise_support() {
@@ -283,5 +396,76 @@ mod tests {
         );
         assert_eq!(pi_binding(&json!({"sessionId":"/tmp/session.jsonl"})), None);
         assert_eq!(pi_binding(&json!({"sessionId":" "})), None);
+    }
+
+    #[test]
+    fn a_silent_codex_revert_times_out_with_uncertain_provider_state() {
+        let mut command = Command::new("/bin/sh");
+        command
+            .args(["-c", "IFS= read -r frame; exec /bin/sleep 60"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        process::isolate(&mut command);
+        let request = request(Kind::Codex, "/bin/sh".into(), Path::new("/tmp"));
+        let mut rpc = Rpc {
+            wire: parked::Wire::spawn(&mut command, &request).unwrap(),
+            serial: 100,
+            pi: false,
+        };
+        let error = rpc
+            .call_with_timeout(
+                "thread/revert",
+                json!({"threadId":"original","beforeTurnId":"last-turn"}),
+                Effect::Change,
+                Duration::from_millis(25),
+            )
+            .unwrap_err();
+        assert!(error.message.contains("did not confirm thread/revert"));
+        assert!(error.provider_may_have_changed);
+    }
+
+    #[test]
+    fn pi_requires_a_confirmed_new_binding_after_fork() {
+        let dir = tempfile::tempdir().unwrap();
+        let binary = dir.path().join("pi-fixture");
+        std::fs::write(
+            &binary,
+            r#"#!/usr/bin/env python3
+import json, os, sys
+forked = False
+for line in sys.stdin:
+    request = json.loads(line)
+    method = request['type']
+    if method == 'get_state':
+        if forked and os.environ['FORK_OUTCOME'] == 'disconnect':
+            break
+        data = {'sessionId': 'forked' if forked and os.environ['FORK_OUTCOME'] == 'new' else 'original'}
+    elif method == 'get_fork_messages':
+        data = {'messages': [{'entryId': 'last-user'}]}
+    elif method == 'fork':
+        assert request['entryId'] == 'last-user'
+        forked = True
+        data = {'cancelled': False}
+    else:
+        raise ValueError(method)
+    print(json.dumps({'type': 'response', 'id': request['id'], 'success': True, 'data': data}), flush=True)
+"#,
+        )
+        .unwrap();
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700)).unwrap();
+        for outcome in ["new", "unchanged", "disconnect"] {
+            let mut request = request(Kind::Pi, binary.clone(), dir.path());
+            request
+                .settings
+                .environment
+                .insert("FORK_OUTCOME".into(), outcome.into());
+            let result = prepare_rewind(request, None).and_then(PreparedRewind::rewind);
+            if outcome == "new" {
+                assert_eq!(result.unwrap(), "forked");
+            } else {
+                assert!(result.unwrap_err().provider_may_have_changed, "{outcome}");
+            }
+        }
     }
 }

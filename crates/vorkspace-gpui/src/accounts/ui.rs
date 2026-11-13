@@ -1,4 +1,3 @@
-use super::masked::masked_text;
 use super::*;
 use crate::controls::{primary_button, secondary_button};
 use gpui::{AnyElement, App, Div, FontWeight, MouseButton, Role, SharedString, div, px};
@@ -12,6 +11,7 @@ fn account_button(
     div()
         .id(id)
         .role(Role::Button)
+        .map(tab_reachable)
         .aria_label(label)
         .size_7()
         .rounded(px(radius::CONTROL))
@@ -97,11 +97,7 @@ impl Accounts {
                     .gap(px(6.))
                     .text_size(px(11.))
                     .when(self.working, |d| {
-                        d.child(crate::panel_kit::spinner(
-                            "footer-account-spinner",
-                            "refresh-cw",
-                            14.,
-                        ))
+                        d.child(crate::panel_kit::spinner("footer-account-spinner", 14.))
                     })
                     .child(if self.working {
                         "Waiting for browser…"
@@ -190,11 +186,7 @@ impl Accounts {
                         .gap(px(6.))
                         .text_size(px(11.))
                         .when(self.working, |d| {
-                            d.child(crate::panel_kit::spinner(
-                                "account-editor-spinner",
-                                "refresh-cw",
-                                12.,
-                            ))
+                            d.child(crate::panel_kit::spinner("account-editor-spinner", 12.))
                         })
                         .child(if adding {
                             if self.working {
@@ -309,9 +301,7 @@ impl Accounts {
                             "Isolated profile".into()
                         }
                     });
-                let masked = self.mask_emails
-                    && identity.and_then(|i| i.email.as_ref()).is_some()
-                    && !self.revealed.contains(&key);
+                let has_email = identity.is_some_and(|identity| identity.email.is_some());
                 let org = identity
                     .and_then(|i| i.organization.as_ref().or(i.plan.as_ref()))
                     .cloned();
@@ -362,82 +352,56 @@ impl Accounts {
                         )),
                     );
                 }
-                let row = div()
-                    .h_12()
-                    .border_b_1()
-                    .border_color(content(0.05))
-                    .px_4()
-                    .py_2()
-                    .flex()
-                    .items_center()
-                    .gap_3()
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap(px(6.))
-                                    .child(
-                                        div()
-                                            .text_size(px(12.))
-                                            .truncate()
-                                            .child(account.label.clone()),
-                                    )
-                                    .children(org.map(|org| {
-                                        div()
-                                            .px_1()
-                                            .rounded(px(radius::SMALL))
-                                            .bg(content(0.07))
-                                            .text_size(px(9.))
-                                            .text_color(content(0.5))
-                                            .child(org)
-                                    })),
-                            )
-                            .child(
-                                div()
-                                    .mt(px(2.))
-                                    .flex()
-                                    .items_center()
-                                    .gap(px(10.))
-                                    .text_size(px(10.))
-                                    .child(status_label(&status).flex_shrink_0())
-                                    .child(
-                                        div()
-                                            .id(SharedString::from(format!(
-                                                "account-email-{}-{id}",
-                                                kind.id()
-                                            )))
-                                            .when(
-                                                self.mask_emails
-                                                    && identity
-                                                        .and_then(|i| i.email.as_ref())
-                                                        .is_some(),
-                                                |d| {
-                                                    d.role(Role::Button).aria_label(if masked {
-                                                        "Reveal email"
-                                                    } else {
-                                                        "Hide email"
-                                                    })
-                                                },
-                                            )
-                                            .text_color(content(0.3))
-                                            .relative()
-                                            .truncate()
-                                            .child(masked_text(subtitle, masked))
-                                            .on_click(cx.listener(move |this, _, _, cx| {
-                                                if this.mask_emails && !this.revealed.remove(&key) {
-                                                    this.revealed.insert(key.clone());
-                                                }
-                                                cx.notify();
-                                            })),
-                                    ),
-                            ),
-                    )
-                    .child(self.meters(kind, &id))
-                    .child(controls);
+                let row =
+                    div()
+                        .h_12()
+                        .border_b_1()
+                        .border_color(content(0.05))
+                        .px_4()
+                        .py_2()
+                        .flex()
+                        .items_center()
+                        .gap_3()
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .gap(px(6.))
+                                        .child(
+                                            div()
+                                                .text_size(px(12.))
+                                                .truncate()
+                                                .child(account.label.clone()),
+                                        )
+                                        .children(org.map(|org| {
+                                            div()
+                                                .px_1()
+                                                .rounded(px(radius::SMALL))
+                                                .bg(content(0.07))
+                                                .text_size(px(9.))
+                                                .text_color(content(0.5))
+                                                .child(org)
+                                        })),
+                                )
+                                .child(
+                                    div()
+                                        .mt(px(2.))
+                                        .flex()
+                                        .items_center()
+                                        .gap(px(10.))
+                                        .text_size(px(10.))
+                                        .child(status_label(&status).flex_shrink_0())
+                                        .child(div().min_w_0().text_color(content(0.3)).child(
+                                            self.identity_label(key, subtitle, has_email, cx),
+                                        )),
+                                ),
+                        )
+                        .child(self.meters(kind, &id))
+                        .child(controls);
                 body = body.child(row);
             }
             if adding {
@@ -521,14 +485,45 @@ impl Accounts {
             }))
             .into_any_element()
     }
-    /// ProviderAccountSubtitle: "Pro · email", the email blurred until clicked.
+    fn identity_label(
+        &self,
+        key: (Kind, String),
+        text: String,
+        has_email: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        if !has_email || !self.mask_emails {
+            return div().min_w_0().truncate().child(text).into_any_element();
+        }
+        let masked = !self.revealed.contains(&key);
+        div()
+            .id(SharedString::from(format!(
+                "account-email-{}-{}",
+                key.0.id(),
+                key.1
+            )))
+            .role(Role::Button)
+            .map(tab_reachable)
+            .aria_label(if masked { "Reveal email" } else { "Hide email" })
+            .min_w_0()
+            .truncate()
+            .cursor_pointer()
+            .child(if masked { "Email hidden".into() } else { text })
+            .on_click(cx.listener(move |this, _, _, cx| {
+                if this.mask_emails && !this.revealed.remove(&key) {
+                    this.revealed.insert(key.clone());
+                }
+                cx.stop_propagation();
+                cx.notify();
+            }))
+            .into_any_element()
+    }
+
     pub(crate) fn subtitle(&self, kind: Kind, id: &str, cx: &mut Context<Self>) -> Option<Div> {
         let identity = self.identities.get(&(kind, id.to_owned()))?;
         if identity.plan.is_none() && identity.email.is_none() {
             return None;
         }
-        let key = (kind, id.to_owned());
-        let masked = self.mask_emails && !self.revealed.contains(&key);
         Some(
             div()
                 .flex()
@@ -544,27 +539,12 @@ impl Accounts {
                 .when(identity.plan.is_some() && identity.email.is_some(), |d| {
                     d.child("·")
                 })
-                .children(identity.email.clone().map(|email| {
-                    div()
-                        .id(SharedString::from(format!(
-                            "account-email-{}-{id}",
-                            kind.id()
-                        )))
-                        .role(Role::Button)
-                        .map(vorkspace_ui::theme::tab_reachable)
-                        .aria_label(if masked { "Reveal email" } else { "Hide email" })
-                        .min_w_0()
-                        .relative()
-                        .truncate()
-                        .child(masked_text(email, masked))
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            if this.mask_emails && !this.revealed.remove(&key) {
-                                this.revealed.insert(key.clone());
-                            }
-                            cx.stop_propagation();
-                            cx.notify();
-                        }))
-                })),
+                .children(
+                    identity
+                        .email
+                        .clone()
+                        .map(|email| self.identity_label((kind, id.to_owned()), email, true, cx)),
+                ),
         )
     }
     pub(crate) fn picker(
@@ -767,7 +747,7 @@ impl Accounts {
     }
 }
 
-/// Back arrow and title, as at the top of React's account popovers.
+/// Back arrow and title at the top of an account popover.
 fn back_header(
     id: &'static str,
     label: &'static str,
@@ -815,7 +795,7 @@ fn organization_tag(identity: &accounts::Identity) -> Option<String> {
     }
 }
 
-/// React's barClass, shared with the footer chip and usage cards.
+/// Usage bar colour by percent used, shared with the footer chip and usage cards.
 pub(crate) fn bar_color(used: f64) -> gpui::Hsla {
     if used >= 90. {
         vorkspace_ui::theme::danger()
@@ -872,7 +852,7 @@ pub(crate) fn status_label(status: &Status) -> Div {
         }))
 }
 
-/// UsageMeter with React's short "5h · 3h 10m" title for account rows.
+/// A usage meter with a short "5h · 3h 10m" title for account rows.
 fn meter(w: &usage::Window, now: i64, show_remaining: bool) -> Div {
     let used = w.used_percent.clamp(0., 100.);
     let remaining = 100. - used;

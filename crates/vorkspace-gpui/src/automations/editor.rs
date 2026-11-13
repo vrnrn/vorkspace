@@ -203,7 +203,7 @@ impl Automations {
                 }
             }
         }
-        editor.dirty = true;
+        editor.mark_dirty();
         self.choice = None;
         self.rebuild_trigger_fields(cx);
         cx.notify();
@@ -405,7 +405,7 @@ impl Automations {
                             .triggers
                             .get_or_insert_with(Vec::new)
                             .retain(|t| t.id != id);
-                        editor.dirty = true;
+                        editor.mark_dirty();
                     }
                     this.rebuild_trigger_fields(cx);
                     cx.notify();
@@ -449,8 +449,12 @@ impl Automations {
             .flex_wrap()
             .items_center()
             .gap(px(4.));
-        if !editor.saved || editor.dirty {
-            let label = if editor.saved { "Reset" } else { "Cancel" };
+        let stale = self.automations.iter().any(|saved| {
+            saved.id == draft.id
+                && editor.saved_revision != DefinitionRevision::Saved(saved.updated_at)
+        });
+        if !editor.saved() || editor.dirty || stale {
+            let label = if editor.saved() { "Reset" } else { "Cancel" };
             actions = actions.child(
                 page::secondary("automation-reset", label, false, false)
                     .child(label)
@@ -463,23 +467,28 @@ impl Automations {
                     })),
             );
         }
-        if editor.saved {
+        if editor.saved() {
             let label = if self.running {
                 "Starting…"
             } else {
                 "Run now"
             };
+            let disabled = self.running || editor.dirty || stale;
             actions = actions.child(
-                page::secondary("automation-run", label, false, self.running)
+                page::secondary("automation-run", label, false, disabled)
                     .child(icon("queue-play", page::ICON_SIZE))
                     .child(label)
-                    .on_click(cx.listener(|this, _, _, cx| this.run(cx))),
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if !disabled {
+                            this.run(cx);
+                        }
+                    })),
             );
         }
-        let disabled = !valid || self.saving || (editor.saved && !editor.dirty);
+        let disabled = !valid || self.saving || stale || (editor.saved() && !editor.dirty);
         let label = if self.saving {
             "Saving…"
-        } else if editor.saved {
+        } else if editor.saved() {
             "Save"
         } else {
             "Create"
@@ -529,7 +538,7 @@ impl Automations {
                                 cx.listener(|this, _, _, cx| {
                                     if let Some(e) = &mut this.editor {
                                         e.draft.enabled = !e.draft.enabled;
-                                        e.dirty = true;
+                                        e.mark_dirty();
                                     }
                                     cx.notify();
                                 }),
@@ -546,11 +555,14 @@ impl Automations {
                                 .max_w_full()
                                 .flex_shrink_1()
                                 .child(self.project_anchor.probe())
-                                .child(self.project_mark(&draft.cwd, page::ICON_SIZE))
+                                .child(crate::project_mark::project_icon(
+                                    &draft.cwd,
+                                    page::ICON_SIZE,
+                                ))
                                 .child(div().min_w_0().truncate().child(if draft.cwd.is_empty() {
                                     "Choose project".into()
                                 } else {
-                                    self.project_label(&draft.cwd)
+                                    project_name(&draft.cwd)
                                 }))
                                 .child(
                                     icon("chevron-down", page::ICON_SIZE)
@@ -560,7 +572,7 @@ impl Automations {
                                     |this, _, window, cx| this.choose_project(window, cx),
                                 )),
                             )
-                            .when(editor.saved, |d| {
+                            .when(editor.saved(), |d| {
                                 d.child(
                                     page::icon_action(
                                         "automation-delete-menu",
@@ -577,7 +589,7 @@ impl Automations {
                                 )
                             }),
                     )
-                    .when(editor.saved, |d| {
+                    .when(editor.saved(), |d| {
                         d.child(div().flex().flex_wrap().gap(px(4.)).children(
                             [("Settings", false), ("Run history", true)].map(|(label, history)| {
                                 let id = if history {
@@ -596,7 +608,7 @@ impl Automations {
                         ))
                     }),
             );
-        let panel = if self.history && editor.saved {
+        let panel = if self.history && editor.saved() {
             self.render_history(narrow, cx)
         } else {
             self.render_settings(narrow, cx)
@@ -648,7 +660,7 @@ impl Automations {
     fn render_settings(&self, narrow: bool, cx: &mut Context<Self>) -> AnyElement {
         let editor = self.editor.as_ref().expect("editor");
         let draft = &editor.draft;
-        let triggers = draft.triggers.clone().unwrap_or_default();
+        let triggers = draft.triggers.as_deref().unwrap_or_default();
         let triggers_section = div().child(section("Triggers")).child(
             div()
                 .mt(px(8.))
@@ -963,6 +975,7 @@ impl Automations {
                     "failed" => ("Failed", Some(StatusColor::Danger)),
                     "skipped" => ("Skipped", Some(StatusColor::Warning)),
                     "cancelled" => ("Cancelled", None),
+                    "preparing" => ("Preparing", None),
                     "running" => ("Running", None),
                     _ => ("Pending", None),
                 };
@@ -978,13 +991,15 @@ impl Automations {
                     .font_weight(gpui::FontWeight::MEDIUM)
                     .text_color(color)
                     .bg(fill)
-                    .when(run.status == "running", |d| {
-                        d.child(crate::panel_kit::spinner(
-                            SharedString::from(format!("automation-run-spinner-{index}")),
-                            "loader",
-                            12.,
-                        ))
-                    })
+                    .when(
+                        matches!(run.status.as_str(), "preparing" | "running"),
+                        |d| {
+                            d.child(crate::panel_kit::spinner(
+                                SharedString::from(format!("automation-run-spinner-{index}")),
+                                12.,
+                            ))
+                        },
+                    )
                     .child(label);
                 let metadata = page::meta()
                     .flex()
@@ -1164,7 +1179,7 @@ fn at(timestamp: i64) -> String {
         .unwrap_or_else(|| "—".into())
 }
 fn duration(run: &AutomationRun) -> String {
-    let live = matches!(run.status.as_str(), "pending" | "running");
+    let live = matches!(run.status.as_str(), "pending" | "preparing" | "running");
     let start = run
         .started_at
         .or_else(|| (run.status != "pending").then_some(run.created_at));

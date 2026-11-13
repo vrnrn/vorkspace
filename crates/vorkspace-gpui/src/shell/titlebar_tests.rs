@@ -109,7 +109,7 @@ fn assert_titlebar(
     window
         .update(visual, |shell, w, _| {
             assert!((w.ui_scale() - scale).abs() < f32::EPSILON);
-            assert_eq!(shell.fullscreen, fullscreen);
+            assert_eq!(shell.window.fullscreen, fullscreen);
             // In addition to the divider's layout, inspect painted borders: a
             // full-height rail border must not reappear through native controls.
             if native {
@@ -175,75 +175,6 @@ fn zoomed_titlebar_keeps_native_controls_navigation_and_tabs_separate(cx: &mut T
 
 // Workspace restoration selects the classic body. Render the retained inset
 // titlebar branch directly so its inline navigation uses the same scale rule.
-struct InsetTitlebar(Entity<Shell>);
-impl Render for InsetTitlebar {
-    fn render(&mut self, w: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.0.update(cx, |shell, cx| {
-            shell.fullscreen = w.is_fullscreen();
-            shell.titlebar(w, cx)
-        })
-    }
-}
-
-#[gpui::test]
-fn inset_titlebar_uses_the_same_native_inset_and_navigation_budget(cx: &mut TestAppContext) {
-    vorkspace_ui::clock::use_test_clock(cx);
-    let (window, _, _) = tests::window(cx);
-    let shell = window
-        .update(cx, |_, w, cx| {
-            let shell = cx.entity();
-            w.replace_root(cx, |_, _| InsetTitlebar(shell.clone()));
-            shell
-        })
-        .unwrap();
-    let visual = &mut VisualTestContext::from_window(window.into(), cx);
-    for percent in SCALES {
-        for mode in ["expanded", "compact", "hidden"] {
-            for fullscreen in [false, true, false] {
-                visual.update(|w, cx| {
-                    w.set_ui_scale(percent as f32 / 100., cx);
-                    if w.is_fullscreen() != fullscreen {
-                        w.toggle_fullscreen();
-                    }
-                    shell.update(cx, |shell, cx| {
-                        shell.workspace.classic_layout = false;
-                        shell.workspace.project_rail_width = 160.;
-                        shell.workspace.project_rail_open = mode == "expanded";
-                        shell.workspace.preferences.collapsed_project_rail = if mode == "hidden" {
-                            "hidden"
-                        } else {
-                            "compact"
-                        }
-                        .into();
-                        shell.invalidate_chrome(cx);
-                        cx.notify();
-                    });
-                    w.refresh();
-                });
-                settle(visual);
-                let nav = visual.debug_bounds("titlebar-navigation").unwrap();
-                let toggle = visual.debug_bounds("toggle-sidebar").unwrap();
-                let tabs = visual.debug_bounds("title-tab-strip").unwrap();
-                let forward = visual.debug_bounds("toggle-explorer").unwrap();
-                let pixel = visual.update(|w, _| 1. / w.scale_factor());
-                assert!(tabs.left() >= nav.right() - px(pixel));
-                assert!(forward.right() <= nav.right() + px(0.02));
-                let new_tab = visual.debug_bounds("new-tab").unwrap();
-                assert!(new_tab.left() >= nav.right());
-                visual.update(|w, _| {
-                    let toggle = w.logical_to_platform_bounds(toggle);
-                    let expected = if !fullscreen { 78. } else { 10. * w.ui_scale() };
-                    assert!((toggle.left().as_f32() - expected).abs() < 0.02);
-                    assert!(
-                        (toggle.center().y.as_f32() - 20. * w.ui_scale()).abs()
-                            <= 1. / w.platform_scale_factor()
-                    );
-                });
-            }
-        }
-    }
-}
-
 #[gpui::test]
 fn titlebar_bot_and_app_views_keep_the_same_zoomed_navigation(cx: &mut TestAppContext) {
     vorkspace_ui::clock::use_test_clock(cx);
@@ -306,7 +237,7 @@ fn titlebar_zoom_paths_restore_and_keep_real_controls_live(cx: &mut TestAppConte
             // that scope while exercising actual tab and history clicks.
             shell.sessions[&a].update(cx, |session, cx| {
                 session.summary.cwd = "/work/vorkspace".into();
-                cx.emit(SessionChanged);
+                cx.emit(SessionChanged::Loaded);
             });
             shell.invalidate_chrome(cx);
             cx.notify();
@@ -464,10 +395,14 @@ fn titlebar_zoom_paths_restore_and_keep_real_controls_live(cx: &mut TestAppConte
     for percent in SCALES {
         window
             .update(visual, |shell, _, cx| {
-                let mut prefs = shell.workspace.preferences.clone();
-                prefs.ui_scale = percent;
-                shell.settings.as_ref().unwrap().update(cx, |_, cx| {
-                    cx.emit(crate::settings::SettingsEvent::Changed(Box::new(prefs)));
+                let before = shell.workspace.preferences.clone();
+                let mut after = before.clone();
+                after.ui_scale = percent;
+                shell.pages.settings.as_ref().unwrap().update(cx, |_, cx| {
+                    cx.emit(crate::settings::SettingsEvent::Changed {
+                        before: Box::new(before),
+                        after: Box::new(after),
+                    });
                 });
             })
             .unwrap();

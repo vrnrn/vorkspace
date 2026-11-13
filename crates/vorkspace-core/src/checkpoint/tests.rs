@@ -42,6 +42,24 @@ impl Drop for Fixture {
 }
 
 #[test]
+fn captures_structured_edits_only_for_the_expected_active_turn() {
+    let f = Fixture::new();
+    f.store.begin_turn("session", f.cwd(), "first").unwrap();
+    f.store.finish_turn("session", f.cwd(), "first").unwrap();
+    f.store.begin_turn("session", f.cwd(), "second").unwrap();
+    f.store
+        .capture_current("session", f.cwd(), "first", &["delete.txt".into()])
+        .unwrap();
+    f.store
+        .capture_current("session", f.cwd(), "second", &["a.txt".into()])
+        .unwrap();
+    let path = f.store.session_dir("session");
+    let active = read_review(&path).unwrap().unwrap().active.unwrap();
+    assert_eq!(active.edited, BTreeSet::from(["a.txt".into()]));
+    assert_eq!(file_mode(&path.join("turn-review.json")), Some(0o600));
+}
+
+#[test]
 fn records_shell_changes_and_preserves_the_index_head_and_saved_result() {
     let f = Fixture::new();
     f.write("a.txt", "user change\n");
@@ -68,7 +86,7 @@ fn records_shell_changes_and_preserves_the_index_head_and_saved_result() {
         (status.files[0].additions, status.files[0].deletions),
         (1, 0)
     );
-    assert!(status.files.iter().all(|file| file.exact && file.undoable));
+    assert!(status.files.iter().all(|file| file.undoable));
     assert_eq!(std::fs::read(f.repo.join(".git/index")).unwrap(), index);
     assert_eq!(run_git(&f.repo, &["rev-parse", "HEAD"]).unwrap(), head);
 
@@ -80,9 +98,8 @@ fn records_shell_changes_and_preserves_the_index_head_and_saved_result() {
     assert_eq!(diff.original, "user change\n");
     assert_eq!(diff.current, "user change\nagent change\n");
     let status = reopened.status("session", f.cwd()).unwrap();
-    assert!(status.files[0].exact);
     assert!(!status.files[0].undoable);
-    assert!(reopened.undo("session", f.cwd(), None).is_err());
+    assert!(reopened.undo("session", f.cwd(), "first", None).is_err());
     assert!(f.repo.join("new.txt").exists());
     assert!(!f.repo.join("delete.txt").exists());
 }
@@ -142,49 +159,6 @@ fn continuing_an_unfinished_turn_preserves_its_baseline_and_edit_evidence() {
 }
 
 #[test]
-fn recovers_edits_when_an_older_version_replaced_an_unfinished_baseline() {
-    for committed in [false, true] {
-        let f = Fixture::new();
-        f.store.begin_turn("session", f.cwd(), "first").unwrap();
-        f.write("a.txt", "session edit\n");
-        f.write("foreign.txt", "other session\n");
-        // Simulate the old Continue path losing the active metadata, but
-        // leaving its original Git-backed baseline reference intact.
-        let mut review = read_review(&f.store.session_dir("session"))
-            .unwrap()
-            .unwrap();
-        review.active = None;
-        write_review(&f.store.session_dir("session"), &review).unwrap();
-        if committed {
-            run_git(&f.repo, &["add", "a.txt"]).unwrap();
-            run_git(&f.repo, &["commit", "-m", "accept edit"]).unwrap();
-        }
-        f.store.begin_turn("session", f.cwd(), "continue").unwrap();
-        f.store.finish_turn("session", f.cwd(), "continue").unwrap();
-        assert!(f.store.status("session", f.cwd()).unwrap().files.is_empty());
-        f.store
-            .recover_orphaned_turn("session", f.cwd(), &["removed-fixture.txt".into()])
-            .unwrap();
-        assert!(f.store.status("session", f.cwd()).unwrap().files.is_empty());
-        f.store
-            .recover_orphaned_turn("session", f.cwd(), &["a.txt".into()])
-            .unwrap();
-        let reopened = Store::new(f.dir.join("checkpoints"));
-        let status = reopened.status("session", f.cwd()).unwrap();
-        if committed {
-            assert!(status.files.is_empty());
-        } else {
-            assert_eq!(status.files.len(), 1);
-            assert_eq!(status.files[0].relative, "a.txt");
-            assert!(!status.files[0].undoable);
-            let diff = reopened.file_diff("session", f.cwd(), "a.txt").unwrap();
-            assert_eq!(diff.original, "original\n");
-            assert_eq!(diff.current, "session edit\n");
-        }
-    }
-}
-
-#[test]
 fn overlapping_turns_keep_exact_diffs_but_cannot_restore_shared_work() {
     let f = Fixture::new();
     f.write("a.txt", "top\n\nbottom\n");
@@ -202,9 +176,11 @@ fn overlapping_turns_keep_exact_diffs_but_cannot_restore_shared_work() {
             (status.files[0].additions, status.files[0].deletions),
             (2, 2)
         );
-        assert!(status.files[0].exact);
         assert!(!status.files[0].undoable);
-        assert!(f.store.undo(id, f.cwd(), None).is_err());
+        assert!(f
+            .store
+            .undo(id, f.cwd(), status.turn_id.as_deref().unwrap(), None)
+            .is_err());
         assert_eq!(
             f.store.file_diff(id, f.cwd(), "a.txt").unwrap().current,
             "top edited by a\n\nbottom edited by b\n"
@@ -237,6 +213,11 @@ fn shared_turns_only_review_files_with_their_own_successful_edit_events() {
     assert_eq!(status.files[0].relative, "a.txt");
     assert!(!status.files[0].undoable);
     // The complete workspace recording is retained separately from attribution.
+    let reader = reopened
+        .open_recorded_review("reader", f.cwd(), None)
+        .unwrap();
+    assert!(reader.files().unwrap().is_empty());
+    assert!(reader.file("a.txt").is_err());
     assert_eq!(
         reopened
             .file_diff("reader", f.cwd(), "a.txt")
@@ -322,9 +303,8 @@ fn nested_turns_share_work_but_sibling_path_prefixes_do_not() {
     for (id, cwd) in [("parent", f.cwd()), ("child", child_cwd)] {
         let status = f.store.status(id, cwd).unwrap();
         assert_eq!(status.files.len(), 1);
-        assert!(status.files[0].exact);
         assert!(!status.files[0].undoable);
-        assert!(f.store.undo(id, cwd, None).is_err());
+        assert!(f.store.undo(id, cwd, "second", None).is_err());
     }
 }
 
@@ -340,8 +320,10 @@ fn undo_restores_only_recorded_files_and_keep_retains_history() {
     f.store.finish_turn("session", f.cwd(), "first").unwrap();
     f.write("unrelated.txt", "later work\n");
     let index = std::fs::read(f.repo.join(".git/index")).unwrap();
-    f.store.keep("session", f.cwd(), Some("a.txt")).unwrap();
-    f.store.undo("session", f.cwd(), None).unwrap();
+    f.store
+        .keep("session", f.cwd(), "first", Some("a.txt"))
+        .unwrap();
+    f.store.undo("session", f.cwd(), "first", None).unwrap();
     assert_eq!(
         std::fs::read_to_string(f.repo.join("a.txt")).unwrap(),
         "agent\n"
@@ -491,7 +473,6 @@ fn unrelated_and_partial_commits_preserve_pending_files_and_exact_counts() {
         (status.files[0].additions, status.files[0].deletions),
         (1, 0)
     );
-    assert!(status.files[0].exact);
     assert!(!status.files[0].undoable);
 }
 
@@ -541,102 +522,6 @@ fn committed_results_do_not_reappear_after_later_edits_or_restarts() {
             .unwrap()
             .current,
         "agent change\n"
-    );
-}
-
-#[test]
-fn presentation_status_never_writes_the_recording_index_head_or_dirty_files() {
-    let f = Fixture::new();
-    f.store.begin_turn("session", f.cwd(), "first").unwrap();
-    f.write("a.txt", "agent change\n");
-    f.store.finish_turn("session", f.cwd(), "first").unwrap();
-    assert_eq!(
-        f.store
-            .status_readonly("session", f.cwd())
-            .unwrap()
-            .files
-            .len(),
-        1
-    );
-    run_git(&f.repo, &["add", "a.txt"]).unwrap();
-    run_git(&f.repo, &["commit", "-m", "accept changes"]).unwrap();
-    f.write("a.txt", "later user edit\n");
-    f.write("user.txt", "untracked user work\n");
-    let review = f.store.session_dir("session").join("turn-review.json");
-    let recording = std::fs::read(&review).unwrap();
-    let index = std::fs::read(f.repo.join(".git/index")).unwrap();
-    let head = run_git(&f.repo, &["rev-parse", "HEAD"]).unwrap();
-    assert!(f
-        .store
-        .status_readonly("session", f.cwd())
-        .unwrap()
-        .files
-        .is_empty());
-    assert_eq!(std::fs::read(&review).unwrap(), recording);
-    assert_eq!(std::fs::read(f.repo.join(".git/index")).unwrap(), index);
-    assert_eq!(run_git(&f.repo, &["rev-parse", "HEAD"]).unwrap(), head);
-    assert_eq!(
-        std::fs::read_to_string(f.repo.join("a.txt")).unwrap(),
-        "later user edit\n"
-    );
-    assert_eq!(
-        std::fs::read_to_string(f.repo.join("user.txt")).unwrap(),
-        "untracked user work\n"
-    );
-    // The ordinary review read still durably dismisses accepted paths.
-    assert!(f.store.status("session", f.cwd()).unwrap().files.is_empty());
-    assert_ne!(std::fs::read(&review).unwrap(), recording);
-}
-
-#[test]
-fn presentation_status_reads_the_latest_native_or_original_desktop_session_id_in_place() {
-    let f = Fixture::new();
-    let desktop = "44f70dd0-6ad2-47f0-baea-aebad5f36d2c";
-    let aliases = vec!["42".to_string(), desktop.to_string()];
-    f.store.begin_turn(desktop, f.cwd(), "desktop").unwrap();
-    f.write("a.txt", "desktop result\n");
-    f.store.finish_turn(desktop, f.cwd(), "desktop").unwrap();
-    assert_eq!(
-        f.store
-            .status_readonly_aliases(&aliases, f.cwd())
-            .unwrap()
-            .files[0]
-            .relative,
-        "a.txt"
-    );
-    assert!(!f.store.session_dir("42").exists());
-    f.store.begin_turn("42", f.cwd(), "native").unwrap();
-    f.write("delete.txt", "native result\n");
-    f.store.finish_turn("42", f.cwd(), "native").unwrap();
-    let set_time = |session: &str, seconds| {
-        std::fs::File::options()
-            .write(true)
-            .open(f.store.session_dir(session).join("turn-review.json"))
-            .unwrap()
-            .set_times(
-                std::fs::FileTimes::new()
-                    .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(seconds)),
-            )
-            .unwrap();
-    };
-    set_time(desktop, 1_000);
-    set_time("42", 2_000);
-    assert_eq!(
-        f.store
-            .status_readonly_aliases(&aliases, f.cwd())
-            .unwrap()
-            .files[0]
-            .relative,
-        "delete.txt"
-    );
-    set_time(desktop, 3_000);
-    assert_eq!(
-        f.store
-            .status_readonly_aliases(&aliases, f.cwd())
-            .unwrap()
-            .files[0]
-            .relative,
-        "a.txt"
     );
 }
 
@@ -697,7 +582,7 @@ fn linked_worktrees_have_independent_recordings_and_indexes() {
     assert_eq!(status.files[0].relative, "delete.txt");
     assert!(status.files[0].undoable);
     assert_eq!(std::fs::read(&index_path).unwrap(), index);
-    f.store.undo("linked", cwd, None).unwrap();
+    f.store.undo("linked", cwd, "second", None).unwrap();
     assert_eq!(
         std::fs::read_to_string(f.repo.join("a.txt")).unwrap(),
         "main change\n"
@@ -724,17 +609,20 @@ fn preserves_literal_paths_and_records_modes_and_symlinks_safely() {
         .iter()
         .find(|file| file.relative == "link.txt")
         .unwrap();
-    assert!(link.exact);
     assert!(!link.undoable);
     let diff = f.store.file_diff("session", f.cwd(), path).unwrap();
     assert_eq!(diff.original, "baseline\n");
     assert_eq!(diff.current, "changed\n");
-    f.store.undo("session", f.cwd(), Some(path)).unwrap();
+    f.store
+        .undo("session", f.cwd(), "first", Some(path))
+        .unwrap();
     assert_eq!(
         std::fs::read_to_string(f.repo.join(path)).unwrap(),
         "baseline\n"
     );
-    f.store.undo("session", f.cwd(), Some("a.txt")).unwrap();
+    f.store
+        .undo("session", f.cwd(), "first", Some("a.txt"))
+        .unwrap();
     assert_eq!(file_mode(&f.repo.join("a.txt")).unwrap() & 0o111, 0);
     for path in ["../a.txt", "/a.txt", "a/../a.txt", "./a.txt", ".git/config"] {
         assert!(f.store.file_diff("session", f.cwd(), path).is_err());
@@ -758,7 +646,7 @@ fn checkpoints_scope_nested_workspaces_and_repositories_without_head() {
         f.store.file_diff("nested", cwd, "a.txt").unwrap().current,
         "nested\nchanged\n"
     );
-    f.store.undo("nested", cwd, None).unwrap();
+    f.store.undo("nested", cwd, "first", None).unwrap();
     assert_eq!(
         std::fs::read_to_string(f.repo.join("a.txt")).unwrap(),
         "outside scope\n"
@@ -772,6 +660,36 @@ fn checkpoints_scope_nested_workspaces_and_repositories_without_head() {
     std::fs::write(unborn.join("new.txt"), "new\n").unwrap();
     f.store.finish_turn("unborn", cwd, "first").unwrap();
     assert_eq!(f.store.status("unborn", cwd).unwrap().files[0].additions, 1);
-    f.store.undo("unborn", cwd, None).unwrap();
+    f.store.undo("unborn", cwd, "first", None).unwrap();
     assert!(!unborn.join("new.txt").exists());
+}
+
+#[test]
+fn stale_actions_cannot_mutate_the_successor_and_archived_review_stays_exact() {
+    let f = Fixture::new();
+    f.store.begin_turn("session", f.cwd(), "first").unwrap();
+    f.write("a.txt", "first result\n");
+    f.store.finish_turn("session", f.cwd(), "first").unwrap();
+    let first = f.store.status("session", f.cwd()).unwrap().turn_id.unwrap();
+    f.store.begin_turn("session", f.cwd(), "next").unwrap();
+    assert!(f.store.undo("session", f.cwd(), &first, None).is_err());
+    f.write("a.txt", "next result\n");
+    f.store.finish_turn("session", f.cwd(), "next").unwrap();
+    assert!(f.store.keep("session", f.cwd(), &first, None).is_err());
+    assert!(f.store.undo("session", f.cwd(), &first, None).is_err());
+    assert_eq!(
+        std::fs::read_to_string(f.repo.join("a.txt")).unwrap(),
+        "next result\n"
+    );
+    let archived = f
+        .store
+        .open_recorded_review("session", f.cwd(), Some(&first))
+        .unwrap();
+    assert_eq!(archived.files().unwrap()[0].relative, "a.txt");
+    let diff = archived.file("a.txt").unwrap();
+    assert_eq!(
+        (diff.original.as_str(), diff.current.as_str()),
+        ("original\n", "first result\n")
+    );
+    assert_eq!(f.store.status("session", f.cwd()).unwrap().files.len(), 1);
 }

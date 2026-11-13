@@ -149,7 +149,7 @@ mod tests {
     ) {
         vorkspace_ui::clock::use_test_clock(cx);
         let store = Arc::new(std::sync::Mutex::new(
-            vorkspace_core::store::Store::open_vorkspace(std::path::Path::new(":memory:")).unwrap(),
+            vorkspace_core::store::Store::test(std::path::Path::new(":memory:")).unwrap(),
         ));
         let panel = cx.update(|cx| {
             cx.open_window(

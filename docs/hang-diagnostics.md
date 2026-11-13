@@ -155,15 +155,13 @@ overhead has not been measured.
 
 ## Focused verification
 
-Use a private checkout target to avoid sharing Cargo locks. The tests synthesize
-GPUI journal events with explicit timestamps, run its interval sealer and hang
-detector, and verify local JSONL timing/type attribution without sleeping through
-a real hang or launching the installed app:
+Use the checkout's normal build output. The tests synthesize GPUI journal events
+with explicit timestamps, run its interval sealer and hang detector, and verify
+local JSONL timing and attribution without launching the installed app.
 
 ```
-env -u CODEX_SQLITE_HOME CARGO_TARGET_DIR="$PWD/target/hang-diagnostics" CARGO_BUILD_JOBS=2 cargo clippy -p vorkspace-macos --tests --profile native-dev -- -D warnings
-env -u CODEX_SQLITE_HOME CARGO_TARGET_DIR="$PWD/target/hang-diagnostics" CARGO_BUILD_JOBS=2 cargo test -p vorkspace-macos --profile native-dev hang_diagnostics:: -- --test-threads=1
-env -u CODEX_SQLITE_HOME CARGO_TARGET_DIR="$PWD/target/hang-diagnostics" CARGO_BUILD_JOBS=2 cargo build -p vorkspace-gpui --profile native-dev
+cargo nextest run --locked --cargo-profile verify -p vorkspace-macos -E 'test(hang_diagnostics::)'
+npm run target:prune
 ```
 
 The focused tests cover threshold filtering, bounded encoding, source/input

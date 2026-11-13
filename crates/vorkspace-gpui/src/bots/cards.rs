@@ -1,18 +1,22 @@
 use super::*;
+use crate::conversation::TurnState;
 use serde_json::{Value, json};
+use vorkspace_runtime::runtime::TurnOutcome;
 
 /// launchedSessionState: where a session the Bot started stands.
-fn launched_state(session: &Conversation, cx: &App) -> &'static str {
+fn launched_state(session: &Conversation) -> &'static str {
     if session.needs_approval() {
         "input"
-    } else if session.busy {
+    } else if session.responding() {
         "working"
+    } else if session.is_stopping() {
+        "stopping"
     } else if !session.summary.has_messages {
         "draft"
     } else {
-        match session.external_outcome(cx) {
-            (false, status) if status.starts_with("Stopped") => "stopped",
-            (false, _) => "failed",
+        match session.turn_state() {
+            TurnState::Settled(TurnOutcome::Cancelled) => "stopped",
+            TurnState::Settled(TurnOutcome::Failed) | TurnState::Unconfirmed => "failed",
             _ => "done",
         }
     }
@@ -39,7 +43,7 @@ impl Bots {
                         let session = session.read(cx);
                         crate::transcript::LaunchView {
                             title: session.summary.title.clone(),
-                            state: launched_state(session, cx),
+                            state: launched_state(session),
                             harness: session.summary.provider.clone(),
                             cwd: session.summary.cwd.clone(),
                         }
@@ -83,7 +87,7 @@ impl Bots {
                 .iter()
                 .any(|row| row.role == "bot-card")
             {
-                chat.update(cx, |view, cx| view.load(cx));
+                chat.update(cx, |view, cx| view.load_complete(cx));
             }
             return;
         }
@@ -113,7 +117,7 @@ impl Bots {
                 {
                     let session = session.read(cx);
                     value["title"] = json!(session.summary.title);
-                    value["state"] = json!(launched_state(session, cx));
+                    value["state"] = json!(launched_state(session));
                     value["harness"] = json!(session.summary.provider);
                     value["cwd"] = json!(session.summary.cwd);
                 }

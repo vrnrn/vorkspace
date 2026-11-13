@@ -51,7 +51,7 @@ fn setup_does_not_create_an_identity_until_a_nonblank_name_is_confirmed() {
 #[test]
 fn identity_projects_order_and_hidden_sessions_survive_restart() {
     let temp = tempfile::tempdir().unwrap();
-    let db = Store::open(&temp.path().join("native.sqlite")).unwrap();
+    let db = Store::test(&temp.path().join("native.sqlite")).unwrap();
     let mut roster = Roster::default();
     let a = roster
         .create(named(
@@ -199,7 +199,7 @@ fn schedules_are_strictly_future_and_reject_invalid_fields() {
 fn delivery_receipt_is_saved_with_the_user_message() {
     let temp = tempfile::tempdir().unwrap();
     let path = temp.path().join("native.sqlite");
-    let mut db = Store::open(&path).unwrap();
+    let mut db = Store::test(&path).unwrap();
     let session = db.create("codex", "/project").unwrap();
     let row = Row {
         role: "user".into(),
@@ -210,7 +210,7 @@ fn delivery_receipt_is_saved_with_the_user_message() {
     db.write_rows_with_message(session.id, 0, std::slice::from_ref(&row), Some("message-1"))
         .unwrap();
     drop(db);
-    let db = Store::open(&path).unwrap();
+    let db = Store::test(&path).unwrap();
     assert_eq!(db.load(session.id).unwrap().rows, vec![row]);
     assert_eq!(
         db.setting(&format!("bot-delivered:{}:message-1", session.id))
@@ -223,7 +223,7 @@ fn delivery_receipt_is_saved_with_the_user_message() {
 #[test]
 fn confirmed_setup_configuration_survives_reopen_until_a_session_takes_ownership() {
     let directory = tempfile::tempdir().unwrap();
-    let db = Store::open(&directory.path().join("native.sqlite")).unwrap();
+    let db = Store::test(&directory.path().join("native.sqlite")).unwrap();
     let mut roster = Roster::default();
     let mut bot = named(&roster, "Ada", Vec::new());
     bot.initial_configuration = Some(Box::new(InitialConfiguration {
@@ -240,7 +240,7 @@ fn confirmed_setup_configuration_survives_reopen_until_a_session_takes_ownership
     roster.create(bot).unwrap();
     roster.save(&db).unwrap();
     drop(db);
-    let db = Store::open(&directory.path().join("native.sqlite")).unwrap();
+    let db = Store::test(&directory.path().join("native.sqlite")).unwrap();
     let roster = Roster::load(&db).unwrap();
     let bot = roster.get(&id).unwrap();
     assert_eq!(bot.name, "Ada");
@@ -476,10 +476,8 @@ fn dispatch_claim_is_unique_across_processes_and_survives_restart() {
 #[test]
 fn claim_rejects_changed_or_missing_outbox_and_rolls_back_on_failure() {
     let dir = tempfile::tempdir().unwrap();
-    for open in [
-        Store::open as fn(&Path) -> Result<Store, String>,
-        Store::open_vorkspace,
-    ] {
+    {
+        let open = Store::test;
         let path = dir.path().join(new_id());
         let store = open(&path).unwrap();
         let message = Message {
@@ -655,6 +653,7 @@ fn roster_edits_retain_unknown_fields_in_existing_messages_and_bots() {
 fn minions_resolve_to_their_parent_and_share_its_context() {
     let mut roster = Roster::default();
     let mut parent = Bot {
+        id: "parent".into(),
         name: "Oppy".into(),
         projects: vec!["/work".into()],
         ..Default::default()
@@ -666,10 +665,6 @@ fn minions_resolve_to_their_parent_and_share_its_context() {
         created_at: 1,
     });
     roster.bots.push(parent.clone());
-    let (found, minion) = roster.of_minion(42).unwrap();
-    assert_eq!(found.id, parent.id);
-    assert_eq!(minion.name, "Scout");
-    assert!(roster.of_minion(7).is_none());
     // Minions persist with the roster, and an empty list is omitted.
     let saved = serde_json::to_value(&parent).unwrap();
     assert_eq!(saved["minions"][0]["sessionId"], 42);
@@ -678,16 +673,22 @@ fn minions_resolve_to_their_parent_and_share_its_context() {
         .get("minions")
         .is_none());
 
+    roster.migrate_minions();
+    let member = roster.of_session(42).unwrap();
+    assert_eq!(roster.parent_of(&member.id).unwrap().id, parent.id);
+    assert_eq!(member.name, "Scout");
+    assert!(roster.of_session(7).is_none());
+    let actor = roster.effective_bot(&member.id).unwrap();
     let files = files::AgentFiles {
         soul: Some("Be brief.".into()),
         memory: "- Uses cargo".into(),
         ..Default::default()
     };
-    let context = minion_context(&parent, "Scout", "/work", &files, Path::new("/bin/v"));
-    assert!(context.contains("You are Scout, a minion of the Bot Oppy"));
+    let context = context(&actor, &files, Path::new("/bin/v"));
+    assert!(context.contains("You are Scout, a persistent Minion in Oppy's team"));
     assert!(context.contains("Be brief."));
     assert!(context.contains("- Uses cargo"));
-    assert!(context.contains("Work in /work only"));
+    assert!(context.contains("Live parent project scope: /work"));
 }
 
 #[test]
@@ -727,4 +728,16 @@ fn the_minion_guide_follows_the_setting() {
     assert!(enabled.contains("minions.hire"));
     assert!(enabled.contains("reuse useful members"));
     assert!(enabled.contains("minions.fire"));
+}
+
+#[test]
+fn codex_home_is_account_scoped_and_never_created_by_lookup() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("bots");
+    assert!(codex_home(&root, "default").unwrap().is_none());
+    let expected = temp.path().join("codex-bots/default");
+    std::fs::create_dir_all(&expected).unwrap();
+    assert_eq!(codex_home(&root, "default").unwrap(), Some(expected));
+    assert!(codex_home(&root, "another-account").unwrap().is_none());
+    assert!(codex_home(&root, "../escape").is_err());
 }

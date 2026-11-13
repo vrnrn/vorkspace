@@ -164,9 +164,7 @@ fn resizing_a_long_paragraph_keeps_the_reading_glyph_at_the_same_height(cx: &mut
             }],
             cx,
         );
-        for reveal in view.reveals.values_mut() {
-            reveal.settle(Instant::now());
-        }
+        view.reveals.settle_through(view.source.len());
         view.prompt_rise = None;
         view.motions.clear();
         view.rebuild(0, cx);
@@ -435,9 +433,7 @@ fn hover_cursor_links_and_text_in_sessions_and_bots(cx: &mut TestAppContext) {
                     }],
                     cx,
                 );
-                for reveal in view.reveals.values_mut() {
-                    reveal.settle(Instant::now());
-                }
+                view.reveals.settle_through(view.source.len());
                 view.motions.clear();
                 view.rebuild(0, cx);
             })

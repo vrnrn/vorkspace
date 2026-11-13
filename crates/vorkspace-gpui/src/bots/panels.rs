@@ -3,14 +3,12 @@ mod overview;
 mod settings_modal;
 use super::*;
 use crate::{
+    background_settings::{BackgroundDialog, Event as BackgroundEvent},
     pickers::{ModelList, ModelPicked},
     popover::{MenuAction, MenuItem, MenuStyle, Side},
-    project_settings::{BackgroundDialog, Event as BackgroundEvent},
 };
 use gpui::{Div, FontWeight};
-use vorkspace_core::project_appearance::{
-    ProjectAppearance, TEXTURE_PALETTES, default_foreground_color,
-};
+use vorkspace_core::project_appearance::{TEXTURE_PALETTES, default_foreground_color};
 #[derive(Clone, Copy, PartialEq)]
 pub(super) enum SettingsSection {
     General,
@@ -83,14 +81,13 @@ fn setting(label: &str, description: Option<&str>, control: AnyElement) -> Div {
                 .child(control),
         )
 }
-fn switch_setting(label: &str, description: &str, disabled: bool, control: AnyElement) -> Div {
+fn switch_setting(label: &str, description: &str, control: AnyElement) -> Div {
     div()
         .flex()
         .items_center()
         .gap_3()
         .px_3()
         .py_2()
-        .when(disabled, |d| d.opacity(0.4))
         .child(
             div()
                 .flex_1()
@@ -993,7 +990,7 @@ impl Bots {
         .rounded(px(radius::CONTROL))
         .when(active, |d| d.bg(content(0.1)))
         .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.08)))
-        .child(avatar::minion_avatar(parent, &id, status, 16., false))
+        .child(avatar::minion_avatar(parent, &id, status, 16.))
         .child(
             div()
                 .flex_1()
@@ -1190,7 +1187,7 @@ mod minion_ui_tests {
         vorkspace_ui::clock::use_test_clock(cx);
         let directory = tempfile::tempdir().unwrap();
         let store = Arc::new(Mutex::new(
-            Store::open(&directory.path().join("ui.sqlite")).unwrap(),
+            Store::test(&directory.path().join("ui.sqlite")).unwrap(),
         ));
         let cwd = directory.path().to_string_lossy().to_string();
         let (active, retired) = {

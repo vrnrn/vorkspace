@@ -147,8 +147,8 @@ pub fn compact(
     run_operation(request, cancel, None, Operation::Compact, emit).map(|_| ())
 }
 
-/// Pi-family command discovery is an isolated no-session RPC, matching
-/// piSkills.ts. It never submits an empty prompt or resumes the main session.
+/// Pi-family command discovery is an isolated no-session RPC. It never
+/// submits an empty prompt or resumes the main session.
 pub fn discover_commands(
     mut request: Request,
     cancel: Arc<AtomicBool>,

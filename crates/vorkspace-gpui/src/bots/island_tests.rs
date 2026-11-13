@@ -166,7 +166,7 @@ fn native_bot_island_capture() {
     ] {
         let data = tempfile::tempdir().unwrap();
         let store = Arc::new(Mutex::new(
-            Store::open(&data.path().join("native.sqlite")).unwrap(),
+            Store::test(&data.path().join("native.sqlite")).unwrap(),
         ));
         let project = data
             .path()
@@ -193,11 +193,7 @@ fn native_bot_island_capture() {
                 title: session.title.clone(),
                 cwd: project.clone(),
                 harness: "codex".into(),
-                model: None,
-                origin_turn: 0,
-                notify_on_complete: false,
-                completed: false,
-                dismissed: false,
+                ..Default::default()
             })
             .collect();
         let window = cx

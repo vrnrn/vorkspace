@@ -31,7 +31,8 @@ fn snapshot() -> Snapshot {
                 missing: true,
                 ..Default::default()
             },
-        ],
+        ]
+        .into(),
         ..Default::default()
     }
 }
@@ -76,21 +77,29 @@ fn cached_worktrees_show_before_metadata_and_membership_never_loads_full_setting
                     branch: Some("feature".into()),
                     ..Default::default()
                 },
-            ],
+            ]
+            .into(),
             ..Default::default()
         },
     );
-    let store = Store::open(Path::new(":memory:")).unwrap();
+    let store = Store::test(Path::new(":memory:")).unwrap();
     let session = store.create("codex", cwd).unwrap();
+    store
+        .save_agent_preferences(
+            session.id,
+            &vorkspace_core::agent::Settings {
+                worktree_cwd: Some(feature.clone()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
     // Membership remains readable even when full turn metadata cannot be
     // deserialized. The old per-session agent_settings call fails here.
-    store
-        .save_setting(
-            &format!("agent:{}", session.id),
-            &serde_json::json!({
-                "worktree_cwd": feature, "turns": "not a turn map"
-            })
-            .to_string(),
+    rusqlite::Connection::open(store.database_path())
+        .unwrap()
+        .execute(
+            "UPDATE native_agent_settings SET state_json='broken JSON' WHERE session_id=?1",
+            [store.persisted_session_id(session.id).unwrap()],
         )
         .unwrap();
     assert!(store.agent_settings(session.id).is_err());
@@ -154,7 +163,7 @@ fn cleared_membership_moves_cached_tab_counts_back_to_project_folder() {
 #[gpui::test]
 fn search_keyboard_selection_and_create_footer_match_the_flyout(cx: &mut TestAppContext) {
     cx.update(input::bind);
-    let store = Arc::new(Mutex::new(Store::open(Path::new(":memory:")).unwrap()));
+    let store = Arc::new(Mutex::new(Store::test(Path::new(":memory:")).unwrap()));
     let window = cx.update(|cx| {
         cx.open_window(Default::default(), |_, cx| {
             cx.new(|cx| {

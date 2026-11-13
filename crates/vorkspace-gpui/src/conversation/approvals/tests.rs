@@ -4,7 +4,7 @@ use std::{sync::Mutex, time::Duration};
 use vorkspace_core::store::Store;
 
 fn conversation(cx: &mut TestAppContext) -> WindowHandle<Conversation> {
-    let store = Store::open(Path::new(":memory:")).unwrap();
+    let store = Store::test(Path::new(":memory:")).unwrap();
     let summary = store.create("codex", "/tmp").unwrap();
     cx.update(|cx| {
         input::bind(cx);
@@ -17,7 +17,7 @@ fn conversation(cx: &mut TestAppContext) -> WindowHandle<Conversation> {
                 let mut view = Conversation::new(summary, Arc::new(Mutex::new(store)), cx);
                 view.loaded = true;
                 view.summary.has_messages = true;
-                view.busy = true;
+                view.set_running_for_test(true);
                 view.follow_ups.state.paused = true;
                 view
             })
@@ -48,7 +48,7 @@ fn approval_shelf_slides_up_without_moving_the_composer_or_replaying_on_redraw(
             .update(visual, |view, _, cx| {
                 view.approvals.clear();
                 if queued {
-                    view.enqueue_follow_up("A queued follow-up".into(), None, cx);
+                    view.enqueue_follow_up("A queued follow-up".into(), Vec::new(), None, cx);
                     view.follow_ups.motion.elapsed(Duration::from_secs(1));
                 }
                 cx.notify();

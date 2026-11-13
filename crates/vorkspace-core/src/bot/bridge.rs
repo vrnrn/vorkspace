@@ -7,8 +7,9 @@ use std::{
     collections::HashMap,
     io::{BufRead, BufReader, Read, Write},
     net::{SocketAddr, TcpListener, TcpStream},
+    os::{fd::AsRawFd, unix::net::UnixStream},
     sync::{
-        atomic::{AtomicBool, AtomicUsize, Ordering},
+        atomic::{AtomicUsize, Ordering},
         mpsc, Arc,
     },
     time::Duration,
@@ -140,12 +141,8 @@ pub struct Call {
 pub struct Server {
     endpoint: String,
     secret: Arc<String>,
-    stop: Arc<AtomicBool>,
-}
-impl Drop for Server {
-    fn drop(&mut self) {
-        self.stop.store(true, Ordering::Relaxed);
-    }
+    // Closing this end wakes the listener even when no client connects.
+    _shutdown: UnixStream,
 }
 impl Server {
     pub fn start() -> Result<(Self, async_channel::Receiver<Call>), String> {
@@ -156,13 +153,12 @@ impl Server {
             .map_err(|e| e.to_string())?
             .to_string();
         let secret = Arc::new(format!("{:032x}", rand::random::<u128>()) + &super::new_id());
-        let stop = Arc::new(AtomicBool::new(false));
+        let (shutdown, wake) = UnixStream::pair().map_err(|e| e.to_string())?;
         let connections = Arc::new(AtomicUsize::new(0));
         let (tx, rx) = async_channel::bounded(32);
-        let owner = stop.clone();
         let key = secret.clone();
         std::thread::spawn(move || {
-            while !owner.load(Ordering::Relaxed) && !tx.is_closed() {
+            while !tx.is_closed() && wait_for_client(&listener, &wake) {
                 match listener.accept() {
                     Ok((stream, _)) => {
                         if connections.fetch_add(1, Ordering::Relaxed) >= 16 {
@@ -177,8 +173,13 @@ impl Server {
                             connections.fetch_sub(1, Ordering::Relaxed);
                         });
                     }
-                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                        std::thread::sleep(Duration::from_millis(20))
+                    Err(error)
+                        if matches!(
+                            error.kind(),
+                            std::io::ErrorKind::Interrupted | std::io::ErrorKind::WouldBlock
+                        ) =>
+                    {
+                        continue
                     }
                     Err(_) => break,
                 }
@@ -188,7 +189,7 @@ impl Server {
             Self {
                 endpoint,
                 secret,
-                stop,
+                _shutdown: shutdown,
             },
             rx,
         ))
@@ -201,6 +202,32 @@ impl Server {
         ])
     }
 }
+fn wait_for_client(listener: &TcpListener, wake: &UnixStream) -> bool {
+    let mut descriptors = [
+        libc::pollfd {
+            fd: listener.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        },
+        libc::pollfd {
+            fd: wake.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        },
+    ];
+    loop {
+        // Both descriptors remain open for this thread. A closed shutdown
+        // peer takes precedence over a simultaneously queued connection.
+        let result = unsafe { libc::poll(descriptors.as_mut_ptr(), descriptors.len() as _, -1) };
+        if result >= 0 {
+            return descriptors[1].revents == 0 && descriptors[0].revents & libc::POLLIN != 0;
+        }
+        if std::io::Error::last_os_error().kind() != std::io::ErrorKind::Interrupted {
+            return false;
+        }
+    }
+}
+
 fn token(secret: &str, session: i64) -> String {
     Sha256::digest(format!("{secret}:{session}").as_bytes())
         .iter()
@@ -283,20 +310,11 @@ pub fn client(args: &[String]) -> Result<Value, String> {
             }
             "--input" => {
                 let path = args.next().ok_or("--input needs a path")?;
-                let text = if path == "-" {
-                    let mut text = String::new();
-                    std::io::stdin()
-                        .take(1_048_577)
-                        .read_to_string(&mut text)
-                        .map_err(|e| e.to_string())?;
-                    text
+                input = if path == "-" {
+                    read_input(std::io::stdin())?
                 } else {
-                    std::fs::read_to_string(path).map_err(|e| e.to_string())?
+                    read_input(std::fs::File::open(path).map_err(|e| e.to_string())?)?
                 };
-                if text.len() > 1_048_576 {
-                    return Err("Input too large".into());
-                }
-                input = serde_json::from_str(&text).map_err(|e| e.to_string())?;
             }
             "--request-id" => request_id = args.next().ok_or("--request-id needs an ID")?.clone(),
             json if json.starts_with('{') => {
@@ -346,6 +364,18 @@ pub fn client(args: &[String]) -> Result<Value, String> {
         return Err("App response unavailable".into());
     }
     serde_json::from_str(&line).map_err(|e| e.to_string())
+}
+
+fn read_input(input: impl Read) -> Result<Value, String> {
+    let mut bytes = Vec::new();
+    input
+        .take(1_048_577)
+        .read_to_end(&mut bytes)
+        .map_err(|e| e.to_string())?;
+    if bytes.len() > 1_048_576 {
+        return Err("Input too large".into());
+    }
+    serde_json::from_slice(&bytes).map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
@@ -452,7 +482,7 @@ mod capability_tests {
     fn a_client_that_writes_after_it_is_accepted_is_still_served() {
         let (server, rx) = Server::start().unwrap();
         let credential = server.environment(7)["VORKSPACE_APP_TOKEN"].clone();
-        // Longer than the accept poll, so the server reads before the request.
+        // Leave the accepted connection idle before writing its request.
         let request = send_after(&server, 7, credential, Duration::from_millis(100));
         let call = dispatched(&rx);
         call.reply.send(Ok(json!({"models":[]}))).unwrap();

@@ -6,7 +6,7 @@ fn main() -> Result<(), String> {
     let kind = Kind::parse(&name).ok_or_else(|| format!("Unknown provider: {name}"))?;
     let binary = provider::resolve(kind).ok_or("CLI not installed")?;
     if std::env::args().nth(2).as_deref() == Some("--models") {
-        for model in vorkspace_core::catalog::models(kind)? {
+        for model in vorkspace_core::catalog::models(kind)?.iter() {
             println!(
                 "{} | {} | {:?} | fast={}",
                 model.id, model.name, model.efforts, model.fast

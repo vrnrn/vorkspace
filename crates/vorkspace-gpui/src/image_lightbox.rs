@@ -1,4 +1,5 @@
-//! Native port of `src/shared/ui/ImageLightbox.tsx`.
+//! A full-window image lightbox.
+use crate::render_pixels::to_render_image;
 use vorkspace_ui::radius;
 mod annotation;
 mod diagram;
@@ -185,17 +186,21 @@ impl ImageLightbox {
             },
         );
         let mut diagram = None;
+        cx.on_release(|this, cx| {
+            if (this.original.is_some() || matches!(this.source, Source::Embedded { .. }))
+                && let Some(image) = this.image.take()
+            {
+                cx.drop_image(image, None);
+            }
+        })
+        .detach();
         if owner.is_some()
             && let Source::Path(path) = &open.source
         {
             let path = path.clone();
-            let renderer = cx.svg_renderer();
             let work = cx.background_executor().spawn(async move {
                 let pixels = annotation::read_image(&path)?;
-                let bytes = annotation::png(&pixels, &[], &[])?;
-                let image = Image::from_bytes(ImageFormat::Png, bytes)
-                    .to_image_data(renderer)
-                    .map_err(|e| e.to_string())?;
+                let image = to_render_image(pixels.clone());
                 Ok::<_, String>((Arc::new(pixels), image))
             });
             cx.spawn(async move |this, cx| {
@@ -321,16 +326,10 @@ impl ImageLightbox {
         self.drawing = false;
         self.saving = true;
         self.error = None;
-        let renderer = cx.svg_renderer();
         let work = cx.background_executor().spawn(async move {
-            let bytes = annotation::png(&original, &strokes, &texts)?;
-            let image = Image::from_bytes(ImageFormat::Png, bytes.clone())
-                .to_image_data(renderer)
-                .map_err(|e| e.to_string())?;
-            let pixels = image::load_from_memory_with_format(&bytes, image::ImageFormat::Png)
-                .map_err(|e| e.to_string())?
-                .into_rgba8();
-            Ok::<_, String>((bytes, image, pixels))
+            let flattened = annotation::flatten(&original, &strokes, &texts)?;
+            let image = to_render_image(flattened.pixels.clone());
+            Ok::<_, String>((flattened, image))
         });
         cx.spawn_in(window, async move |this, cx| {
             let result = work.await;
@@ -338,9 +337,9 @@ impl ImageLightbox {
                 if this.cancelled {
                     return;
                 }
-                let result = result.and_then(|(bytes, image, pixels)| {
-                    let (path, generation) = owner.apply(&path, generation, &bytes, cx)?;
-                    Ok::<_, String>((path, image, pixels, generation))
+                let result = result.and_then(|(flattened, image)| {
+                    let (path, generation) = owner.apply(&path, generation, &flattened.png, cx)?;
+                    Ok::<_, String>((path, image, flattened.pixels, generation))
                 });
                 this.saving = false;
                 for text in &this.texts {
@@ -350,7 +349,9 @@ impl ImageLightbox {
                     Ok((path, image, pixels, generation)) => {
                         this.generation = Some(generation);
                         this.source = Source::Path(path);
-                        this.image = Some(image);
+                        if let Some(previous) = this.image.replace(image) {
+                            cx.drop_image(previous, None);
+                        }
                         this.original = Some(Arc::new(pixels));
                         this.strokes.clear();
                         let had_text = !this.texts.is_empty();
@@ -663,117 +664,17 @@ impl Render for ImageLightbox {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, event: &gpui::MouseDownEvent, window, cx| {
-                    cx.stop_propagation();
-                    if !this
-                        .image_bounds(this.displayed_view())
-                        .contains(&event.position)
-                        || this.image.is_none()
-                    {
-                        this.close(window, cx);
-                    } else if this.text_tool && this.original.is_some() && !this.saving {
-                        this.view = this.displayed_view();
-                        this.transition = None;
-                        if let Some(position) = this.image_point(event.position, false) {
-                            let text_size = 20. / this.image_size.width.as_f32().max(1.);
-                            let input = cx.new(|cx| {
-                                crate::input::Input::field(
-                                    "Annotation text",
-                                    "Type text",
-                                    white(0.6),
-                                    cx,
-                                )
-                            });
-                            let change = cx
-                                .subscribe(&input, |_, _, _: &crate::input::Changed, cx| {
-                                    cx.notify()
-                                });
-                            window.focus(&input.focus_handle(cx), cx);
-                            this.texts.push(EditableText {
-                                position,
-                                size: text_size,
-                                color: this.color,
-                                input,
-                                _change: change,
-                            });
-                            cx.notify();
-                        }
-                    } else if this.brush && this.original.is_some() && !this.saving {
-                        this.view = this.displayed_view();
-                        this.transition = None;
-                        if let Some(p) = this.image_point(event.position, false) {
-                            this.strokes.push(annotation::Stroke {
-                                color: this.color,
-                                width: 4. / this.image_size.width.as_f32().max(1.),
-                                points: vec![p],
-                            });
-                            this.drawing = true;
-                            cx.notify();
-                        }
-                    } else if event.click_count == 2 {
-                        this.drag = None;
-                        if this.view.scale > MIN_SCALE {
-                            this.set_view(View::IDENTITY, cx);
-                        } else {
-                            this.zoom_at(DOUBLE_CLICK_SCALE, event.position, cx);
-                        }
-                    } else if this.view.scale > MIN_SCALE {
-                        this.transition = None;
-                        this.drag = Some((this.view, event.position));
-                        cx.notify();
-                    }
+                    this.image_mouse_down(event, window, cx)
                 }),
             )
             .on_click(|_, _, cx| cx.stop_propagation())
             .on_mouse_move(cx.listener(|this, event: &gpui::MouseMoveEvent, _, cx| {
-                if this.drawing {
-                    if event.pressed_button == Some(MouseButton::Left) {
-                        if let Some(p) = this.image_point(event.position, true)
-                            && let Some(stroke) = this.strokes.last_mut()
-                            && stroke.points.last() != Some(&p)
-                        {
-                            stroke.points.push(p);
-                        }
-                        if !this
-                            .image_bounds(this.displayed_view())
-                            .contains(&event.position)
-                        {
-                            this.drawing = false;
-                        }
-                    } else {
-                        this.drawing = false;
-                    }
-                    cx.notify();
-                } else if let Some((origin, pointer)) = this.drag {
-                    if event.pressed_button == Some(MouseButton::Left) {
-                        this.set_view(
-                            View {
-                                x: origin.x + (event.position.x - pointer.x).as_f32(),
-                                y: origin.y + (event.position.y - pointer.y).as_f32(),
-                                ..origin
-                            },
-                            cx,
-                        );
-                    } else {
-                        this.drag = None;
-                        cx.notify();
-                    }
-                }
-                cx.stop_propagation();
+                this.image_mouse_move(event, cx)
             }))
             .on_mouse_up(
                 MouseButton::Left,
                 cx.listener(|this, event: &gpui::MouseUpEvent, _, cx| {
-                    if this.drawing
-                        && let Some(p) = this.image_point(event.position, true)
-                        && let Some(stroke) = this.strokes.last_mut()
-                        && stroke.points.last() != Some(&p)
-                    {
-                        stroke.points.push(p);
-                    }
-                    this.drag = None;
-                    this.drawing = false;
-                    cx.notify();
-                    cx.stop_propagation();
+                    this.image_mouse_up(event, cx)
                 }),
             )
             .on_mouse_up_out(
@@ -785,25 +686,7 @@ impl Render for ImageLightbox {
                 }),
             )
             .on_scroll_wheel(cx.listener(|this, event: &gpui::ScrollWheelEvent, _, cx| {
-                let delta = event.delta.pixel_delta(px(16.));
-                if event.modifiers.control || event.modifiers.platform {
-                    // GPUI's wheel deltas have the opposite sign to DOM wheel deltas.
-                    this.zoom_at(
-                        this.view.scale * (delta.y.as_f32() * 0.01).exp(),
-                        event.position,
-                        cx,
-                    );
-                } else if this.view.scale > MIN_SCALE {
-                    this.set_view(
-                        View {
-                            x: this.view.x + delta.x.as_f32(),
-                            y: this.view.y + delta.y.as_f32(),
-                            ..this.view
-                        },
-                        cx,
-                    );
-                }
-                cx.stop_propagation();
+                this.image_scroll(event, cx)
             }))
             .on_pinch(cx.listener(|this, event: &gpui::PinchEvent, _, cx| {
                 this.zoom_at(this.view.scale * (1. + event.delta), event.position, cx);
@@ -956,60 +839,198 @@ impl Render for ImageLightbox {
             .when(self.diagram.is_some() && self.image.is_some(), |d| {
                 d.child(self.diagram_controls(cx))
             })
+            .child(self.image_close_button(cx))
+    }
+}
+
+impl ImageLightbox {
+    fn image_scroll(&mut self, event: &gpui::ScrollWheelEvent, cx: &mut Context<Self>) {
+        let this = self;
+
+        let delta = event.delta.pixel_delta(px(16.));
+        if event.modifiers.control || event.modifiers.platform {
+            // GPUI's wheel deltas have the opposite sign to DOM wheel deltas.
+            this.zoom_at(
+                this.view.scale * (delta.y.as_f32() * 0.01).exp(),
+                event.position,
+                cx,
+            );
+        } else if this.view.scale > MIN_SCALE {
+            this.set_view(
+                View {
+                    x: this.view.x + delta.x.as_f32(),
+                    y: this.view.y + delta.y.as_f32(),
+                    ..this.view
+                },
+                cx,
+            );
+        }
+        cx.stop_propagation();
+    }
+
+    fn image_mouse_up(&mut self, event: &gpui::MouseUpEvent, cx: &mut Context<Self>) {
+        let this = self;
+
+        if this.drawing
+            && let Some(p) = this.image_point(event.position, true)
+            && let Some(stroke) = this.strokes.last_mut()
+            && stroke.points.last() != Some(&p)
+        {
+            stroke.points.push(p);
+        }
+        this.drag = None;
+        this.drawing = false;
+        cx.notify();
+        cx.stop_propagation();
+    }
+
+    fn image_mouse_move(&mut self, event: &gpui::MouseMoveEvent, cx: &mut Context<Self>) {
+        let this = self;
+
+        if this.drawing {
+            if event.pressed_button == Some(MouseButton::Left) {
+                if let Some(p) = this.image_point(event.position, true)
+                    && let Some(stroke) = this.strokes.last_mut()
+                    && stroke.points.last() != Some(&p)
+                {
+                    stroke.points.push(p);
+                }
+                if !this
+                    .image_bounds(this.displayed_view())
+                    .contains(&event.position)
+                {
+                    this.drawing = false;
+                }
+            } else {
+                this.drawing = false;
+            }
+            cx.notify();
+        } else if let Some((origin, pointer)) = this.drag {
+            if event.pressed_button == Some(MouseButton::Left) {
+                this.set_view(
+                    View {
+                        x: origin.x + (event.position.x - pointer.x).as_f32(),
+                        y: origin.y + (event.position.y - pointer.y).as_f32(),
+                        ..origin
+                    },
+                    cx,
+                );
+            } else {
+                this.drag = None;
+                cx.notify();
+            }
+        }
+        cx.stop_propagation();
+    }
+
+    fn image_mouse_down(
+        &mut self,
+        event: &gpui::MouseDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let this = self;
+
+        cx.stop_propagation();
+        if !this
+            .image_bounds(this.displayed_view())
+            .contains(&event.position)
+            || this.image.is_none()
+        {
+            this.close(window, cx);
+        } else if this.text_tool && this.original.is_some() && !this.saving {
+            this.view = this.displayed_view();
+            this.transition = None;
+            if let Some(position) = this.image_point(event.position, false) {
+                let text_size = 20. / this.image_size.width.as_f32().max(1.);
+                let input = cx.new(|cx| {
+                    crate::input::Input::field("Annotation text", "Type text", white(0.6), cx)
+                });
+                let change =
+                    cx.subscribe(&input, |_, _, _: &crate::input::Changed, cx| cx.notify());
+                window.focus(&input.focus_handle(cx), cx);
+                this.texts.push(EditableText {
+                    position,
+                    size: text_size,
+                    color: this.color,
+                    input,
+                    _change: change,
+                });
+                cx.notify();
+            }
+        } else if this.brush && this.original.is_some() && !this.saving {
+            this.view = this.displayed_view();
+            this.transition = None;
+            if let Some(p) = this.image_point(event.position, false) {
+                this.strokes.push(annotation::Stroke {
+                    color: this.color,
+                    width: 4. / this.image_size.width.as_f32().max(1.),
+                    points: vec![p],
+                });
+                this.drawing = true;
+                cx.notify();
+            }
+        } else if event.click_count == 2 {
+            this.drag = None;
+            if this.view.scale > MIN_SCALE {
+                this.set_view(View::IDENTITY, cx);
+            } else {
+                this.zoom_at(DOUBLE_CLICK_SCALE, event.position, cx);
+            }
+        } else if this.view.scale > MIN_SCALE {
+            this.transition = None;
+            this.drag = Some((this.view, event.position));
+            cx.notify();
+        }
+    }
+
+    fn image_close_button(&self, cx: &Context<Self>) -> gpui::Stateful<gpui::Div> {
+        div()
+            .id("close-image-preview")
+            .group("image-preview-close")
+            .debug_selector(|| "close-image-preview".into())
+            .role(Role::Button)
+            .map(vorkspace_ui::theme::tab_reachable)
+            .aria_label("Close image preview")
+            .track_focus(&self.focus)
+            .absolute()
+            .top(px(16.))
+            .right(px(16.))
+            .size(px(36.))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded_full()
+            .border_1()
+            .border_color(white(0.15))
+            .bg(black(0.45))
+            .text_color(white(0.8))
+            .shadow_lg()
+            .cursor(CursorStyle::Arrow)
+            .hover(|s| s.bg(black(0.65)).text_color(white(1.)))
+            .focus_visible(|s| s.border_2().border_color(white(0.8)))
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_click(cx.listener(|this, _, window, cx| this.close(window, cx)))
             .child(
-                div()
-                    .id("close-image-preview")
-                    .group("image-preview-close")
-                    .debug_selector(|| "close-image-preview".into())
-                    .role(Role::Button)
-                    .map(vorkspace_ui::theme::tab_reachable)
-                    .aria_label("Close image preview")
-                    .track_focus(&self.focus)
-                    .absolute()
-                    .top(px(16.))
-                    .right(px(16.))
-                    .size(px(36.))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .rounded_full()
-                    .border_1()
-                    .border_color(white(0.15))
-                    .bg(black(0.45))
-                    .text_color(white(0.8))
-                    .shadow_lg()
-                    .cursor(CursorStyle::Arrow)
-                    .hover(|s| s.bg(black(0.65)).text_color(white(1.)))
-                    .focus_visible(|s| s.border_2().border_color(white(0.8)))
-                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .on_click(cx.listener(|this, _, window, cx| this.close(window, cx)))
-                    .child(
-                        canvas(
-                            |_, _, _| {},
-                            |bounds, _, window, _| {
-                                window.paint_quad(
-                                    gpui::fill(bounds, gpui::transparent_black())
-                                        .corner_radii(
-                                            bounds.size.width.min(bounds.size.height) / 2.,
-                                        )
-                                        .border_color(
-                                            gpui_apple::metal_renderer::backdrop_blur_marker(
-                                                12. * window.scale_factor(),
-                                            ),
-                                        ),
-                                );
-                            },
-                        )
-                        .absolute()
-                        .size_full(),
-                    )
-                    .child(
-                        icon("close", 16.)
-                            .text_color(gpui::rgb(0xff453a))
-                            .group_hover("image-preview-close", |s| {
-                                s.text_color(gpui::rgb(0xff6961))
-                            }),
-                    ),
+                canvas(
+                    |_, _, _| {},
+                    |bounds, _, window, _| {
+                        window.paint_quad(
+                            gpui::fill(bounds, gpui::transparent_black())
+                                .corner_radii(bounds.size.width.min(bounds.size.height) / 2.)
+                                .border_color(gpui_apple::metal_renderer::backdrop_blur_marker(
+                                    12. * window.scale_factor(),
+                                )),
+                        );
+                    },
+                )
+                .absolute()
+                .size_full(),
+            )
+            .child(
+                icon("close", 16.)
+                    .text_color(gpui::rgb(0xff453a))
+                    .group_hover("image-preview-close", |s| s.text_color(gpui::rgb(0xff6961))),
             )
     }
 }

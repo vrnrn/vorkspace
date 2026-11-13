@@ -10,9 +10,6 @@ impl Modes {
     pub const BRACKETED_PASTE: Self = Self(2);
     pub const ALTERNATE_SCROLL: Self = Self(4);
     pub const ALT_SCREEN: Self = Self(8);
-    pub const fn empty() -> Self {
-        Self(0)
-    }
     pub const fn contains(self, other: Self) -> bool {
         self.0 & other.0 == other.0
     }
@@ -184,7 +181,6 @@ unsafe extern "C" {
     ) -> i32;
     fn vorkspace_vt_select_all(vt: *mut c_void) -> i32;
     fn vorkspace_vt_clear_selection(vt: *mut c_void);
-    fn vorkspace_vt_has_selection(vt: *mut c_void) -> i32;
     fn vorkspace_vt_selection_text(
         vt: *mut c_void,
         buf: *mut u8,
@@ -348,9 +344,6 @@ impl Terminal {
     }
     pub fn clear_selection(&mut self) {
         unsafe { vorkspace_vt_clear_selection(self.raw.as_ptr()) }
-    }
-    pub fn has_selection(&mut self) -> bool {
-        unsafe { vorkspace_vt_has_selection(self.raw.as_ptr()) != 0 }
     }
     pub fn select(
         &mut self,

@@ -55,7 +55,7 @@ impl Shell {
         }
     }
     pub(super) fn pane_available_width(&self) -> f32 {
-        let sidebar = if self.workspace.sidebar_visible && self.settings.is_none() {
+        let sidebar = if self.workspace.sidebar_visible && self.pages.settings.is_none() {
             self.workspace.right_panel_width
         } else {
             0.
@@ -67,14 +67,14 @@ impl Shell {
             .filter(|dock| {
                 dock.open
                     && !dock.side.vertical()
-                    && self.settings.is_none()
+                    && self.pages.settings.is_none()
                     && self.workspace.active_tab().is_some()
             })
             .map_or(0., |dock| dock.size);
         let expected =
-            (self.viewport_width - self.classic_rail_width() - self.right_drawn - sidebar - dock)
-                .max(0.);
-        self.pane_viewport
+            (self.window.viewport_width - self.classic_rail_width() - sidebar - dock).max(0.);
+        self.panes
+            .viewport
             .get()
             .map_or(expected, |bounds| bounds.size.width.as_f32().min(expected))
     }
@@ -293,7 +293,7 @@ impl Shell {
         cx: &mut Context<Self>,
     ) {
         let (target, navigation_revision, dir) = request;
-        let project = self.session_summaries[&id].cwd.clone();
+        let project = self.session_metadata(id, cx).summary.cwd.clone();
         self.order.retain(|s| *s != id);
         self.order.insert(0, id);
         if self.navigation_revision != navigation_revision || self.workspace.active != target {
@@ -351,7 +351,7 @@ impl Shell {
         cx: &mut Context<Self>,
     ) {
         if let Some(id) = self.workspace.neighbor(dir) {
-            self.review_focused = false;
+            self.review.focused = false;
             self.open(id, window, cx);
         }
     }
@@ -369,10 +369,10 @@ impl Shell {
         };
         let after = self.workspace.layout(tab).leaves();
         if (after.len() < 2 && before.len() < 2) || before.is_empty() {
-            self.pane_motion = None;
+            self.panes.motion = None;
             return;
         }
-        let (width, height) = self.pane_bounds.get().map_or((800., 600.), |b| {
+        let (width, height) = self.panes.bounds.get().map_or((800., 600.), |b| {
             (b.size.width.as_f32(), b.size.height.as_f32())
         });
         let mut from = HashMap::new();
@@ -412,7 +412,7 @@ impl Shell {
             })
             .collect();
         if travel < 1. {
-            self.pane_motion = None;
+            self.panes.motion = None;
             return;
         }
         let header = match (before.len() > 1, after.len() > 1) {
@@ -420,7 +420,7 @@ impl Shell {
             (true, false) => Some(false),
             _ => None,
         };
-        self.pane_motion = Some(PaneMotion {
+        self.panes.motion = Some(PaneMotion {
             tab,
             from,
             entering,
@@ -432,13 +432,14 @@ impl Shell {
     /// The pane under a point and the edge it would take, in the active tab.
     pub(super) fn pane_hit(&self, position: Point<Pixels>) -> Option<(i64, Edge)> {
         if self
-            .pane_viewport
+            .panes
+            .viewport
             .get()
             .is_none_or(|bounds| !bounds.contains(&position))
         {
             return None;
         }
-        let bounds = self.pane_bounds.get()?;
+        let bounds = self.panes.bounds.get()?;
         if !bounds.contains(&position) {
             return None;
         }
@@ -469,13 +470,13 @@ impl Shell {
     }
     /// titleTabDropFromPoint: the strip slot nearest the pointer.
     pub(super) fn tab_insert_at(&self, position: Point<Pixels>, cx: &App) -> Option<usize> {
-        let strip = self.tab_scroll.bounds();
+        let strip = self.tabs.scroll.bounds();
         if !strip.contains(&position) {
             return None;
         }
         let count = self.visible_tabs(cx).len();
         let bounds: Vec<_> = (0..count)
-            .filter_map(|ix| self.tab_scroll.bounds_for_item(ix))
+            .filter_map(|ix| self.tabs.scroll.bounds_for_item(ix))
             .collect();
         if bounds.len() != count {
             return Some(count);
@@ -488,7 +489,7 @@ impl Shell {
         )
     }
     pub(super) fn move_pane_drag(&mut self, event: &MouseMoveEvent, cx: &mut Context<Self>) {
-        let Some(drag) = self.pane_drag.as_ref() else {
+        let Some(drag) = self.panes.drag.as_ref() else {
             return;
         };
         if matches!(drag.source, DragSource::Tab(_)) {
@@ -524,9 +525,9 @@ impl Shell {
                     }
                 })
         };
-        let drag = self.pane_drag.as_mut().unwrap();
+        let drag = self.panes.drag.as_mut().unwrap();
         if !drag.active && matches!(source, DragSource::Session(_)) {
-            self.skip_session_click = true;
+            self.sidebar.skip_session_click = true;
         }
         drag.active = true;
         drag.position = event.position;
@@ -538,7 +539,7 @@ impl Shell {
         cx.notify();
     }
     pub(super) fn cancel_pane_drag(&mut self, cx: &mut Context<Self>) {
-        if let Some(drag) = self.pane_drag.take() {
+        if let Some(drag) = self.panes.drag.take() {
             if drag.insert.is_some() {
                 self.tabs_frame.update(cx, |_, cx| cx.notify());
             }
@@ -546,7 +547,7 @@ impl Shell {
         }
     }
     pub(super) fn finish_pane_drag(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(drag) = self.pane_drag.take() else {
+        let Some(drag) = self.panes.drag.take() else {
             return;
         };
         self.tabs_frame.update(cx, |_, cx| cx.notify());
@@ -598,7 +599,7 @@ impl Shell {
                 if let Some(to) = insert {
                     self.workspace.detach(id, self.workspace.tabs.len());
                     self.reorder_title_tab(&TitleTab::Workspace(id), to, cx);
-                    self.pane_motion = None;
+                    self.panes.motion = None;
                 } else if let Some((target, edge)) = over {
                     self.workspace.place(id, target, edge);
                     self.begin_pane_motion(before);
@@ -613,7 +614,7 @@ impl Shell {
                     .unwrap_or(self.workspace.tabs.len());
                 self.workspace.detach(id, session_index);
                 self.reorder_title_tab(&TitleTab::Workspace(id), to, cx);
-                self.pane_motion = None;
+                self.panes.motion = None;
             }
             (DragSource::Tab(tab), Some((target, edge)), _) => {
                 self.workspace.place_tab(tab, target, edge);
@@ -633,7 +634,7 @@ impl Shell {
         }
     }
     pub(super) fn drag_sash(&mut self, event: &MouseMoveEvent, cx: &mut Context<Self>) {
-        let Some(sash) = self.pane_sash.as_ref() else {
+        let Some(sash) = self.panes.sash.as_ref() else {
             return;
         };
         if event.pressed_button != Some(MouseButton::Left) {
@@ -643,7 +644,7 @@ impl Shell {
         let Some(target) = self.sash_target() else {
             return;
         };
-        let Some(bounds) = self.pane_bounds.get() else {
+        let Some(bounds) = self.panes.bounds.get() else {
             return;
         };
         let g = sash.group;
@@ -660,8 +661,8 @@ impl Shell {
         self.drag_resize(target, (at - origin) / span.max(1.), cx);
     }
     pub(super) fn sash_target(&self) -> Option<ResizeTarget> {
-        let sash = self.pane_sash.as_ref()?;
-        let bounds = self.pane_bounds.get()?;
+        let sash = self.panes.sash.as_ref()?;
+        let bounds = self.panes.bounds.get()?;
         let span = if sash.dir == SplitDir::Right {
             sash.group.w * bounds.size.width.as_f32()
         } else {
@@ -681,9 +682,9 @@ impl Shell {
                 let min = self.open_rail_floor().clamp(180., 360.);
                 (self.workspace.project_rail_width.max(min), min, 360., 1.)
             }
-            ResizeTarget::Sidebar | ResizeTarget::RightPanel => {
+            ResizeTarget::Sidebar => {
                 let (min, max) = (crate::right_panel::WIDTH_MIN, crate::right_panel::WIDTH_MAX);
-                let max = max.min((self.viewport_width * 0.5).floor()).max(min);
+                let max = max.min((self.window.viewport_width * 0.5).floor()).max(min);
                 (self.workspace.right_panel_width, min, max, 1.)
             }
             ResizeTarget::Dock(project) => {
@@ -709,9 +710,7 @@ impl Shell {
     pub(super) fn set_resize(&mut self, target: &ResizeTarget, value: f32) {
         match target {
             ResizeTarget::ProjectRail => self.workspace.project_rail_width = value,
-            ResizeTarget::Sidebar | ResizeTarget::RightPanel => {
-                self.workspace.right_panel_width = value
-            }
+            ResizeTarget::Sidebar => self.workspace.right_panel_width = value,
             ResizeTarget::Dock(project) => {
                 if let Some(dock) = self.workspace.docks.get_mut(project) {
                     dock.size = value;
@@ -769,11 +768,10 @@ impl Shell {
     /// Ends every resize in progress; a bounce under way plays out.
     pub(super) fn release_resizes(&mut self, cx: &mut Context<Self>) -> bool {
         let any = [
-            self.pane_sash.take().is_some(),
-            self.resize.take().is_some(),
-            self.project_rail_drag.take().is_some(),
-            self.right_resize.take().is_some(),
-            self.dock_resize.take().is_some(),
+            self.panes.sash.take().is_some(),
+            self.sidebar.resize.take().is_some(),
+            self.rail.drag.take().is_some(),
+            self.dock.resize.take().is_some(),
         ]
         .contains(&true);
         self.resize_pinned = false;

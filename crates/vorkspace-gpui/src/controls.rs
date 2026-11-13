@@ -20,6 +20,7 @@ pub(crate) fn button(
         .id(id)
         .role(Role::Button)
         .aria_label(label.into())
+        .aria_disabled(!enabled)
         .when(enabled, |d| {
             d.focusable()
                 .tab_stop(true)
@@ -136,7 +137,7 @@ impl Render for Tooltip {
 #[cfg(test)]
 pub(crate) mod tests;
 
-/// SecondaryButton.tsx.
+/// A secondary (outlined) button.
 pub(crate) fn secondary_button(
     id: impl Into<ElementId>,
     label: impl Into<SharedString>,

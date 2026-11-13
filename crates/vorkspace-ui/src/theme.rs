@@ -4,7 +4,6 @@ use gpui::{CursorStyle, Div, Hsla, Role, Stateful, Svg, div, img, prelude::*, px
 // rather than opaque replacement greys.
 pub const CHAT: u32 = 0x141414;
 pub const TEXT: u32 = 0xebebeb;
-pub const MUTED: u32 = 0x969696;
 pub const ACCENT: u32 = 0x4da3f5;
 pub const COLUMN: f32 = 832.;
 pub const TITLE_BAR_HEIGHT: f32 = 40.;
@@ -12,8 +11,8 @@ pub const TITLE_BAR_HEIGHT: f32 = 40.;
 // renderer's safe inset and the native constraints on the same geometry.
 pub const TRAFFIC_LIGHT_SIZE: f32 = 14.;
 pub const TRAFFIC_LIGHT_MARGIN: f32 = 12.;
-pub const TRAFFIC_LIGHT_SPACING: f32 = 6.;
-pub const TRAFFIC_LIGHT_SAFE_INSET: f32 =
+pub(crate) const TRAFFIC_LIGHT_SPACING: f32 = 6.;
+pub(crate) const TRAFFIC_LIGHT_SAFE_INSET: f32 =
     2. * TRAFFIC_LIGHT_MARGIN + 3. * TRAFFIC_LIGHT_SIZE + 2. * TRAFFIC_LIGHT_SPACING;
 pub const NO_TRAFFIC_LIGHTS: f32 = 10.;
 
@@ -65,10 +64,10 @@ struct Tokens {
     diff_strong: bool,
 }
 thread_local! { static TOKENS: std::cell::RefCell<Option<Tokens>> = const { std::cell::RefCell::new(None) }; }
-pub fn configure(p: &crate::preferences::Preferences, system_light: bool, classic: bool) -> bool {
+pub fn configure(p: &crate::preferences::Preferences, system_light: bool) -> bool {
     let light = p.theme == "light" || (p.theme == "system" && system_light);
     let palette = crate::palettes::palette(&p.workspace_theme, light);
-    let glass = window_glass(p, system_light, classic);
+    let glass = window_glass(p, system_light);
     // Both layouts derive their surface roles from the same saved settings.
     let shell = gpui::hsla(
         p.theme_hue.min(360) as f32 / 360.,
@@ -109,12 +108,8 @@ pub fn configure(p: &crate::preferences::Preferences, system_light: bool, classi
     })
 }
 
-pub fn window_glass(
-    p: &crate::preferences::Preferences,
-    system_light: bool,
-    classic: bool,
-) -> bool {
-    (classic || p.inset_glass) && p.theme != "light" && !(p.theme == "system" && system_light)
+pub fn window_glass(p: &crate::preferences::Preferences, system_light: bool) -> bool {
+    p.theme != "light" && !(p.theme == "system" && system_light)
 }
 pub fn accent_color() -> Hsla {
     TOKENS.with(|t| {
@@ -208,7 +203,7 @@ pub fn primary_action(enabled: bool) -> Option<(Hsla, Hsla)> {
 
 /// Black or white, whichever reads better on `fill` (WCAG relative
 /// luminance against the 0.179 crossover).
-pub fn ink_on(fill: Hsla) -> Hsla {
+pub(crate) fn ink_on(fill: Hsla) -> Hsla {
     let rgb = fill.to_rgb();
     let linear = |value: f32| {
         if value <= 0.04045 {
@@ -315,7 +310,7 @@ pub fn provider_icon(provider: &str, side: f32) -> Div {
         "omp" => ("omp.svg", false, 1.),
         _ => ("codex.svg", false, 1.),
     };
-    // Like React's currentColor / CSS masks, GPUI's SVG mask follows the theme.
+    // Like a CSS currentColor mask, GPUI's SVG mask follows the theme.
     // Image rendering preserves brand colors but has no inherited currentColor.
     let mark = if monochrome {
         svg()
@@ -338,7 +333,7 @@ pub fn provider_icon(provider: &str, side: f32) -> Div {
 pub fn icon_button(id: &'static str, label: &'static str, path: &'static str) -> Stateful<Div> {
     icon_button_hover(id, label, path, 0.1)
 }
-pub fn icon_button_hover(
+pub(crate) fn icon_button_hover(
     id: &'static str,
     label: &'static str,
     path: &'static str,
@@ -509,26 +504,11 @@ pub fn diff_foreground(add: bool) -> Hsla {
         .unwrap_or_else(|| diff_palette("default", false)[index]);
     rgb(color).into()
 }
-pub fn diff_background(add: bool, gutter: bool) -> Hsla {
-    let index = if add { 0 } else { 1 };
-    let (color, strong) = TOKENS
-        .with(|t| t.borrow().as_ref().map(|t| (t.diff[index], t.diff_strong)))
-        .unwrap_or((diff_palette("default", false)[index], false));
-    let mut color: Hsla = rgb(color).into();
-    color.a = match (gutter, strong) {
-        (true, true) => 0.45,
-        (true, false) => 0.25,
-        (false, true) => 0.28,
-        _ => 0.15,
-    };
-    color
-}
 
 #[cfg(any(test, feature = "test-support"))]
 pub fn test_appearance(
     preferences: &crate::preferences::Preferences,
     system_light: bool,
-    classic: bool,
 ) -> impl Drop {
     struct Restore(Option<Tokens>);
     impl Drop for Restore {
@@ -537,7 +517,7 @@ pub fn test_appearance(
         }
     }
     let restore = Restore(TOKENS.with(|tokens| *tokens.borrow()));
-    configure(preferences, system_light, classic);
+    configure(preferences, system_light);
     restore
 }
 

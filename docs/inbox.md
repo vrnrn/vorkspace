@@ -30,8 +30,10 @@ order and applies to both expanded and collapsed sidebars. Disabled connectors
 retain their saved position. Search stays first; the Activity section and the
 session-card density switch are retired because work is shown inline.
 
-One retained owner fetches enabled providers and emits notification and automation
-events once. Provider pages retain independent selection, filters, search, list
+Each window's retained connector owner fetches enabled providers and observes
+their updates. The application session directory supplies one related-conversation
+index across windows, independent of connector polling. Provider pages retain
+independent selection, filters, search, list
 and detail scroll, detail requests and reply drafts while hidden or closed during
 this run. Disabling a connector closes its page while retaining that state.
 Provider filters are persisted alongside the existing native view state; legacy
@@ -60,9 +62,9 @@ exact revision. Later remote changes remain unread and eligible for a cue, even
 if they arrive before the own revision is polled. Missing receipt metadata is
 treated conservatively and does not suppress an unknown revision.
 
-Old desktop connector switches, Jira filters, and default Bot choices are read
-from existing preferences. Subsequent changes are saved in the native settings
-database. Opening the app does not rewrite or delete existing credential files.
+Connector switches, Jira filters, and default Bot choices are saved in the
+settings sidecar. Opening the app does not rewrite or delete existing credential
+files.
 
 All change reviews use **Unified** or **Side by side**. The choice is shared by
 connector, working-tree, commit, and session reviews and is saved for the next launch.

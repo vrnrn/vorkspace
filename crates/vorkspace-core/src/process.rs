@@ -33,15 +33,15 @@ unsafe extern "C" {
 }
 
 /// New native provider processes use a separate group for cancellation.
-pub fn isolate(command: &mut Command) {
+pub(crate) fn isolate(command: &mut Command) {
     configure_child(command);
     command.env("VORKSPACE_HARNESS_PARENT", std::process::id().to_string());
     use std::os::unix::process::CommandExt;
     command.process_group(0);
 }
 
-/// Called only by the provider worker. Always reap the immediate child.
-pub fn terminate(child: &mut std::process::Child) {
+/// Terminate an isolated process group and reap the immediate child.
+pub(crate) fn terminate(child: &mut std::process::Child) {
     unsafe {
         libc::kill(-(child.id() as i32), libc::SIGKILL);
     }
@@ -49,13 +49,38 @@ pub fn terminate(child: &mut std::process::Child) {
     let _ = child.wait();
 }
 
-use std::cell::Cell;
+use std::cell::RefCell;
 use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{atomic::AtomicBool, Arc, Mutex, OnceLock};
+
+/// Identifies the admitted turn even when its warm provider PID is reused.
+#[derive(Clone, Debug)]
+pub struct TurnToken(Arc<AtomicBool>);
+
+impl TurnToken {
+    pub fn matches(&self, cancel: &Arc<AtomicBool>) -> bool {
+        Arc::ptr_eq(&self.0, cancel)
+    }
+}
+
+impl PartialEq for TurnToken {
+    fn eq(&self, other: &Self) -> bool {
+        self.matches(&other.0)
+    }
+}
+impl Eq for TurnToken {}
+
+impl From<&Arc<AtomicBool>> for TurnToken {
+    fn from(cancel: &Arc<AtomicBool>) -> Self {
+        Self(cancel.clone())
+    }
+}
+
 /// A provider child that belongs to a session, for the running-work list.
 #[derive(Clone, Debug)]
-pub struct Agent {
+pub(crate) struct Agent {
     pub session: i64,
+    pub turn: Option<TurnToken>,
     pub pid: u32,
     /// Birth stamp at spawn; a reused PID no longer matches it.
     pub identity: Option<String>,
@@ -64,22 +89,49 @@ fn active() -> &'static Mutex<HashMap<u32, Option<Agent>>> {
     static ACTIVE: OnceLock<Mutex<HashMap<u32, Option<Agent>>>> = OnceLock::new();
     ACTIVE.get_or_init(|| Mutex::new(HashMap::new()))
 }
-thread_local! {
-    static OWNER: Cell<Option<i64>> = const { Cell::new(None) };
+struct Attribution {
+    session: i64,
+    turn: Option<TurnToken>,
 }
+
+thread_local! {
+    static OWNER: RefCell<Option<Attribution>> = const { RefCell::new(None) };
+}
+
 /// Children spawned by `run` on this thread are attributed to `session`.
 pub fn owned_by<T>(session: i64, run: impl FnOnce() -> T) -> T {
-    struct Restore(Option<i64>);
+    with_owner(
+        Attribution {
+            session,
+            turn: None,
+        },
+        run,
+    )
+}
+
+/// Attribute work to the exact cancellation capability created at admission.
+pub fn owned_turn<T>(session: i64, cancel: &Arc<AtomicBool>, run: impl FnOnce() -> T) -> T {
+    with_owner(
+        Attribution {
+            session,
+            turn: Some(cancel.into()),
+        },
+        run,
+    )
+}
+
+fn with_owner<T>(owner: Attribution, run: impl FnOnce() -> T) -> T {
+    struct Restore(Option<Attribution>);
     impl Drop for Restore {
         fn drop(&mut self) {
-            OWNER.set(self.0);
+            let _ = OWNER.replace(self.0.take());
         }
     }
-    let _restore = Restore(OWNER.replace(Some(session)));
+    let _restore = Restore(OWNER.replace(Some(owner)));
     run()
 }
 /// Live provider children that belong to a session.
-pub fn agents() -> Vec<Agent> {
+pub(crate) fn agents() -> Vec<Agent> {
     active()
         .lock()
         .unwrap_or_else(|e| e.into_inner())
@@ -89,29 +141,30 @@ pub fn agents() -> Vec<Agent> {
         .collect()
 }
 pub(crate) fn owner() -> Option<i64> {
-    OWNER.get()
+    OWNER.with_borrow(|owner| owner.as_ref().map(|owner| owner.session))
 }
+
+fn attributed_agent(pid: u32) -> Option<Agent> {
+    OWNER.with_borrow(|owner| {
+        owner.as_ref().map(|owner| Agent {
+            session: owner.session,
+            turn: owner.turn.clone(),
+            pid,
+            identity: identity(pid),
+        })
+    })
+}
+
 pub(crate) fn mark_idle(pid: u32, idle: bool) {
+    let agent = if idle { None } else { attributed_agent(pid) };
     let mut processes = active().lock().unwrap_or_else(|e| e.into_inner());
     if let Some(slot) = processes.get_mut(&pid) {
-        *slot = if idle {
-            None
-        } else {
-            OWNER.get().map(|session| Agent {
-                session,
-                pid,
-                identity: identity(pid),
-            })
-        };
+        *slot = agent;
     }
 }
-pub struct Registration(u32);
-pub fn register(pid: u32) -> Registration {
-    let agent = OWNER.get().map(|session| Agent {
-        session,
-        pid,
-        identity: identity(pid),
-    });
+pub(crate) struct Registration(u32);
+pub(crate) fn register(pid: u32) -> Registration {
+    let agent = attributed_agent(pid);
     active()
         .lock()
         .unwrap_or_else(|e| e.into_inner())

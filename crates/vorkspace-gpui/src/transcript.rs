@@ -31,7 +31,6 @@ mod outline;
 mod peers;
 pub(crate) use peers::peer_looks;
 pub(crate) mod phases;
-pub(crate) mod remote_plans;
 pub(crate) mod selection;
 pub(crate) mod tasks;
 mod tools;
@@ -119,7 +118,7 @@ fn work_title(model: Option<&str>, elapsed_ms: Option<u64>, live: bool) -> Strin
 
 struct Message {
     start: usize,
-    display_start: usize,
+    display_start: Option<usize>,
     role: String,
     parser: MarkdownParser,
     under_line: bool,
@@ -132,7 +131,6 @@ struct Message {
 }
 #[derive(Clone)]
 enum Body {
-    RemotePlan(remote_plans::Plan),
     OlderHistory,
     SavedDraft,
     Markdown(MarkdownRow),
@@ -224,7 +222,7 @@ struct Follow {
     /// Growth keeps easing this long after a reply ends.
     until: Option<Instant>,
 }
-/// Units are px per 60fps frame, as in useBottomChatMotion.ts.
+/// Units are px per 60fps frame.
 const SPRING_FRAME: f32 = 1000. / 60.;
 /// Bot replies can appear together; keep their glide below 1080px/second.
 const CHAT_FOLLOW_MAX_SPEED: f32 = 18.;
@@ -246,7 +244,7 @@ impl FollowMeasure {
     fn resized_from(&self, previous: &Self) -> bool {
         self.viewport.width != previous.viewport.width || self.window_size != previous.window_size
     }
-    /// Compare the suffix below a surviving row, like React's connected anchor.
+    /// Compare the suffix below a surviving row, which anchors the glide.
     /// The composer's height moves that anchor too. Window resizing and changes
     /// to wrapping start a fresh baseline; internal vertical layout joins the glide.
     fn shift_from(&self, previous: &Self) -> f32 {
@@ -386,8 +384,8 @@ pub(crate) fn is_emoji_only(text: &str) -> bool {
     count > 0
 }
 
-/// A single clipping boundary across virtualized siblings, matching React's
-/// grid body. Fully revealed steps keep their height; only the boundary row clips.
+/// A single clipping boundary across virtualized siblings. Fully revealed
+/// steps keep their height; only the boundary row clips.
 struct PhaseLayout {
     width: Pixels,
     height: f32,
@@ -443,7 +441,6 @@ pub(crate) struct TranscriptView {
     pending: Vec<PendingMessage>,
     saved_draft: Option<vorkspace_core::follow_up::Message>,
     draft_edit: Option<drafts::DraftEdit>,
-    draft_editable: bool,
     draft_transfer: Option<bool>,
     /// Pending messages just taken, including any entrance still in flight.
     taken: Vec<TakenMessage>,
@@ -500,7 +497,7 @@ pub(crate) struct TranscriptView {
     windowed_phases: HashSet<usize>,
     phase_max_height: Pixels,
     work_folds: HashMap<usize, bool>,
-    reveals: HashMap<usize, PacedText>,
+    reveals: streaming_frames::Reveals,
     live_start: usize,
     motions: HashMap<(usize, usize), Motion>,
     reflow: vorkspace_ui::reflow_motion::ReflowMotion,
@@ -752,6 +749,12 @@ impl TranscriptView {
     fn footer_ix(&self) -> usize {
         self.rows.len()
     }
+    fn message_display_start(&self, index: usize) -> usize {
+        self.messages[index..]
+            .iter()
+            .find_map(|message| message.display_start)
+            .unwrap_or(self.rows.len())
+    }
     /// The first row of the prompt block that opens `turn`.
     fn prompt_start(&self, turn: usize) -> usize {
         prompt_start(&self.source, turn)
@@ -800,7 +803,6 @@ impl TranscriptView {
             pending: Vec::new(),
             saved_draft: None,
             draft_edit: None,
-            draft_editable: true,
             draft_transfer: None,
             taken: Vec::new(),
             pending_entrances: HashMap::new(),
@@ -848,7 +850,7 @@ impl TranscriptView {
             windowed_phases: HashSet::new(),
             phase_max_height: px(280.),
             work_folds: HashMap::new(),
-            reveals: HashMap::new(),
+            reveals: Default::default(),
             live_start: 0,
             motions: HashMap::new(),
             reflow: Default::default(),
@@ -907,9 +909,7 @@ impl TranscriptView {
             self.anchor_turn = None;
         }
         if !self.smooth_reveal {
-            for reveal in self.reveals.values_mut() {
-                reveal.settle(Instant::now());
-            }
+            self.reveals.settle_through(self.source.len());
         }
         self.rebuild(0, cx);
         cx.notify();
@@ -919,12 +919,12 @@ impl TranscriptView {
             return;
         }
         self.selection.hide();
-        let now = Instant::now();
         // Settled tabs retain their parsed rows, measured heights and scroll
         // anchor. Only undisplayed text or outgoing animation rows need a
         // source rebuild when visibility changes.
         let rebuild_from = self
             .reveals
+            .active
             .iter()
             .filter(|(_, reveal)| reveal.behind())
             .map(|(&at, _)| at)
@@ -948,9 +948,7 @@ impl TranscriptView {
         self.prompt_rise_pending = false;
         self.entrances.clear();
         self.follow = Follow::default();
-        for reveal in self.reveals.values_mut() {
-            reveal.settle(now);
-        }
+        self.reveals.settle_through(self.source.len());
         self.visible = false;
         for scroll in self.phase_scrolls.values_mut() {
             scroll.enable(false);
@@ -1003,7 +1001,7 @@ impl TranscriptView {
         crate::notifications::delivery::clip_body(&text)
     }
 
-    /// Tauri's appendUser: paint the prompt and working receipt in the send
+    /// Paint the prompt and working receipt in the send
     /// handler. The worker replaces these same rows after saving them. Build
     /// the attachment manifest without touching the filesystem on the UI thread.
     pub(crate) fn submit_prompt(

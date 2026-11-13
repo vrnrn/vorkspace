@@ -60,12 +60,11 @@ export function syntaxDiagnostics(state) {
   const diagnostics = [];
   tree.iterate({
     enter: (node) => {
+      if (diagnostics.length >= MAX_DIAGNOSTICS) return false;
       if (!node.type.isError) return true;
       if (incomplete && node.from >= tree.length) return false;
       if (isGrammarGap(state, node.node.parent, node.from)) return false;
-      if (diagnostics.length < MAX_DIAGNOSTICS) {
-        diagnostics.push(errorDiagnostic(state, node.from, node.to));
-      }
+      diagnostics.push(errorDiagnostic(state, node.from, node.to));
       // Error nodes nest, and stacking the children on top of the parent just
       // paints the same typo several times over.
       return false;
@@ -84,17 +83,19 @@ const TAILWIND_AT =
   /^@(?:source|plugin|theme|utility|custom-variant|reference|config)\b/;
 /** `fn<typeof import("mod")>()` — `import(` is parsed as a dynamic import. */
 const TYPEOF_IMPORT = /<typeof\s+import\s*\(/;
+const GRAMMAR_GAPS = new Map([
+  ["CatchClause", TYPED_CATCH],
+  ["JSXEscape", JSX_BLOCK_COMMENT],
+  ["AtRule", TAILWIND_AT],
+]);
 function isGrammarGap(state, parent, from) {
   const line = state.doc.lineAt(from).text;
   // Tuple predicates (`x is [K, V]`) blow the statement apart, so the `is`
   // token is no longer inside TypeAnnotation. The whole line is the predicate.
   if (TYPE_PREDICATE.test(line) || TYPEOF_IMPORT.test(line)) return true;
   for (; parent; parent = parent.parent) {
-    const text = state.doc.sliceString(parent.from, parent.to);
-    if (parent.name === "CatchClause" && TYPED_CATCH.test(text)) return true;
-    if (parent.name === "JSXEscape" && JSX_BLOCK_COMMENT.test(text))
-      return true;
-    if (parent.name === "AtRule" && TAILWIND_AT.test(text)) return true;
+    const pattern = GRAMMAR_GAPS.get(parent.name);
+    if (pattern?.test(state.doc.sliceString(parent.from, parent.to))) return true;
   }
   return false;
 }

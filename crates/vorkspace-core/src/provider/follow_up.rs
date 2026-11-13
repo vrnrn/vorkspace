@@ -1,4 +1,4 @@
-//! The same mid-turn wire messages used by the React provider adapters.
+//! Mid-turn wire messages sent to a running provider.
 use super::*;
 use crate::follow_up::Message;
 

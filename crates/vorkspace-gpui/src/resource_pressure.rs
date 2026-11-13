@@ -1,108 +1,101 @@
+mod sample;
+use sample::MachinePressure;
 use vorkspace_ui::radius;
 // A sidebar warning while the machine is under pressure, opening the running
 // work vorkspace owns so it can be stopped.
 use crate::{panel_kit::spinner, popover::AnchorSlot};
 use gpui::{
-    AnyElement, Context, EventEmitter, FocusHandle, FontWeight, Role, ScrollHandle, SharedString,
-    Task, Window, div, prelude::*, px,
+    AnyElement, Context, Entity, EventEmitter, FocusHandle, FontWeight, Role, ScrollHandle,
+    SharedString, Subscription, Task, Window, div, prelude::*, px,
 };
 use std::{
     collections::{HashMap, HashSet},
-    time::{Duration, Instant},
+    time::Duration,
 };
-use vorkspace_core::resources::{self, OwnedProcess, Pressure, Sample};
+use vorkspace_core::{
+    process::TurnToken,
+    resources::{self, OwnedProcess},
+};
 use vorkspace_ui::theme::*;
+#[cfg(test)]
+use {std::time::Instant, vorkspace_core::resources::Sample};
 
-const TICK: Duration = Duration::from_millis(500);
 const POLL: Duration = Duration::from_secs(3);
 
 /// What the dialog shows for a session that owns running work.
 pub(crate) struct SessionInfo {
     pub(crate) title: SharedString,
-    pub(crate) provider: String,
+    pub(crate) provider: Option<String>,
 }
 
-/// Native turns run one provider process each; stopping it is stopping the turn.
-pub(crate) struct StopSession(pub(crate) i64);
+/// A request names the exact turn observed when the control was rendered.
+#[derive(Clone)]
+pub(crate) struct StopSession {
+    pub(crate) session: i64,
+    pub(crate) turn: TurnToken,
+    sequence: u64,
+}
+
+enum StopTarget {
+    Session { id: i64, turn: TurnToken },
+    Tool(String),
+}
+
+impl StopTarget {
+    fn still_running(&self, rows: &[OwnedProcess]) -> bool {
+        rows.iter().any(|row| match self {
+            Self::Session { id, turn } => row.session == *id && row.turn.as_ref() == Some(turn),
+            Self::Tool(stamp) => row.identity == *stamp,
+        })
+    }
+}
+
+struct PendingStop {
+    sequence: u64,
+    target: StopTarget,
+}
 
 pub(crate) struct ResourceMonitor {
-    pressure: Pressure,
+    pressure: Entity<MachinePressure>,
+    _pressure_observation: Subscription,
     open: bool,
-    classic: bool,
+    pressure_seen: bool,
     compact: bool,
     processes: Vec<OwnedProcess>,
     loading: bool,
     error: Option<String>,
     stop_error: Option<String>,
-    stopping: Option<String>,
+    stop_sequence: u64,
+    stopping: Option<PendingStop>,
     expanded: HashSet<i64>,
     trigger: FocusHandle,
     dialog: FocusHandle,
     previous_focus: Option<FocusHandle>,
     bounds: AnchorSlot,
     scroll: ScrollHandle,
-    _sampler: Option<Task<()>>,
     refresh: Option<Task<()>>,
 }
 impl EventEmitter<StopSession> for ResourceMonitor {}
 impl ResourceMonitor {
     pub(crate) fn new(cx: &mut Context<Self>) -> Self {
-        // Tests drive `observe` directly rather than the machine's load.
-        let sampler = (!cfg!(test)).then(|| {
-            cx.spawn(async move |this, cx| {
-                let mut last_tick = Instant::now();
-                let mut last_poll = last_tick;
-                let mut stalls = Duration::ZERO;
-                loop {
-                    cx.background_executor().timer(TICK).await;
-                    let now = Instant::now();
-                    let late = now
-                        .saturating_duration_since(last_tick)
-                        .saturating_sub(TICK);
-                    last_tick = now;
-                    // A hidden app's timers are throttled; that is not a stall.
-                    if cx.update(|cx| cx.active_window().is_none()) {
-                        stalls = Duration::ZERO;
-                        last_poll = now;
-                        if this.update(cx, |this, _| this.pressure.pause()).is_err() {
-                            break;
-                        }
-                        continue;
-                    }
-                    if late > Duration::from_millis(100) {
-                        stalls += late;
-                    }
-                    let elapsed = now.duration_since(last_poll);
-                    if elapsed < POLL {
-                        continue;
-                    }
-                    let stall_share = (stalls.as_secs_f64() / elapsed.as_secs_f64()).min(1.);
-                    stalls = Duration::ZERO;
-                    last_poll = now;
-                    let usage = cx
-                        .background_executor()
-                        .spawn(async { resources::usage() })
-                        .await;
-                    last_tick = Instant::now();
-                    let sample = Sample { usage, stall_share };
-                    if this
-                        .update(cx, |this, cx| this.observe(sample, now, cx))
-                        .is_err()
-                    {
-                        break;
-                    }
-                }
-            })
+        let pressure = MachinePressure::get(cx);
+        let pressure_observation = cx.observe(&pressure, |this, pressure, cx| {
+            if this.open && pressure.read(cx).pressure.active {
+                this.pressure_seen = true;
+            }
+            cx.notify();
         });
         Self {
-            pressure: Pressure::default(),
+            pressure,
+            _pressure_observation: pressure_observation,
             open: false,
-            classic: false,
+            pressure_seen: false,
             compact: false,
             processes: Vec::new(),
             loading: false,
             error: None,
             stop_error: None,
+            stop_sequence: 0,
             stopping: None,
             expanded: HashSet::new(),
             trigger: cx.focus_handle(),
@@ -110,19 +103,20 @@ impl ResourceMonitor {
             previous_focus: None,
             bounds: AnchorSlot::default(),
             scroll: ScrollHandle::new(),
-            _sampler: sampler,
             refresh: None,
         }
     }
+    #[cfg(test)]
     fn observe(&mut self, sample: Sample, now: Instant, cx: &mut Context<Self>) {
-        let before = (self.pressure.active, self.pressure.reasons.clone());
-        self.pressure.sample(sample, now);
-        if before != (self.pressure.active, self.pressure.reasons.clone()) {
-            cx.notify();
-        }
+        self.pressure
+            .update(cx, |sampler, cx| sampler.observe(sample, now, cx));
     }
     #[cfg(test)]
     pub(crate) fn saturate(&mut self, cx: &mut Context<Self>) {
+        self.saturate_at(Instant::now(), cx);
+    }
+    #[cfg(test)]
+    pub(crate) fn saturate_at(&mut self, start: Instant, cx: &mut Context<Self>) {
         let high = Sample {
             usage: resources::Usage {
                 cpu_percent: Some(97.),
@@ -130,14 +124,12 @@ impl ResourceMonitor {
             },
             stall_share: 0.,
         };
-        let start = Instant::now();
         for s in 0..3 {
             self.observe(high, start + Duration::from_secs(s * 3), cx);
         }
     }
     #[cfg(test)]
-    pub(crate) fn recover(&mut self, cx: &mut Context<Self>) {
-        let start = Instant::now();
+    pub(crate) fn recover_at(&mut self, start: Instant, cx: &mut Context<Self>) {
         for s in 0..6 {
             self.observe(
                 Sample {
@@ -149,12 +141,6 @@ impl ResourceMonitor {
             );
         }
     }
-    pub(crate) fn set_classic(&mut self, classic: bool, cx: &mut Context<Self>) {
-        if self.classic != classic {
-            self.classic = classic;
-            cx.notify();
-        }
-    }
     pub(crate) fn set_compact(&mut self, compact: bool, cx: &mut Context<Self>) {
         if self.compact != compact {
             self.compact = compact;
@@ -163,17 +149,26 @@ impl ResourceMonitor {
     }
     /// The chip shows only under pressure; the dialog stays until closed.
     #[cfg(test)]
-    pub(crate) fn chip_shown(&self) -> bool {
-        self.pressure.active
+    fn chip_shown(&self, cx: &gpui::App) -> bool {
+        self.pressure.read(cx).pressure.active
     }
     pub(crate) fn is_open(&self) -> bool {
         self.open
     }
+    pub(crate) fn displayed_sessions(&self) -> impl Iterator<Item = i64> + '_ {
+        let mut seen = HashSet::new();
+        self.processes
+            .iter()
+            .map(|process| process.session)
+            .filter(move |id| seen.insert(*id))
+    }
     pub(crate) fn measured_height(&self) -> Option<f32> {
         self.bounds.get().map(|b| b.size.height.as_f32())
     }
-    fn reasons(&self) -> String {
+    fn reasons(&self, cx: &gpui::App) -> String {
         self.pressure
+            .read(cx)
+            .pressure
             .reasons
             .iter()
             .map(|r| r.label())
@@ -186,6 +181,7 @@ impl ResourceMonitor {
         }
         self.previous_focus = window.focused(cx).filter(|f| *f != self.trigger);
         self.open = true;
+        self.pressure_seen = self.pressure.read(cx).pressure.active;
         self.loading = true;
         self.error = None;
         self.stop_error = None;
@@ -199,10 +195,11 @@ impl ResourceMonitor {
         }
         self.open = false;
         self.refresh = None;
+        self.stopping = None;
         self.processes.clear();
         self.expanded.clear();
         let focus = self.previous_focus.take();
-        if self.pressure.active {
+        if self.pressure.read(cx).pressure.active {
             window.focus(focus.as_ref().unwrap_or(&self.trigger), cx);
         } else if let Some(focus) = focus {
             window.focus(&focus, cx);
@@ -220,14 +217,15 @@ impl ResourceMonitor {
                 if this
                     .update(cx, |this, cx| {
                         this.loading = false;
-                        this.stopping = None;
-                        match rows {
-                            Ok(rows) => {
-                                this.processes = stable_order(&this.processes, rows);
-                                this.error = None;
-                            }
-                            Err(error) => this.error = Some(error),
+                        if this
+                            .stopping
+                            .as_ref()
+                            .is_some_and(|stop| !stop.target.still_running(&rows.processes))
+                        {
+                            this.stopping = None;
                         }
+                        this.processes = stable_order(&this.processes, rows.processes);
+                        this.error = rows.usage_error;
                         cx.notify();
                     })
                     .is_err()
@@ -238,30 +236,77 @@ impl ResourceMonitor {
             }
         }));
     }
-    fn stop_session(&mut self, id: i64, cx: &mut Context<Self>) {
+    fn begin_stop(&mut self, target: StopTarget, cx: &mut Context<Self>) -> Option<u64> {
+        if !self.open || self.stopping.is_some() {
+            return None;
+        }
         self.stop_error = None;
-        self.stopping = Some(format!("session:{id}"));
-        cx.emit(StopSession(id));
+        self.refresh = None;
+        self.stop_sequence = self.stop_sequence.wrapping_add(1);
+        let sequence = self.stop_sequence;
+        self.stopping = Some(PendingStop { sequence, target });
+        cx.notify();
+        Some(sequence)
+    }
+
+    fn stop_session(&mut self, session: i64, turn: TurnToken, cx: &mut Context<Self>) {
+        if let Some(sequence) = self.begin_stop(
+            StopTarget::Session {
+                id: session,
+                turn: turn.clone(),
+            },
+            cx,
+        ) {
+            cx.emit(StopSession {
+                session,
+                turn,
+                sequence,
+            });
+        }
+    }
+
+    pub(crate) fn finish_session_stop(
+        &mut self,
+        request: &StopSession,
+        stopped: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let result = if stopped {
+            Ok(())
+        } else {
+            Err("This turn has already ended.".into())
+        };
+        self.finish_stop(request.sequence, result, cx);
+    }
+
+    fn finish_stop(&mut self, sequence: u64, result: Result<(), String>, cx: &mut Context<Self>) {
+        if !self.open
+            || self
+                .stopping
+                .as_ref()
+                .is_none_or(|stop| stop.sequence != sequence)
+        {
+            return;
+        }
+        if let Err(error) = result {
+            self.stopping = None;
+            self.stop_error = Some(error);
+        }
         self.refresh(cx);
         cx.notify();
     }
+
     fn stop_tool(&mut self, pid: u32, identity: String, cx: &mut Context<Self>) {
-        self.stop_error = None;
-        self.stopping = Some(identity.clone());
+        let Some(sequence) = self.begin_stop(StopTarget::Tool(identity.clone()), cx) else {
+            return;
+        };
         // A user's stop request must not wait behind the next listing.
         let work = cx
             .background_executor()
             .spawn(async move { resources::stop_tool(pid, &identity) });
         cx.spawn(async move |this, cx| {
             let result = work.await;
-            let _ = this.update(cx, |this, cx| {
-                if let Err(error) = result {
-                    this.stopping = None;
-                    this.stop_error = Some(error);
-                }
-                this.refresh(cx);
-                cx.notify();
-            });
+            let _ = this.update(cx, |this, cx| this.finish_stop(sequence, result, cx));
         })
         .detach();
         cx.notify();
@@ -274,8 +319,8 @@ impl ResourceMonitor {
         window: &Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let active = self.pressure.active;
-        let reasons = self.reasons();
+        let active = self.pressure.read(cx).pressure.active;
+        let reasons = self.reasons(cx);
         let mut groups: Vec<(i64, Vec<&OwnedProcess>)> = Vec::new();
         for process in &self.processes {
             match groups.iter_mut().find(|(id, _)| *id == process.session) {
@@ -285,10 +330,11 @@ impl ResourceMonitor {
         }
         let busy = self.stopping.is_some();
         let list_height = 320f32.min(window.viewport_size().height.as_f32() * 0.45);
-        let error_line = |id: &'static str, text: &'static str| {
+        let error_line = |id: &'static str, text: SharedString| {
             div()
                 .id(id)
                 .role(Role::Alert)
+                .aria_label(text.clone())
                 .mt_3()
                 .text_size(px(12.))
                 .text_color(status(StatusColor::Danger, 1.))
@@ -312,7 +358,7 @@ impl ResourceMonitor {
                     cx.stop_propagation();
                 }
             }))
-            // Modal.tsx's header.
+            // The modal's header.
             .child(
                 div()
                     .flex_shrink_0()
@@ -343,8 +389,8 @@ impl ResourceMonitor {
                     .text_size(px(13.))
                     .flex()
                     .flex_col()
-                    .child(
-                        div()
+                    .when(active || self.pressure_seen, |d| {
+                        d.child(div()
                             .flex()
                             .items_start()
                             .gap(px(10.))
@@ -379,19 +425,16 @@ impl ResourceMonitor {
                                                 "The slowdown has cleared. You can close this window."
                                             }),
                                     ),
-                            ),
-                    )
+                            ))
+                    })
                     .when(self.error.is_some(), |d| {
                         d.child(error_line(
                             "resource-load-error",
-                            "Couldn't load running work. Trying again…",
+                            "Process usage is unavailable. Known agents can still be stopped. Trying again…".into(),
                         ))
                     })
-                    .when(self.stop_error.is_some(), |d| {
-                        d.child(error_line(
-                            "resource-stop-error",
-                            "Couldn't stop this work. Please try again.",
-                        ))
+                    .when_some(self.stop_error.clone(), |d, error| {
+                        d.child(error_line("resource-stop-error", error.into()))
                     })
                     .when(self.loading && self.processes.is_empty(), |d| {
                         d.child(
@@ -405,7 +448,7 @@ impl ResourceMonitor {
                                 .gap_2()
                                 .text_size(px(12.))
                                 .text_color(content(0.5))
-                                .child(spinner("resource-loading", "loader", 14.))
+                                .child(spinner("resource-loading", 14.))
                                 .child("Checking running work…"),
                         )
                     })
@@ -485,12 +528,31 @@ impl ResourceMonitor {
         let title: SharedString = session
             .map(|s| s.title.clone())
             .unwrap_or_else(|| "Background work".into());
-        let memory: u64 = rows.iter().map(|r| r.memory_bytes).sum();
+        let memory = rows.iter().try_fold(0u64, |total, row| {
+            Some(total.saturating_add(row.memory_bytes?))
+        });
+        let process_summary = format!(
+            "{} {} · {}",
+            rows.len(),
+            if rows.len() == 1 {
+                "process"
+            } else {
+                "processes"
+            },
+            memory.map_or_else(
+                || "Usage unavailable".into(),
+                |bytes| format!("{} memory", format_memory(bytes)),
+            )
+        );
         let expanded = self.expanded.contains(&id);
-        let stopping_session = self.stopping.as_deref() == Some(&format!("session:{id}"));
+        let turn = rows.iter().find_map(|process| process.turn.clone());
+        let stopping_session = self.stopping.as_ref().is_some_and(|stop| {
+            matches!(stop.target, StopTarget::Session { id: stopping, .. } if stopping == id)
+        });
         div()
             .id(("resource-session", id as u64))
-            .role(Role::ListItem)
+            .role(Role::Group)
+            .aria_label(format!("Running session {title}"))
             .py_3()
             .when(ix > 0, |d| d.border_t_1().border_color(content(0.07)))
             .child(
@@ -507,8 +569,8 @@ impl ResourceMonitor {
                             .flex()
                             .items_center()
                             .justify_center()
-                            .child(match session {
-                                Some(s) => provider_icon(&s.provider, 14.).into_any_element(),
+                            .child(match session.and_then(|s| s.provider.as_deref()) {
+                                Some(provider) => provider_icon(provider, 14.).into_any_element(),
                                 None => icon("circle-alert", 14.).into_any_element(),
                             }),
                     )
@@ -520,49 +582,45 @@ impl ResourceMonitor {
                             .font_weight(FontWeight::MEDIUM)
                             .child(title.clone()),
                     )
-                    .when(session.is_some(), |d| {
+                    .when_some(turn, |d, turn| {
                         d.child(
-                            div()
-                                .id(("stop-session", id as u64))
-                                .role(Role::Button)
-                                .map(vorkspace_ui::theme::tab_reachable)
-                                .aria_label(format!("Stop session {title}"))
-                                .h(px(28.))
-                                .flex_shrink_0()
-                                .flex()
-                                .items_center()
-                                .gap(px(6.))
-                                .rounded(px(radius::CONTROL))
-                                .bg(content(0.06))
-                                .px(px(10.))
-                                .text_size(px(12.))
-                                .text_color(content(0.7))
-                                .map(|d| {
-                                    if busy {
-                                        d.opacity(0.4)
-                                    } else {
-                                        d.cursor_pointer()
-                                            .hover(|s| {
-                                                s.bg(status(StatusColor::Danger, 0.1))
-                                                    .text_color(status(StatusColor::Danger, 1.))
-                                            })
-                                            .on_click(cx.listener(move |this, _, _, cx| {
-                                                this.stop_session(id, cx)
-                                            }))
-                                    }
-                                })
-                                .when(stopping_session, |d| {
-                                    d.child(spinner(
-                                        ("stop-session-spin", id as u64),
-                                        "loader",
-                                        12.,
-                                    ))
-                                })
-                                .child(if stopping_session {
-                                    "Stopping…"
+                            crate::controls::button(
+                                ("stop-session", id as u64),
+                                format!("Stop session {title}"),
+                                !busy,
+                            )
+                            .h(px(28.))
+                            .flex_shrink_0()
+                            .flex()
+                            .items_center()
+                            .gap(px(6.))
+                            .rounded(px(radius::CONTROL))
+                            .bg(content(0.06))
+                            .px(px(10.))
+                            .text_size(px(12.))
+                            .text_color(content(0.7))
+                            .map(|d| {
+                                if busy {
+                                    d.opacity(0.4)
                                 } else {
-                                    "Stop"
-                                }),
+                                    d.cursor_pointer()
+                                        .hover(|s| {
+                                            s.bg(status(StatusColor::Danger, 0.1))
+                                                .text_color(status(StatusColor::Danger, 1.))
+                                        })
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            this.stop_session(id, turn.clone(), cx)
+                                        }))
+                                }
+                            })
+                            .when(stopping_session, |d| {
+                                d.child(spinner(("stop-session-spin", id as u64), 12.))
+                            })
+                            .child(if stopping_session {
+                                "Stopping…"
+                            } else {
+                                "Stop"
+                            }),
                         )
                     }),
             )
@@ -571,6 +629,8 @@ impl ResourceMonitor {
                     .id(("resource-processes", id as u64))
                     .role(Role::Button)
                     .map(vorkspace_ui::theme::tab_reachable)
+                    .aria_label(format!("Processes for {title}"))
+                    .aria_description(process_summary.clone())
                     .aria_expanded(expanded)
                     .ml(px(34.))
                     .mt(px(2.))
@@ -589,16 +649,7 @@ impl ResourceMonitor {
                         },
                         12.,
                     ))
-                    .child(format!(
-                        "{} {} · {} memory",
-                        rows.len(),
-                        if rows.len() == 1 {
-                            "process"
-                        } else {
-                            "processes"
-                        },
-                        format_memory(memory)
-                    ))
+                    .child(process_summary)
                     .on_click(cx.listener(move |this, _, _, cx| {
                         if !this.expanded.remove(&id) {
                             this.expanded.insert(id);
@@ -617,9 +668,10 @@ impl ResourceMonitor {
                         .flex()
                         .flex_col()
                         .gap_2()
-                        .children(rows.iter().map(|process| {
-                            self.process_row(process, &title, session.is_some(), busy, cx)
-                        })),
+                        .children(
+                            rows.iter()
+                                .map(|process| self.process_row(process, &title, busy, cx)),
+                        ),
                 )
             })
             .into_any_element()
@@ -629,15 +681,34 @@ impl ResourceMonitor {
         &self,
         process: &OwnedProcess,
         title: &SharedString,
-        has_session: bool,
         busy: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let (pid, agent, session) = (process.pid, process.agent, process.session);
         let identity = process.identity.clone();
-        let disabled = busy || (agent && !has_session);
-        let stopping = self.stopping.as_deref() == Some(identity.as_str());
+        let turn = process.turn.clone();
+        let disabled = busy || (agent && turn.is_none());
+        let stopping = self
+            .stopping
+            .as_ref()
+            .is_some_and(|stop| match &stop.target {
+                StopTarget::Session { id, .. } => agent && *id == session,
+                StopTarget::Tool(stamp) => *stamp == identity,
+            });
+        let usage = format!(
+            "{} · {} · PID {pid}",
+            process
+                .cpu_percent
+                .map_or_else(|| "CPU unavailable".into(), |cpu| format!("{cpu:.0}% CPU"),),
+            process
+                .memory_bytes
+                .map_or_else(|| "Memory unavailable".into(), format_memory),
+        );
         div()
+            .id(("resource-process", u64::from(pid)))
+            .role(Role::Group)
+            .aria_label(process.command.clone())
+            .aria_description(usage.clone())
             .flex()
             .min_w_0()
             .items_center()
@@ -659,51 +730,49 @@ impl ResourceMonitor {
                             .truncate()
                             .text_size(px(10.))
                             .text_color(content(0.4))
-                            .child(format!(
-                                "{:.0}% CPU · {} · PID {pid}",
-                                process.cpu_percent,
-                                format_memory(process.memory_bytes)
-                            )),
+                            .child(usage),
                     ),
             )
             .child(
-                div()
-                    .id(("stop-process", pid as u64))
-                    .role(Role::Button)
-                    .map(vorkspace_ui::theme::tab_reachable)
-                    .aria_label(format!(
+                crate::controls::button(
+                    ("stop-process", pid as u64),
+                    format!(
                         "{} for {title} (PID {pid})",
                         if agent {
                             "Stop agent"
                         } else {
                             "Stop build/tool"
                         }
-                    ))
-                    .flex_shrink_0()
-                    .rounded(px(radius::SMALL))
-                    .px(px(6.))
-                    .py_1()
-                    .text_size(px(11.))
-                    .text_color(content(0.5))
-                    .map(|d| {
-                        if disabled {
-                            d.opacity(0.4)
-                        } else {
-                            d.cursor_pointer()
-                                .hover(|s| {
-                                    s.bg(status(StatusColor::Danger, 0.1))
-                                        .text_color(status(StatusColor::Danger, 1.))
-                                })
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    if agent {
-                                        this.stop_session(session, cx);
-                                    } else {
-                                        this.stop_tool(pid, identity.clone(), cx);
+                    ),
+                    !disabled,
+                )
+                .flex_shrink_0()
+                .rounded(px(radius::SMALL))
+                .px(px(6.))
+                .py_1()
+                .text_size(px(11.))
+                .text_color(content(0.5))
+                .map(|d| {
+                    if disabled {
+                        d.opacity(0.4)
+                    } else {
+                        d.cursor_pointer()
+                            .hover(|s| {
+                                s.bg(status(StatusColor::Danger, 0.1))
+                                    .text_color(status(StatusColor::Danger, 1.))
+                            })
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                if agent {
+                                    if let Some(turn) = &turn {
+                                        this.stop_session(session, turn.clone(), cx);
                                     }
-                                }))
-                        }
-                    })
-                    .child(if stopping { "Stopping…" } else { "Stop" }),
+                                } else {
+                                    this.stop_tool(pid, identity.clone(), cx);
+                                }
+                            }))
+                    }
+                })
+                .child(if stopping { "Stopping…" } else { "Stop" }),
             )
             .into_any_element()
     }
@@ -711,8 +780,7 @@ impl ResourceMonitor {
 
 impl Render for ResourceMonitor {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let shown = self.pressure.active;
-        let classic = self.classic;
+        let shown = self.pressure.read(cx).pressure.active;
         let open = self.open;
         div()
             .when(self.compact, |d| d.w_full().flex().justify_center())
@@ -724,7 +792,7 @@ impl Render for ResourceMonitor {
                         .role(Role::Button)
                         .map(vorkspace_ui::theme::tab_reachable)
                         .aria_label("High resource usage")
-                        .aria_description(format!("{} · Review running work", self.reasons()))
+                        .aria_description(format!("{} · Review running work", self.reasons(cx)))
                         .aria_expanded(open)
                         .track_focus(&self.trigger)
                         .tab_index(0)
@@ -733,10 +801,8 @@ impl Render for ResourceMonitor {
                                 d.size(px(32.))
                                     .justify_center()
                                     .rounded(px(radius::CONTROL))
-                            } else if classic {
-                                d.h(px(20.)).px(px(6.)).rounded(px(radius::CONTROL))
                             } else {
-                                d.h(px(20.)).px_2().rounded_full()
+                                d.h(px(20.)).px(px(6.)).rounded(px(radius::CONTROL))
                             }
                         })
                         .flex()
@@ -827,9 +893,10 @@ mod tests {
             pid,
             identity: pid.to_string(),
             session,
+            turn: None,
             command: format!("process {pid}"),
-            cpu_percent: cpu,
-            memory_bytes: 0,
+            cpu_percent: Some(cpu),
+            memory_bytes: Some(0),
             agent: false,
         }
     }
@@ -857,9 +924,11 @@ mod tests {
 
     #[gpui::test]
     fn chip_opens_running_work_and_escape_restores_focus(cx: &mut gpui::TestAppContext) {
-        let window = cx.update(|cx| {
-            cx.open_window(Default::default(), |_, cx| cx.new(ResourceMonitor::new))
-                .unwrap()
+        let [other, window] = cx.update(|cx| {
+            [(); 2].map(|()| {
+                cx.open_window(Default::default(), |_, cx| cx.new(ResourceMonitor::new))
+                    .unwrap()
+            })
         });
         window
             .update(cx, |monitor, w, cx| {
@@ -874,14 +943,20 @@ mod tests {
                 for s in 0..3 {
                     monitor.observe(high, start + Duration::from_secs(s * 3), cx);
                 }
-                assert!(monitor.chip_shown());
-                assert_eq!(monitor.reasons(), "High CPU usage · Low available memory");
+                assert!(monitor.chip_shown(cx));
+                assert_eq!(monitor.reasons(cx), "High CPU usage · Low available memory");
                 w.focus(&monitor.trigger, cx);
             })
             .unwrap();
         cx.run_until_parked();
         cx.simulate_keystrokes(window.into(), "enter");
         cx.run_until_parked();
+        other
+            .update(cx, |monitor, _, cx| {
+                assert!(monitor.chip_shown(cx));
+                assert!(!monitor.is_open());
+            })
+            .unwrap();
         window
             .update(cx, |monitor, w, cx| {
                 assert!(monitor.is_open());

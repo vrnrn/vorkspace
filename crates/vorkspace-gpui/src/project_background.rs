@@ -1,12 +1,12 @@
-//! Prepare the React worker's texture once. Cover cropping, corner clipping and
+//! Prepare a project background's texture once. Cover cropping, corner clipping and
 //! view-relative masks happen while painting, including during live resize.
 use crate::popover::AnchorSlot;
+use crate::render_pixels::to_render_image;
 use gpui::{
     App, Asset, Bounds, Context, ObjectFit, RenderImage, Role, Window, canvas, div, img,
     prelude::*, px,
 };
 use gpui::{Corners, Pixels};
-use image::Frame;
 use std::{
     hash::{Hash, Hasher},
     path::Path,
@@ -54,16 +54,10 @@ async fn prepare_texture(request: TextureRequest) -> Result<PreparedTexture, Str
     let source = read_image(Path::new(&request.key.path))?;
     let pixels = background_texture(&source, request.key.effect);
     Ok(PreparedTexture {
-        image: render_image(pixels),
+        image: to_render_image(pixels),
     })
 }
 
-fn render_image(mut pixels: image::RgbaImage) -> Arc<RenderImage> {
-    for pixel in pixels.pixels_mut() {
-        pixel.0.swap(0, 2);
-    }
-    Arc::new(RenderImage::new(vec![Frame::new(pixels)]))
-}
 #[derive(Default)]
 pub(crate) struct ProjectBackground {
     preview: bool,

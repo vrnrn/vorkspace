@@ -10,49 +10,105 @@ use vorkspace_core::{
 };
 
 const LIMIT: usize = 24;
+const BYTE_LIMIT: usize = 16 * 1024 * 1024;
+
+struct Entry {
+    last_used: u64,
+    bytes: usize,
+    state: Snapshot,
+}
+
 #[derive(Default)]
 struct Memory {
     clock: u64,
-    entries: HashMap<String, (u64, Snapshot)>,
+    entries: HashMap<String, Entry>,
 }
 impl Memory {
     fn get(&mut self, cwd: &str) -> Option<Snapshot> {
         let entry = self.entries.get_mut(&path_key(cwd))?;
         self.clock += 1;
-        entry.0 = self.clock;
-        Some(entry.1.clone())
+        entry.last_used = self.clock;
+        Some(entry.state.clone())
     }
-    fn put(&mut self, cwd: &str, state: Snapshot) {
+    fn put(&mut self, key: String, state: Snapshot, rows_bytes: usize) {
+        // Charge aliases separately. This intentionally overestimates shared rows.
+        let bytes = rows_bytes
+            + key.capacity()
+            + state.current.as_ref().map_or(0, String::capacity)
+            + std::mem::size_of::<Entry>();
+        if bytes > BYTE_LIMIT {
+            self.entries.remove(&key);
+            return;
+        }
         self.clock += 1;
-        self.entries.insert(path_key(cwd), (self.clock, state));
-        while self.entries.len() > LIMIT {
+        self.entries.insert(
+            key,
+            Entry {
+                last_used: self.clock,
+                bytes,
+                state,
+            },
+        );
+        while self.entries.len() > LIMIT
+            || self
+                .entries
+                .values()
+                .map(|entry| entry.bytes)
+                .sum::<usize>()
+                > BYTE_LIMIT
+        {
             let oldest = self
                 .entries
                 .iter()
-                .min_by_key(|(_, (at, _))| *at)
+                .min_by_key(|(_, entry)| entry.last_used)
                 .map(|(key, _)| key.clone())
                 .unwrap();
             self.entries.remove(&oldest);
         }
     }
     fn remember(&mut self, cwd: &str, state: &Snapshot) {
+        let key = path_key(cwd);
+        let rows_bytes = estimated_rows_bytes(state);
         // The sidebar belongs to the project root even when the active chat
         // runs in a linked worktree. Its HEAD must remain the main checkout's.
-        if let Some(main) = state.worktrees.iter().find(|tree| tree.main)
-            && path_key(&main.path) != path_key(cwd)
+        if let Some(main) = state
+            .worktrees
+            .iter()
+            .find(|tree| tree.main && !tree.missing)
+            && let main_key = path_key(&main.path)
+            && main_key != key
         {
             let mut root = state.clone();
-            root.current = main
-                .branch
-                .clone()
-                .or_else(|| Some(main.head.chars().take(7).collect()));
-            root.detached = main.branch.is_none();
-            root.linked = false;
-            self.put(&main.path, root);
+            if state.linked {
+                root.current = main.branch.clone();
+                root.detached = main.branch.is_none();
+                root.linked = false;
+            }
+            self.put(main_key, root, rows_bytes);
         }
-        self.put(cwd, state.clone());
+        self.put(key, state.clone(), rows_bytes);
     }
 }
+
+fn estimated_rows_bytes(state: &Snapshot) -> usize {
+    std::mem::size_of_val(state.branches.as_ref())
+        + state
+            .branches
+            .iter()
+            .map(|row| row.name.capacity() + row.remote.as_ref().map_or(0, String::capacity))
+            .sum::<usize>()
+        + std::mem::size_of_val(state.worktrees.as_ref())
+        + state
+            .worktrees
+            .iter()
+            .map(|row| {
+                row.path.capacity()
+                    + row.head.capacity()
+                    + row.branch.as_ref().map_or(0, String::capacity)
+            })
+            .sum::<usize>()
+}
+
 fn memory() -> &'static Mutex<Memory> {
     static MEMORY: OnceLock<Mutex<Memory>> = OnceLock::new();
     MEMORY.get_or_init(Default::default)
@@ -96,7 +152,8 @@ mod tests {
                         branch: Some("feature".into()),
                         ..Default::default()
                     },
-                ],
+                ]
+                .into(),
                 ..Default::default()
             },
         );
@@ -114,12 +171,26 @@ mod tests {
     fn recent_projects_survive_with_a_bounded_cache() {
         let mut memory = Memory::default();
         for i in 0..LIMIT {
-            memory.put(&format!("/repo-{i}"), Snapshot::default());
+            memory.remember(&format!("/repo-{i}"), &Snapshot::default());
         }
         memory.get("/repo-0").unwrap();
-        memory.put("/new", Snapshot::default());
+        memory.remember("/new", &Snapshot::default());
         assert_eq!(memory.entries.len(), LIMIT);
         assert!(memory.get("/repo-0").is_some());
         assert!(memory.get("/repo-1").is_none());
+    }
+
+    #[test]
+    fn oversized_snapshot_does_not_displace_the_hot_set() {
+        let mut memory = Memory::default();
+        memory.put("/one".into(), Snapshot::default(), BYTE_LIMIT / 3);
+        memory.put("/two".into(), Snapshot::default(), BYTE_LIMIT / 3);
+        memory.put("/too-large".into(), Snapshot::default(), BYTE_LIMIT);
+        assert!(memory.get("/too-large").is_none());
+        assert!(memory.get("/one").is_some());
+        memory.put("/three".into(), Snapshot::default(), BYTE_LIMIT / 3);
+        assert!(memory.get("/one").is_some());
+        assert!(memory.get("/two").is_none());
+        assert!(memory.get("/three").is_some());
     }
 }

@@ -2,6 +2,77 @@
 use super::*;
 use vorkspace_ui::radius;
 
+type TitleTabHeadlines = HashMap<i64, (TabCopy, (Option<usize>, f32, f32))>;
+
+struct TabWidthSelection<'a> {
+    selected: &'a Option<TitleTab>,
+    leaving: &'a Option<TitleTab>,
+    switching: bool,
+    switch: f32,
+}
+struct TabSizing<'a> {
+    selection: TabWidthSelection<'a>,
+    width: f32,
+    floor: f32,
+    scale: f32,
+}
+struct TabStripGeometry<'a> {
+    sizing: TabSizing<'a>,
+    extra: HashMap<TitleTab, f32>,
+    crowded: bool,
+    insert: Option<usize>,
+    count: usize,
+    shifts: Vec<Pixels>,
+    dragged: Option<TitleTab>,
+    glide: vorkspace_ui::glide::Glide,
+    thumb_ready: bool,
+    viewport: f32,
+    show_new: bool,
+    show_switcher: bool,
+    all_tabs: Vec<TitleTab>,
+    new_tab_lead: f32,
+}
+
+impl TabWidthSelection<'_> {
+    fn weight(&self, tab: &TitleTab) -> f32 {
+        if Some(tab) == self.selected.as_ref() {
+            if self.switching { self.switch } else { 1. }
+        } else if self.leaving.as_ref() == Some(tab) {
+            1. - self.switch
+        } else {
+            0.
+        }
+    }
+}
+impl TabSizing<'_> {
+    fn snap(&self, x: f32) -> f32 {
+        (x * self.scale).floor() / self.scale
+    }
+    fn base_width(&self, tab: &TitleTab) -> f32 {
+        self.snap(self.width + (self.floor - self.width) * self.selection.weight(tab))
+    }
+    fn slot_size(&self, tab: &TitleTab, open: f32) -> (f32, f32) {
+        (
+            self.snap(self.base_width(tab) * open),
+            self.snap(vorkspace_ui::tab_motion::GAP * (1. - open)),
+        )
+    }
+}
+impl TabStripGeometry<'_> {
+    fn tab_width(&self, tab: &TitleTab) -> f32 {
+        self.sizing.base_width(tab) + self.extra.get(tab).copied().unwrap_or(0.)
+    }
+    fn opening_slot(&self, tab: &TitleTab, open: f32) -> gpui::Div {
+        let (w, give) = self.sizing.slot_size(tab, open);
+        div()
+            .flex_shrink_0()
+            .h(px(TITLE_BAR_HEIGHT))
+            .w(px(w))
+            .mr(px(-give))
+            .overflow_hidden()
+    }
+}
+
 impl Shell {
     pub(super) fn close_other_tabs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(active) = self.active_title_tab(cx) else {
@@ -51,7 +122,7 @@ impl Shell {
             .iter()
             .copied()
             .filter(|id| !review(id).is_some_and(|r| r.chat_hidden))
-            .filter(|id| self.session_summaries.contains_key(id))
+            .filter(|id| self.has_session(*id, cx))
             .collect();
         let app = |id: &i64| {
             self.workspace
@@ -252,12 +323,12 @@ impl Shell {
         animate: bool,
     ) -> (Option<usize>, f32, f32) {
         let Some(shown) = copy.panes.get(copy.focus).map(|p| p.key) else {
-            self.pane_ticks.remove(&tab);
+            self.tabs.pane_ticks.remove(&tab);
             return (None, 0., 1.);
         };
         let now = vorkspace_ui::clock::Instant::now();
         let position = |key: (i64, bool)| copy.panes.iter().position(|p| p.key == key);
-        let tick = self.pane_ticks.entry(tab).or_insert(PaneTick {
+        let tick = self.tabs.pane_ticks.entry(tab).or_insert(PaneTick {
             shown,
             from: None,
             dir: 0.,
@@ -287,7 +358,7 @@ impl Shell {
     }
     /// The dragged pane's title, following the pointer.
     pub(super) fn drag_ghost(&self, cx: &App) -> Option<AnyElement> {
-        let drag = self.pane_drag.as_ref().filter(|d| d.active)?;
+        let drag = self.panes.drag.as_ref().filter(|d| d.active)?;
         let id = drag.source.session();
         let review = (matches!(drag.source, DragSource::Review(_))
             || self.workspace.review_owners.contains_key(&id))
@@ -305,7 +376,7 @@ impl Shell {
             (self.pane_title(id, cx), self.app_pane_mark(id, cx))
         } else {
             let owner = self.workspace.session_for_pane(id)?;
-            self.session_summaries.get(&owner)?;
+            self.session_summary(owner, cx)?;
             let session = self.session_metadata(owner, cx);
             let title = if self.workspace.review_owners.contains_key(&id) {
                 self.tab_copy(id, cx).headline
@@ -355,7 +426,7 @@ impl Shell {
         self.visible_tabs(cx).len() > 1
             || layout.is_split()
             || layout.leaf_ids().iter().any(|id| {
-                self.session_summaries.contains_key(id) && {
+                self.has_session(*id, cx) && {
                     let s = self.session_metadata(*id, cx);
                     s.summary.has_messages
                         || s.busy
@@ -377,7 +448,7 @@ impl Shell {
         event: &MouseDownEvent,
         cx: &mut Context<Self>,
     ) {
-        self.skip_tab_click = false;
+        self.tabs.skip_tab_click = false;
         self.close_menu(cx);
         let tabs = self.visible_tabs(cx);
         let Some(from) = tabs.iter().position(|tab| *tab == id) else {
@@ -387,12 +458,12 @@ impl Shell {
             return;
         }
         let bounds: Vec<_> = (0..tabs.len())
-            .filter_map(|ix| self.tab_scroll.bounds_for_item(ix))
+            .filter_map(|ix| self.tabs.scroll.bounds_for_item(ix))
             .collect();
         if bounds.len() != tabs.len() {
             return;
         }
-        self.tab_drag = Some(TabDrag {
+        self.tabs.drag = Some(TabDrag {
             id,
             from,
             to: from,
@@ -405,13 +476,13 @@ impl Shell {
         self.tabs_frame.update(cx, |_, cx| cx.notify());
     }
     pub(super) fn move_tab_drag(&mut self, event: &MouseMoveEvent, cx: &mut Context<Self>) {
-        let Some(drag) = self.tab_drag.as_mut() else {
+        let Some(drag) = self.tabs.drag.as_mut() else {
             return;
         };
         // A press whose release never reached the shell (the title bar can
         // swallow it) must not wake up on the next drag elsewhere.
         if event.pressed_button != Some(MouseButton::Left) {
-            self.tab_drag = None;
+            self.tabs.drag = None;
             self.cancel_pane_drag(cx);
             self.tabs_frame.update(cx, |_, cx| cx.notify());
             return;
@@ -422,7 +493,7 @@ impl Shell {
             return;
         }
         drag.active = true;
-        self.skip_tab_click = true;
+        self.tabs.skip_tab_click = true;
         // Once armed it stays armed until the pointer is back over the tabs.
         if pulled <= 0. {
             drag.armed = false;
@@ -457,8 +528,8 @@ impl Shell {
         // The active tab has no other pane to land on, but its title still
         // follows the pointer.
         let own = self.workspace.active_tab() == id.session();
-        let was = self.pane_drag.is_some();
-        self.pane_drag = id.session().filter(|_| armed).map(|id| PaneDrag {
+        let was = self.panes.drag.is_some();
+        self.panes.drag = id.session().filter(|_| armed).map(|id| PaneDrag {
             source: DragSource::Tab(id),
             start: event.position,
             position: event.position,
@@ -476,14 +547,14 @@ impl Shell {
         self.tabs_frame.update(cx, |_, cx| cx.notify());
     }
     pub(super) fn finish_tab_drag(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(drag) = self.tab_drag.take() {
-            let onto_pane = self.pane_drag.as_ref().is_some_and(|d| {
+        if let Some(drag) = self.tabs.drag.take() {
+            let onto_pane = self.panes.drag.as_ref().is_some_and(|d| {
                 Some(d.source.session()) == drag.id.session()
                     && matches!(d.source, DragSource::Tab(_))
                     && d.over.is_some()
             });
             if onto_pane {
-                self.skip_tab_click = true;
+                self.tabs.skip_tab_click = true;
                 self.finish_pane_drag(window, cx);
             } else if drag.active {
                 self.cancel_pane_drag(cx);
@@ -494,7 +565,7 @@ impl Shell {
                     .iter()
                     .enumerate()
                     .map(|(ix, id)| {
-                        let shift = self.tab_shifts.get(id).map_or(0., |s| s.at(now).0);
+                        let shift = self.tabs.shifts.get(id).map_or(0., |s| s.at(now).0);
                         (
                             id.clone(),
                             drag.bounds.get(ix).map_or(0., |b| b.left().as_f32()) + shift,
@@ -502,7 +573,7 @@ impl Shell {
                     })
                     .collect();
                 self.reorder_title_tab(&drag.id, drag.to, cx);
-                self.tab_shifts.clear();
+                self.tabs.shifts.clear();
                 for (ix, id) in self.visible_tabs(cx).iter().enumerate() {
                     let (Some((_, left)), Some(slot)) =
                         (drawn.iter().find(|(t, _)| t == id), drag.bounds.get(ix))
@@ -511,7 +582,7 @@ impl Shell {
                     };
                     let from = left - slot.left().as_f32();
                     if from.abs() > 0.5 {
-                        self.tab_shifts.insert(
+                        self.tabs.shifts.insert(
                             id.clone(),
                             TabShift {
                                 from,
@@ -521,7 +592,7 @@ impl Shell {
                         );
                     }
                 }
-                self.skip_tab_click = true;
+                self.tabs.skip_tab_click = true;
                 self.persist(cx);
             }
             self.tabs_frame.update(cx, |_, cx| cx.notify());
@@ -532,7 +603,7 @@ impl Shell {
         let now = vorkspace_ui::clock::Instant::now();
         // The dragged tab rides the pointer; it eases only into a slot.
         if follow {
-            self.tab_shifts.insert(
+            self.tabs.shifts.insert(
                 id,
                 TabShift {
                     from: target,
@@ -542,14 +613,14 @@ impl Shell {
             );
             return (target, false);
         }
-        let current = self.tab_shifts.get(&id).map(|s| s.at(now));
-        if current.is_none_or(|_| self.tab_shifts[&id].to != target) {
+        let current = self.tabs.shifts.get(&id).map(|s| s.at(now));
+        if current.is_none_or(|_| self.tabs.shifts[&id].to != target) {
             let from = current.map_or(0., |(value, _)| value);
             if from == target {
-                self.tab_shifts.remove(&id);
+                self.tabs.shifts.remove(&id);
                 return (target, false);
             }
-            self.tab_shifts.insert(
+            self.tabs.shifts.insert(
                 id.clone(),
                 TabShift {
                     from,
@@ -558,14 +629,14 @@ impl Shell {
                 },
             );
         }
-        let (value, done) = self.tab_shifts[&id].at(now);
+        let (value, done) = self.tabs.shifts[&id].at(now);
         if done && target == 0. {
-            self.tab_shifts.remove(&id);
+            self.tabs.shifts.remove(&id);
         }
         (value, !done)
     }
     pub(super) fn tab_shift(&self, ix: usize) -> Pixels {
-        let Some(d) = self.tab_drag.as_ref().filter(|d| d.active) else {
+        let Some(d) = self.tabs.drag.as_ref().filter(|d| d.active) else {
             return px(0.);
         };
         if ix == d.from {
@@ -579,26 +650,14 @@ impl Shell {
         }
         px(0.)
     }
-    /// The tab strip's width: between the navigation and TitleBar.tsx's right
-    /// panel toggle, `pl-1.5 pr-3` clear of the edge.
-    pub(super) fn tabs_width(&self, window: &Window, cx: &App) -> f32 {
+    pub(super) fn tabs_width(&self, window: &Window) -> f32 {
         let sidebar = self.docked_sidebar_width();
-        let trailing = if self.workspace.classic_layout {
-            self.right_drawn + self.strip_trail(cx)
-        } else {
-            self.toggle_room(cx)
-        };
-        // Tabs begin after the project rail and its optional left sidebar.
-        let lead = if self.workspace.classic_layout {
-            let divider = if sidebar > 0. { 1. } else { 0. };
-            self.classic_rail_width() + sidebar + divider + self.strip_lead(window)
-        } else {
-            self.navigation_width(window)
-        };
-        (window.viewport_size().width.as_f32() - lead - trailing).max(0.)
+        let divider = if sidebar > 0. { 1. } else { 0. };
+        let lead = self.classic_rail_width() + sidebar + divider + self.strip_lead(window);
+        (window.viewport_size().width.as_f32() - lead - STRIP_TRAIL).max(0.)
     }
     pub(super) fn tabs(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        let viewport = self.tabs_width(window, cx);
+        let viewport = self.tabs_width(window);
         let all_tabs = self.visible_tabs(cx);
         let count = all_tabs.len();
         let selected = self.active_title_tab(cx);
@@ -623,18 +682,18 @@ impl Shell {
             all_tabs.clone()
         };
         let count = tabs.len();
-        let insert = self.pane_drag.as_ref().and_then(|d| d.insert);
+        let insert = self.panes.drag.as_ref().and_then(|d| d.insert);
         let animate = !compact
             && self.workspace.preferences.tab_animations
-            && !self.tab_drag.as_ref().is_some_and(|d| d.active);
-        let (slots, opening) = self.title_tab_motion.sync(
+            && !self.tabs.drag.as_ref().is_some_and(|d| d.active);
+        let (slots, opening) = self.tabs.motion.sync(
             tabs.iter().map(|tab| (tab.clone(), ())).collect(),
             animate,
             vorkspace_ui::clock::Instant::now(),
         );
         // Every tab fits: they share the strip, however many there are. A tab
         // easing in or out holds its share of a slot, so the others give way
-        // to it gradually, as flex-shrink does in TitleBar.tsx.
+        // to it gradually, like CSS flex-shrink.
         let share: f32 = slots
             .iter()
             .map(|s| match s {
@@ -650,32 +709,29 @@ impl Shell {
         };
         // The selected tab keeps a wider share; the others split the rest.
         let now = vorkspace_ui::clock::Instant::now();
-        let selection_changed = self.title_tab_selection.1 != selected;
+        let selection_changed = self.tabs.selection.1 != selected;
         if selection_changed {
-            let previous = self.title_tab_selection.1.take();
-            self.title_tab_selection = (previous.filter(|_| animate), selected.clone(), now);
+            let previous = self.tabs.selection.1.take();
+            self.tabs.selection = (previous.filter(|_| animate), selected.clone(), now);
         }
-        let switch = vorkspace_ui::tab_motion::progress(self.title_tab_selection.2, now);
+        let switch = vorkspace_ui::tab_motion::progress(self.tabs.selection.2, now);
         if switch >= 1. {
-            self.title_tab_selection.0 = None;
+            self.tabs.selection.0 = None;
         }
-        let leaving = self.title_tab_selection.0.clone();
+        let leaving = self.tabs.selection.0.clone();
         let switching = leaving.is_some();
         // How much of the selected tab's wider share each tab holds: the new
         // one eases in while the previous one eases out.
-        let weight = |tab: &TitleTab| {
-            if Some(tab) == selected.as_ref() {
-                if switching { switch } else { 1. }
-            } else if leaving.as_ref() == Some(tab) {
-                1. - switch
-            } else {
-                0.
-            }
+        let selection = TabWidthSelection {
+            selected: &selected,
+            leaving: &leaving,
+            switching,
+            switch,
         };
         let held: f32 = slots
             .iter()
             .map(|s| match s {
-                vorkspace_ui::tab_motion::Slot::Live { key, open } => weight(key) * open,
+                vorkspace_ui::tab_motion::Slot::Live { key, open } => selection.weight(key) * open,
                 vorkspace_ui::tab_motion::Slot::Closing { .. } => 0.,
             })
             .sum();
@@ -692,14 +748,12 @@ impl Shell {
         // wander as tabs come and go. Every slot snaps to device pixels and
         // the button's margin takes what is left, keeping it still.
         let scale = window.scale_factor();
-        let snap = |x: f32| (x * scale).floor() / scale;
         let crowded = width < TITLE_TAB_MAX_WIDTH;
-        let base_width = |tab: &TitleTab| snap(width + (floor - width) * weight(tab));
-        let slot_size = |tab: &TitleTab, open: f32| {
-            (
-                snap(base_width(tab) * open),
-                snap(vorkspace_ui::tab_motion::GAP * (1. - open)),
-            )
+        let sizing = TabSizing {
+            selection,
+            width,
+            floor,
+            scale,
         };
         let used: f32 = slots
             .iter()
@@ -707,9 +761,9 @@ impl Shell {
                 vorkspace_ui::tab_motion::Slot::Live { key, open }
                 | vorkspace_ui::tab_motion::Slot::Closing { key, open, .. } => {
                     if *open >= 1. {
-                        base_width(key) + 2.
+                        sizing.base_width(key) + 2.
                     } else {
-                        let (w, give) = slot_size(key, *open);
+                        let (w, give) = sizing.slot_size(key, *open);
                         w + 2. - give
                     }
                 }
@@ -738,9 +792,10 @@ impl Shell {
                 new_tab_lead += leftover;
             }
         }
-        let tab_width = |tab: &TitleTab| base_width(tab) + extra.get(tab).copied().unwrap_or(0.);
+
         let dragged = self
-            .tab_drag
+            .tabs
+            .drag
             .as_ref()
             .filter(|d| d.active && !d.armed)
             .map(|d| d.id.clone());
@@ -759,7 +814,8 @@ impl Shell {
             .collect();
         // Keep inactive headlines on their last pane. Only an in-tab focus
         // change rolls the title; selecting a tab settles it in the same frame.
-        self.pane_ticks
+        self.tabs
+            .pane_ticks
             .retain(|id, _| self.workspace.tabs.contains(id));
         let mut copies = HashMap::new();
         for id in tabs.iter().filter_map(|tab| tab.session()) {
@@ -786,206 +842,283 @@ impl Shell {
             cx,
         );
         let thumb_ready = glide.ready();
-        let mut workspace_elements: HashMap<i64, AnyElement> =
-            tabs.iter()
-                .enumerate()
-                .filter_map(|(ix, tab)| tab.session().map(|id| (ix, id)))
-                .filter_map(|(ix, id)| {
-                    let (copy, (leaving, dir, progress)) = copies.remove(&id)?;
-                    let active = self.workspace.active_tab() == Some(id);
-                    // The press itself redraws the strip to arm tab dragging.
-                    // Keep its ink stable until that press is released, even if
-                    // hover hitboxes are being replaced during that redraw.
-                    let hovered = self.tab_hover == Some(id)
-                        || self
-                            .tab_drag
-                            .as_ref()
-                            .is_some_and(|drag| drag.id == TitleTab::Workspace(id) && !drag.active);
-                    // A collapsed tab drops its close button, so a click anywhere
-                    // on it selects it; selected, it is wide enough to show it again.
-                    let close = self.tab_can_close(id, cx)
-                        && (active || tab_width(&TitleTab::Workspace(id)) >= TAB_CLOSE_MIN_WIDTH);
-                    let dragging = self
-                        .tab_drag
-                        .as_ref()
-                        .is_some_and(|d| d.id == TitleTab::Workspace(id) && d.active);
-                    let tab = vorkspace_ui::theme::keyboard_reachable(
-                        div().id(("tab", id as usize)),
-                        true,
-                    )
-                    .debug_selector(move || format!("title-tab-{id}"))
-                    .group("title-tab")
-                    .role(Role::Tab)
-                    .aria_label(copy.headline.clone())
-                    .when(
-                        tab_width(&TitleTab::Workspace(id)) < TAB_CLOSE_MIN_WIDTH,
-                        |d| {
-                            let title: SharedString = copy.headline.clone().into();
-                            d.tooltip(move |_, cx| {
-                                cx.new(|_| crate::controls::Tooltip(title.clone())).into()
-                            })
-                        },
-                    )
-                    .aria_selected(active)
-                    .cursor(CursorStyle::Arrow)
-                    .w(px(tab_width(&TitleTab::Workspace(id))))
-                    .flex_shrink_0()
-                    .h(px(TITLE_BAR_HEIGHT))
-                    .relative()
-                    .left(shifts[ix])
-                    .flex()
-                    .items_center()
+
+        let geometry = TabStripGeometry {
+            sizing,
+            extra,
+            crowded,
+            insert,
+            count,
+            shifts,
+            dragged,
+            glide,
+            thumb_ready,
+            viewport,
+            show_new,
+            show_switcher,
+            all_tabs,
+            new_tab_lead,
+        };
+
+        let workspace_elements = self.workspace_title_elements(&tabs, copies, &geometry, cx);
+        let live = self.live_title_elements(&tabs, workspace_elements, &geometry, cx);
+        if moving || opening || switching {
+            window.request_animation_frame();
+        }
+        let elements = self.title_slot_elements(slots, live, &geometry, cx);
+        self.title_strip_surface(elements, geometry, cx)
+    }
+
+    fn title_tab_close_button(
+        &self,
+        id: i64,
+        copy: &TabCopy,
+        cx: &Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        div()
+            .id(("close-tab", id as usize))
+            .debug_selector(move || format!("close-title-tab-{id}"))
+            .group("tab-close")
+            .role(Role::Button)
+            .map(vorkspace_ui::theme::tab_reachable)
+            .aria_label(format!("Close tab {}", copy.headline))
+            .absolute()
+            .right_1()
+            .top(px(10.))
+            .size(px(20.))
+            .rounded(px(radius::SMALL))
+            .flex()
+            .items_center()
+            .justify_center()
+            .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.1)))
+            .when(copy.panes.len() > 1, |d| {
+                d.child(
+                    div()
+                        .debug_selector(move || format!("title-tab-pane-count-{id}"))
+                        .text_size(px(11.))
+                        .line_height(px(20.))
+                        .text_color(content(0.4))
+                        .group_hover("title-tab", |s| s.opacity(0.))
+                        .child(copy.panes.len().to_string()),
+                )
+            })
+            .child(
+                div()
+                    .absolute()
+                    .top_1()
+                    .left_1()
+                    .size(px(12.))
+                    .opacity(0.)
+                    .group_hover("title-tab", |s| s.opacity(1.))
                     .child(
-                        title_tab_plate(active, hovered)
-                            .when(active && thumb_ready, |d| d.bg(gpui::transparent_black()))
-                            .child(glide.probe(ix))
-                            .id(("tab-plate", id as usize))
-                            .debug_selector(move || format!("title-tab-plate-{id}"))
-                            .relative()
-                            .w_full()
-                            .min_w_0()
-                            // A narrow tab keeps its mark; the close button
-                            // overlays it on hover instead of taking room.
-                            .when(
-                                close && tab_width(&TitleTab::Workspace(id)) >= TAB_CLOSE_MIN_WIDTH,
-                                |d| d.pr_7(),
-                            )
-                            // Too narrow for the plate's padding: the mark sits centred.
-                            .when(tab_width(&TitleTab::Workspace(id)) < 30., |d| {
-                                d.px(px(
-                                    ((tab_width(&TitleTab::Workspace(id)) - 14.) / 2.).max(0.)
-                                ))
-                            })
-                            .gap(px(6.))
-                            .child(self.pane_headline(
-                                &copy,
-                                (leaving, dir, progress),
-                                active,
-                                hovered,
-                            )),
-                    )
-                    .when(close, |d| {
-                        d.child(
-                            div()
-                                .id(("close-tab", id as usize))
-                                .debug_selector(move || format!("close-title-tab-{id}"))
-                                .group("tab-close")
-                                .role(Role::Button)
-                                .map(vorkspace_ui::theme::tab_reachable)
-                                .aria_label(format!("Close tab {}", copy.headline))
-                                .absolute()
-                                .right_1()
-                                .top(px(10.))
-                                .size(px(20.))
-                                .rounded(px(radius::SMALL))
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.1)))
-                                .when(copy.panes.len() > 1, |d| {
-                                    d.child(
-                                        div()
-                                            .debug_selector(move || {
-                                                format!("title-tab-pane-count-{id}")
-                                            })
-                                            .text_size(px(11.))
-                                            .line_height(px(20.))
-                                            .text_color(content(0.4))
-                                            .group_hover("title-tab", |s| s.opacity(0.))
-                                            .child(copy.panes.len().to_string()),
-                                    )
+                        icon("close", 12.).group_hover("tab-close", |s| s.text_color(content(1.))),
+                    ),
+            )
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_click(cx.listener(move |this, _, window, cx| {
+                cx.stop_propagation();
+                this.close(id, window, cx);
+            }))
+    }
+
+    fn title_tab_insertion(
+        &self,
+        tab: gpui::Stateful<gpui::Div>,
+        ix: usize,
+        geometry: &TabStripGeometry<'_>,
+    ) -> gpui::Stateful<gpui::Div> {
+        tab.map(|d| {
+            let bar = || {
+                div()
+                    .absolute()
+                    .top(px(9.))
+                    .h(px(22.))
+                    .w(px(2.))
+                    .rounded_full()
+                    .bg(accent_color())
+            };
+            d.when(geometry.insert == Some(ix), |d| {
+                d.child(bar().left(px(-2.)))
+            })
+            .when(
+                geometry.insert == Some(geometry.count) && ix + 1 == geometry.count,
+                |d| d.child(bar().right(px(-2.))),
+            )
+        })
+    }
+
+    fn title_tab_handlers(
+        &self,
+        tab: gpui::Stateful<gpui::Div>,
+        id: i64,
+        cx: &Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        tab.on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |this, event, _, cx| {
+                this.start_tab_drag(TitleTab::Workspace(id), event, cx)
+            }),
+        )
+        .on_hover(cx.listener(move |this, hovered, _, cx| {
+            if *hovered {
+                this.tabs.hover = Some(id);
+            } else if this.tabs.hover == Some(id) {
+                this.tabs.hover = None;
+            }
+            this.tabs_frame.update(cx, |_, cx| cx.notify());
+        }))
+        .on_mouse_down(
+            MouseButton::Right,
+            cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                this.open_menu(
+                    MenuTarget::Tab(id),
+                    Anchor::Point(event.position),
+                    window,
+                    cx,
+                );
+            }),
+        )
+        .on_mouse_up(
+            MouseButton::Middle,
+            cx.listener(move |this, _, window, cx| {
+                cx.stop_propagation();
+                this.close(id, window, cx);
+            }),
+        )
+        .on_click(cx.listener(move |this, _, window, cx| {
+            if std::mem::take(&mut this.tabs.skip_tab_click) {
+                return;
+            }
+            this.open_title_tab(&TitleTab::Workspace(id), window, cx);
+        }))
+    }
+
+    fn workspace_title_elements(
+        &self,
+        tabs: &[TitleTab],
+        mut copies: TitleTabHeadlines,
+        geometry: &TabStripGeometry<'_>,
+        cx: &Context<Self>,
+    ) -> HashMap<i64, AnyElement> {
+        tabs.iter()
+            .enumerate()
+            .filter_map(|(ix, tab)| tab.session().map(|id| (ix, id)))
+            .filter_map(|(ix, id)| {
+                let (copy, (leaving, dir, progress)) = copies.remove(&id)?;
+                let active = self.workspace.active_tab() == Some(id);
+                // The press itself redraws the strip to arm tab dragging.
+                // Keep its ink stable until that press is released, even if
+                // hover hitboxes are being replaced during that redraw.
+                let hovered = self.tabs.hover == Some(id)
+                    || self
+                        .tabs
+                        .drag
+                        .as_ref()
+                        .is_some_and(|drag| drag.id == TitleTab::Workspace(id) && !drag.active);
+                // A collapsed tab drops its close button, so a click anywhere
+                // on it selects it; selected, it is wide enough to show it again.
+                let close = self.tab_can_close(id, cx)
+                    && (active
+                        || geometry.tab_width(&TitleTab::Workspace(id)) >= TAB_CLOSE_MIN_WIDTH);
+                let dragging = self
+                    .tabs
+                    .drag
+                    .as_ref()
+                    .is_some_and(|d| d.id == TitleTab::Workspace(id) && d.active);
+                let tab =
+                    vorkspace_ui::theme::keyboard_reachable(div().id(("tab", id as usize)), true)
+                        .debug_selector(move || format!("title-tab-{id}"))
+                        .group("title-tab")
+                        .role(Role::Tab)
+                        .aria_label(copy.headline.clone())
+                        .when(
+                            geometry.tab_width(&TitleTab::Workspace(id)) < TAB_CLOSE_MIN_WIDTH,
+                            |d| {
+                                let title: SharedString = copy.headline.clone().into();
+                                d.tooltip(move |_, cx| {
+                                    cx.new(|_| crate::controls::Tooltip(title.clone())).into()
                                 })
-                                .child(
-                                    div()
-                                        .absolute()
-                                        .top_1()
-                                        .left_1()
-                                        .size(px(12.))
-                                        .opacity(0.)
-                                        .group_hover("title-tab", |s| s.opacity(1.))
-                                        .child(icon("close", 12.).group_hover("tab-close", |s| {
-                                            s.text_color(content(1.))
-                                        })),
-                                )
-                                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                                .on_click(cx.listener(move |this, _, window, cx| {
-                                    cx.stop_propagation();
-                                    this.close(id, window, cx);
-                                })),
+                            },
                         )
-                    })
-                    .map(|d| {
-                        let bar = || {
-                            div()
-                                .absolute()
-                                .top(px(9.))
-                                .h(px(22.))
-                                .w(px(2.))
-                                .rounded_full()
-                                .bg(accent_color())
-                        };
-                        d.when(insert == Some(ix), |d| d.child(bar().left(px(-2.))))
-                            .when(insert == Some(count) && ix + 1 == count, |d| {
-                                d.child(bar().right(px(-2.)))
-                            })
-                    })
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |this, event, _, cx| {
-                            this.start_tab_drag(TitleTab::Workspace(id), event, cx)
-                        }),
-                    )
-                    .on_hover(cx.listener(move |this, hovered, _, cx| {
-                        if *hovered {
-                            this.tab_hover = Some(id);
-                        } else if this.tab_hover == Some(id) {
-                            this.tab_hover = None;
-                        }
-                        this.tabs_frame.update(cx, |_, cx| cx.notify());
-                    }))
-                    .on_mouse_down(
-                        MouseButton::Right,
-                        cx.listener(move |this, event: &MouseDownEvent, window, cx| {
-                            this.open_menu(
-                                MenuTarget::Tab(id),
-                                Anchor::Point(event.position),
-                                window,
-                                cx,
-                            );
-                        }),
-                    )
-                    .on_mouse_up(
-                        MouseButton::Middle,
-                        cx.listener(move |this, _, window, cx| {
-                            cx.stop_propagation();
-                            this.close(id, window, cx);
-                        }),
-                    )
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        if std::mem::take(&mut this.skip_tab_click) {
-                            return;
-                        }
-                        this.open_title_tab(&TitleTab::Workspace(id), window, cx);
-                    }));
-                    let element = if dragging {
-                        gpui::deferred(tab).with_priority(1).into_any()
-                    } else {
-                        tab.into_any()
-                    };
-                    Some((id, element))
-                })
-                .collect();
-        let mut live: HashMap<TitleTab, AnyElement> = tabs
-            .iter()
+                        .aria_selected(active)
+                        .cursor(CursorStyle::Arrow)
+                        .w(px(geometry.tab_width(&TitleTab::Workspace(id))))
+                        .flex_shrink_0()
+                        .h(px(TITLE_BAR_HEIGHT))
+                        .relative()
+                        .left(geometry.shifts[ix])
+                        .flex()
+                        .items_center()
+                        .child(
+                            title_tab_plate(active, hovered)
+                                .when(active && geometry.thumb_ready, |d| {
+                                    d.bg(gpui::transparent_black())
+                                })
+                                .child(geometry.glide.probe(ix))
+                                .id(("tab-plate", id as usize))
+                                .debug_selector(move || format!("title-tab-plate-{id}"))
+                                .relative()
+                                .w_full()
+                                .min_w_0()
+                                // A narrow tab keeps its mark; the close button
+                                // overlays it on hover instead of taking room.
+                                .when(
+                                    close
+                                        && geometry.tab_width(&TitleTab::Workspace(id))
+                                            >= TAB_CLOSE_MIN_WIDTH,
+                                    |d| d.pr_7(),
+                                )
+                                // Too narrow for the plate's padding: the mark sits centred.
+                                .when(geometry.tab_width(&TitleTab::Workspace(id)) < 30., |d| {
+                                    d.px(px(((geometry.tab_width(&TitleTab::Workspace(id)) - 14.)
+                                        / 2.)
+                                        .max(0.)))
+                                })
+                                .gap(px(6.))
+                                .child(self.pane_headline(
+                                    &copy,
+                                    (leaving, dir, progress),
+                                    active,
+                                    hovered,
+                                )),
+                        )
+                        .when(close, |d| {
+                            d.child(self.title_tab_close_button(id, &copy, cx))
+                        })
+                        .map(|d| self.title_tab_insertion(d, ix, geometry))
+                        .map(|d| self.title_tab_handlers(d, id, cx));
+                let element = if dragging {
+                    gpui::deferred(tab).with_priority(1).into_any()
+                } else {
+                    tab.into_any()
+                };
+                Some((id, element))
+            })
+            .collect()
+    }
+
+    fn live_title_elements(
+        &mut self,
+        tabs: &[TitleTab],
+        mut workspace_elements: HashMap<i64, AnyElement>,
+        geometry: &TabStripGeometry<'_>,
+        cx: &mut Context<Self>,
+    ) -> HashMap<TitleTab, AnyElement> {
+        tabs.iter()
             .enumerate()
             .filter_map(|(ix, tab)| {
                 let element = match tab {
                     TitleTab::Workspace(id) => workspace_elements.remove(id)?,
                     TitleTab::Terminal { .. } | TitleTab::Bot { .. } => {
                         let element = self
-                            .simple_title_tab(tab, tab_width(tab), (&glide, ix), cx)?
-                            .left(shifts[ix]);
-                        if dragged.as_ref() == Some(tab) {
+                            .simple_title_tab(
+                                tab,
+                                geometry.tab_width(tab),
+                                (&geometry.glide, ix),
+                                cx,
+                            )?
+                            .left(geometry.shifts[ix]);
+                        if geometry.dragged.as_ref() == Some(tab) {
                             gpui::deferred(element).with_priority(1).into_any_element()
                         } else {
                             element.into_any_element()
@@ -995,21 +1128,17 @@ impl Shell {
                 };
                 Some((tab.clone(), element))
             })
-            .collect();
-        if moving || opening || switching {
-            window.request_animation_frame();
-        }
-        // TabWidthMotion: the slot's width eases while the tab keeps its own.
-        let slot = |tab: &TitleTab, open: f32| {
-            let (w, give) = slot_size(tab, open);
-            div()
-                .flex_shrink_0()
-                .h(px(TITLE_BAR_HEIGHT))
-                .w(px(w))
-                .mr(px(-give))
-                .overflow_hidden()
-        };
-        let elements: Vec<AnyElement> = slots
+            .collect()
+    }
+
+    fn title_slot_elements(
+        &self,
+        slots: Vec<vorkspace_ui::tab_motion::Slot<TitleTab, ()>>,
+        mut live: HashMap<TitleTab, AnyElement>,
+        geometry: &TabStripGeometry<'_>,
+        cx: &Context<Self>,
+    ) -> Vec<AnyElement> {
+        slots
             .into_iter()
             .filter_map(|s| match s {
                 vorkspace_ui::tab_motion::Slot::Live { key, open } => {
@@ -1017,17 +1146,18 @@ impl Shell {
                     Some(if open >= 1. {
                         element
                     } else {
-                        slot(&key, open)
+                        geometry
+                            .opening_slot(&key, open)
                             // In a full strip the tab opens out of the new-tab
                             // button: its right edge shows first, so it grows
                             // leftward instead of sliding under the button.
-                            .when(crowded, |d| d.flex().justify_end())
+                            .when(geometry.crowded, |d| d.flex().justify_end())
                             .child(element)
                             .into_any_element()
                     })
                 }
                 vorkspace_ui::tab_motion::Slot::Closing { key, open, .. } => {
-                    let w = tab_width(&key);
+                    let w = geometry.tab_width(&key);
                     // A closed pane descriptor stays loaded while its tab
                     // animates out, so the headline remains readable.
                     let headline = key.session().and_then(|id| {
@@ -1036,7 +1166,8 @@ impl Shell {
                             .then(|| self.pane_headline(&copy, (None, 0., 1.), false, false))
                     });
                     Some(
-                        slot(&key, open)
+                        geometry
+                            .opening_slot(&key, open)
                             .child(
                                 div()
                                     .w(px(w))
@@ -1055,11 +1186,19 @@ impl Shell {
                     )
                 }
             })
-            .collect();
+            .collect()
+    }
+
+    fn title_strip_surface(
+        &self,
+        elements: Vec<AnyElement>,
+        geometry: TabStripGeometry<'_>,
+        cx: &Context<Self>,
+    ) -> AnyElement {
         div()
             .id("title-tab-strip")
             .debug_selector(|| "title-tab-strip".into())
-            .w(px(viewport))
+            .w(px(geometry.viewport))
             .min_w_0()
             .h(px(TITLE_BAR_HEIGHT))
             .relative()
@@ -1070,8 +1209,8 @@ impl Shell {
             .border_color(crate::panel_kit::stroke())
             // Outside the scrolled list, so the tabs keep their child indices
             // in `tab_scroll`; the thumb paints in window coordinates.
-            .child(glide.container())
-            .child(glide.thumb(
+            .child(geometry.glide.container())
+            .child(geometry.glide.thumb(
                 vorkspace_ui::theme::title_tab_fill(true, false),
                 radius::CONTROL,
             ))
@@ -1082,14 +1221,14 @@ impl Shell {
                     .min_w_0()
                     .h_full()
                     .overflow_hidden()
-                    .track_scroll(&self.tab_scroll)
+                    .track_scroll(&self.tabs.scroll)
                     .flex()
                     .items_center()
                     .gap(px(2.))
                     .pl(px(STRIP_LEAD))
                     .pr(px(STRIP_TRAIL - 2.))
                     .children(elements)
-                    .when(show_new, |d| {
+                    .when(geometry.show_new, |d| {
                         d.child(
                             div()
                                 .id("new-tab")
@@ -1101,7 +1240,7 @@ impl Shell {
                                 .cursor(CursorStyle::Arrow)
                                 .size(px(TAB_PLATE_HEIGHT))
                                 .flex_shrink_0()
-                                .ml(px(new_tab_lead))
+                                .ml(px(geometry.new_tab_lead))
                                 .rounded(px(radius::CONTROL))
                                 .relative()
                                 .opacity(0.65)
@@ -1126,7 +1265,7 @@ impl Shell {
                     })
                     .child(titlebar_drag_area().flex_1().min_w_0()),
             )
-            .when(show_switcher, |d| {
+            .when(geometry.show_switcher, |d| {
                 d.child(
                     icon_button("open-title-tabs", "Open tabs", "chevron-down")
                         .debug_selector(|| "open-title-tabs".into())
@@ -1134,11 +1273,11 @@ impl Shell {
                         .flex_shrink_0()
                         .mr(px(2.))
                         .size(px(TAB_PLATE_HEIGHT))
-                        .child(self.tab_switcher_anchor.probe())
+                        .child(self.tabs.switcher_anchor.probe())
                         .on_click(cx.listener(move |this, _, window, cx| {
                             this.open_menu(
-                                MenuTarget::Tabs(all_tabs.clone()),
-                                Anchor::Slot(this.tab_switcher_anchor.clone()),
+                                MenuTarget::Tabs(geometry.all_tabs.clone()),
+                                Anchor::Slot(this.tabs.switcher_anchor.clone()),
                                 window,
                                 cx,
                             );

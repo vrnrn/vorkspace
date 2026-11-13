@@ -5,7 +5,7 @@ use vorkspace_core::store::Store;
 
 #[gpui::test]
 fn removing_partial_live_source_keeps_saved_global_search_hits(cx: &mut TestAppContext) {
-    let store = Store::open(std::path::Path::new(":memory:")).unwrap();
+    let store = Store::test(std::path::Path::new(":memory:")).unwrap();
     let session = store.create("codex", "/project").unwrap();
     let view = cx.new(|cx| {
         SearchView::new(
@@ -44,7 +44,7 @@ fn removing_partial_live_source_keeps_saved_global_search_hits(cx: &mut TestAppC
 
 #[gpui::test]
 fn deleting_a_session_retires_its_inflight_saved_search(cx: &mut TestAppContext) {
-    let store = Store::open(std::path::Path::new(":memory:")).unwrap();
+    let store = Store::test(std::path::Path::new(":memory:")).unwrap();
     let session = store.create("codex", "/project").unwrap();
     let view = cx.new(|cx| {
         SearchView::new(
@@ -106,7 +106,7 @@ fn app_search_debounce_scope_keyboard_and_stale_results(cx: &mut TestAppContext)
         "const value = 'needle content';\n",
     )
     .unwrap();
-    let mut store = Store::open(std::path::Path::new(":memory:")).unwrap();
+    let mut store = Store::test(std::path::Path::new(":memory:")).unwrap();
     let mut session = store.create("codex", "/another-project").unwrap();
     store.title(session.id, "Needle conversation").unwrap();
     session.title = "Needle conversation".into();
@@ -283,7 +283,7 @@ fn reactivating_search_keeps_the_previous_file_listing_while_it_refreshes(cx: &m
     let dir = TempDir::new();
     std::fs::write(dir.path().join("kept.rs"), "").unwrap();
     let cwd = dir.path().to_string_lossy().into_owned();
-    let store = Store::open(std::path::Path::new(":memory:")).unwrap();
+    let store = Store::test(std::path::Path::new(":memory:")).unwrap();
     let view = cx.update(|cx| {
         input::bind(cx);
         cx.new(|cx| SearchView::new(cwd, Arc::new(Mutex::new(store)), Sources::default(), cx))

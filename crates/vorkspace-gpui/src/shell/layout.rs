@@ -4,65 +4,39 @@ use vorkspace_ui::radius;
 use super::Shell;
 use crate::{
     popover::{Anchor, popover},
-    resource_pressure::SessionInfo,
-    right_panel::RightPanel,
+    resource_pressure::{SessionInfo, StopSession},
 };
 use gpui::{
-    AnyElement, Context, CursorStyle, Entity, MouseButton, MouseDownEvent, StyleRefinement, Window,
-    div, prelude::*, px,
+    AnyElement, Context, CursorStyle, MouseButton, MouseDownEvent, StyleRefinement, Window, div,
+    prelude::*, px,
 };
 use std::collections::HashMap;
 use vorkspace_ui::theme::*;
 
 impl Shell {
     pub(super) fn docked_sidebar_width(&self) -> f32 {
-        self.sidebar_content_width * self.sidebar_fraction
+        self.sidebar.content_width * self.sidebar.fraction
     }
 
     pub(super) fn layout_body(
         &mut self,
         sidebar_width: f32,
-        right_shown: bool,
-        right_width: f32,
-        full: f32,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Vec<AnyElement> {
-        self.resources
-            .update(cx, |resources, cx| resources.set_classic(true, cx));
-        vec![self.classic_body(sidebar_width, right_shown, right_width, full, window, cx)]
-    }
-    fn classic_body(
-        &mut self,
-        sidebar_width: f32,
-        right_shown: bool,
-        right_width: f32,
-        full: f32,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let card = self.workspace_content(false, right_width, full, window, cx);
-        // A non-classic project panel retains its saved width.
-        let panel = self
-            .right_panel
-            .clone()
-            .filter(|_| right_shown && self.settings.is_none())
-            .map(|panel| self.right_panel_frame(panel, right_width, full, cx));
+        let card = self.workspace_content(window, cx);
         // Every workspace destination shares the title row. Settings keeps
         // its own header above the parked workspace.
-        let project_tools = self.has_session_panes();
         // Collapsed navigation can extend past the rail. Keep its drag row
         // above page headers so the controls cannot cover their inputs.
         let tab_bar = self.titlebar(window, cx);
         let navigation = self.navigation(window, cx);
         let rail_width = self.classic_rail_width();
-        // At zero width the cached rail is not rendered, so it cannot stop
-        // presentation tasks itself.
         if rail_width <= 0. {
-            self.hide_project_marks(cx);
+            self.sidebar
+                .live_agents
+                .update(cx, |activity, _| activity.hide());
         }
-        let corner =
-            (self.settings.is_none() && project_tools).then(|| self.panel_toggle(window, cx));
         let header = self.classic_workspace_header(cx);
         // Sessions, Explorer and Changes sit beside the rail on the left.
         let sidebar_navigation_row = self.rail_overhang(window) > 0.;
@@ -90,11 +64,11 @@ impl Shell {
                         .absolute()
                         .left_0()
                         .top_0()
-                        .w(px(self.sidebar_content_width))
+                        .w(px(self.sidebar.content_width))
                         .h_full()
                         .flex()
                         .flex_col()
-                        .opacity(self.sidebar_fraction)
+                        .opacity(self.sidebar.fraction)
                         // A collapsed rail leaves navigation over the left sidebar.
                         // Give it a row above the project switcher and its actions.
                         .when(sidebar_navigation_row, |d| {
@@ -158,34 +132,11 @@ impl Shell {
                     ),
             )
             .children(self.sidebar_resize(cx))
-            .children(panel.map(|panel| div().h_full().bg(pane_fill()).child(panel)))
             .child(div().absolute().top_0().left_0().child(navigation))
-            .child(
-                div()
-                    .absolute()
-                    .top_0()
-                    .right_0()
-                    .h(px(TITLE_BAR_HEIGHT))
-                    .children(corner),
-            )
             .into_any_element()
     }
-    /// Project tools have their own header.
-    pub(super) fn corner_room(&self, cx: &gpui::App) -> f32 {
-        // The open sidebar's header holds them instead (`classic_corner`).
-        let _ = cx;
-        6.
-    }
-    pub(super) fn classic_corner(
-        &self,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let _ = cx;
-        div().into_any_element()
-    }
     pub(super) fn sidebar_uncached(&self) -> bool {
-        self.sidebar_slide.is_some()
+        self.sidebar.slide.is_some()
     }
 
     fn sidebar_contents(&self) -> AnyElement {
@@ -199,7 +150,7 @@ impl Shell {
                 .clone()
                 .cached(
                     StyleRefinement::default()
-                        .w(px(self.sidebar_content_width))
+                        .w(px(self.sidebar.content_width))
                         .h_full(),
                 )
                 .into_any_element()
@@ -207,9 +158,9 @@ impl Shell {
     }
     fn sidebar_resize(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         (self.workspace.sidebar_visible
-            && self.sidebar_fraction > 0.
-            && self.sidebar_content_width == self.workspace.right_panel_width
-            && self.sidebar_slide.is_none())
+            && self.sidebar.fraction > 0.
+            && self.sidebar.content_width == self.workspace.right_panel_width
+            && self.sidebar.slide.is_none())
         .then(|| {
             // Drag the sidebar's separator on the pane's side.
             let border = self.workspace.right_panel_width - 0.5;
@@ -224,23 +175,16 @@ impl Shell {
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(|this, event: &MouseDownEvent, _, cx| {
-                        this.resize = Some((event.position.x, this.workspace.right_panel_width));
+                        this.sidebar.resize =
+                            Some((event.position.x, this.workspace.right_panel_width));
                         cx.stop_propagation();
                     }),
                 )
                 .into_any_element()
         })
     }
-    /// The workspace body, its error banner and the right panel beside them.
-    fn workspace_content(
-        &mut self,
-        right_shown: bool,
-        right_width: f32,
-        full: f32,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> gpui::Div {
-        if let Some(settings) = &self.settings {
+    fn workspace_content(&mut self, window: &mut Window, cx: &mut Context<Self>) -> gpui::Div {
+        if let Some(settings) = &self.pages.settings {
             return div()
                 .flex_1()
                 .min_h_0()
@@ -249,35 +193,22 @@ impl Shell {
                 .overflow_hidden()
                 .child(settings.clone());
         }
-        let panel: Option<Entity<RightPanel>> = self
-            .right_panel
-            .clone()
-            .filter(|_| right_shown && self.settings.is_none());
-        div()
-            .flex_1()
-            .min_h_0()
-            .overflow_hidden()
-            .flex()
-            .child(self.background_card.probe())
-            .child(
-                div().flex_1().min_w_0().h_full().flex().flex_col().child(
-                    div()
-                        .flex_1()
-                        .min_h_0()
-                        .min_w_0()
-                        // Every project lands on a blank session, as in
-                        // vorkspace; this is empty only while one is created.
-                        .child({
-                            let body = self.workspace_body(window, cx);
-                            self.with_dock(body, window, cx)
-                        }),
-                ),
-            )
-            .when_some(panel, |d, panel| {
-                d.child(self.right_panel_frame(panel, right_width, full, cx))
-            })
+        div().flex_1().min_h_0().overflow_hidden().flex().child(
+            div().flex_1().min_w_0().h_full().flex().flex_col().child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .min_w_0()
+                    // Every project lands on a blank session, as in
+                    // vorkspace; this is empty only while one is created.
+                    .child({
+                        let body = self.workspace_body(window, cx);
+                        self.with_dock(body, window, cx)
+                    }),
+            ),
+        )
     }
-    /// Modal.tsx at size `sm` with `fitViewport`: 420px, centred.
+    /// A small modal fitted to the viewport: 420px, centred.
     pub(super) fn resource_modal(
         &self,
         window: &Window,
@@ -286,21 +217,39 @@ impl Shell {
         if !self.resources.read(cx).is_open() {
             return None;
         }
-        let mut sessions: HashMap<i64, SessionInfo> = self
-            .sessions
-            .iter()
-            .map(|(id, session)| {
-                let summary = &session.read(cx).summary;
-                let info = SessionInfo {
-                    title: summary.title.clone().into(),
-                    provider: summary.provider.clone(),
+        let roster = self
+            .app_core
+            .as_ref()
+            .and_then(|core| core.read(cx).bot_roster.read(cx).committed());
+        let sessions: HashMap<i64, SessionInfo> = self
+            .resources
+            .read(cx)
+            .displayed_sessions()
+            .filter_map(|id| {
+                let local_bot = self
+                    .bots
+                    .as_ref()
+                    .and_then(|bots| bots.read(cx).calling_view(id, cx));
+                let summary = self
+                    .sessions
+                    .get(&id)
+                    .or(local_bot.as_ref())
+                    .map(|view| &view.read(cx).summary)
+                    .or_else(|| self.session_summary(id, cx));
+                let info = if let Some(summary) = summary {
+                    SessionInfo {
+                        title: summary.title.clone().into(),
+                        provider: Some(summary.provider.clone()),
+                    }
+                } else {
+                    SessionInfo {
+                        title: roster?.of_session(id)?.name.clone().into(),
+                        provider: None,
+                    }
                 };
-                (*id, info)
+                Some((id, info))
             })
             .collect();
-        if let Some(m) = &self.bots {
-            sessions.extend(m.read(cx).resource_sessions(cx));
-        }
         let content = self
             .resources
             .update(cx, |monitor, cx| monitor.dialog(&sessions, window, cx));
@@ -320,7 +269,7 @@ impl Shell {
                 .bg(vorkspace_ui::fluid::scrim(0.4))
                 .child(
                     popover("running-work-modal", anchor)
-                        .modal_surface(self.workspace.classic_layout)
+                        .modal_surface()
                         .width(width)
                         .gap(0.)
                         .max_height(viewport.height.as_f32() - 32.)
@@ -332,6 +281,34 @@ impl Shell {
                 )
                 .into_any_element(),
         )
+    }
+
+    pub(crate) fn show_running_work(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.management_modal_focus(cx).is_none() {
+            self.resources
+                .update(cx, |resources, cx| resources.open(window, cx));
+        }
+    }
+
+    pub(super) fn stop_resource_turn(&self, request: &StopSession, cx: &mut Context<Self>) {
+        let core = self.app_core.clone();
+        let monitor = self.resources.downgrade();
+        let request = request.clone();
+        // Let this Shell update finish before the conversation publishes Stop.
+        cx.defer(move |cx| {
+            let store = core.as_ref().map(|core| core.read(cx).store.clone());
+            let stopped = store.is_some_and(|store| {
+                crate::conversation::turn_driver::stop_running(
+                    &store,
+                    request.session,
+                    &request.turn,
+                    cx,
+                )
+            });
+            let _ = monitor.update(cx, |monitor, cx| {
+                monitor.finish_session_stop(&request, stopped, cx)
+            });
+        });
     }
 }
 

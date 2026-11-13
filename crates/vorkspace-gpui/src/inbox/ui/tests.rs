@@ -53,16 +53,16 @@ fn fixture(cx: &mut TestAppContext) -> WindowHandle<Fixture> {
         }, |_, cx| cx.new(|cx| {
             let item = Item { provider: "github".into(), kind: "pr".into(), state: "open".into(), number: 7, ..Default::default() };
             let inbox = cx.new(|cx| {
-                let store = Arc::new(Mutex::new(vorkspace_core::store::Store::open(std::path::Path::new(":memory:")).unwrap()));
-                let mut view = Inbox::new_inner(store, vec![], PathBuf::from("/private/tmp/inbox-regression"), false, cx);
-                view.snapshot.items = vec![item.clone()]; view.selected = Some(item.key());
-                view.details = Some(Details { body: "Description".into(), ..Default::default() });
+                let store = Arc::new(Mutex::new(vorkspace_core::store::Store::test(std::path::Path::new(":memory:")).unwrap()));
+                let mut view = Inbox::new_for_test(store, vec![], PathBuf::from("/private/tmp/inbox-regression"), cx);
+                Rc::make_mut(&mut view.snapshot).items = vec![item.clone()]; view.selected = Some(item.key());
+                view.detail.details = Some(Details { body: "Description".into(), ..Default::default() });
                 let comments = (0..100).map(|ix| model::Comment {
                     id: format!("comment-{ix}"), body: (0..30).map(|line| format!("### Finding {line}\n\nReview **retry handling** in `src/main.rs` before returning.\n\n")).collect(),
                     created_at: format!("2026-10-22T08:{:02}:00Z", ix % 60), ..Default::default()
                 }).collect::<Vec<_>>();
-                view.comments = comments.iter().map(|comment| (comment.clone(), cx.new(|cx| document::InboxDocument::new(comment.body.clone(), PathBuf::from("/repo"), cx)))).collect();
-                view.thread = Some(Thread { comments, ..Default::default() });
+                view.detail.comments = comments.iter().map(|comment| (comment.clone(), cx.new(|cx| document::InboxDocument::new(comment.body.clone(), PathBuf::from("/repo"), cx)))).collect();
+                view.detail.thread = Some(Thread { comments, ..Default::default() });
                 view.rebuild_activity(); view
             });
             Fixture { inbox, item }
@@ -91,14 +91,13 @@ fn inbox_window_at_width(cx: &mut TestAppContext, width: f32) -> WindowHandle<In
             |_, cx| {
                 cx.new(|cx| {
                     let store = Arc::new(Mutex::new(
-                        vorkspace_core::store::Store::open(std::path::Path::new(":memory:"))
+                        vorkspace_core::store::Store::test(std::path::Path::new(":memory:"))
                             .unwrap(),
                     ));
-                    Inbox::new_inner(
+                    Inbox::new_for_test(
                         store,
                         vec![],
                         PathBuf::from("/private/tmp/inbox-connectors"),
-                        false,
                         cx,
                     )
                 })
@@ -125,9 +124,9 @@ fn connector_detail_headers_start_at_the_pane_inset_at_every_zoom(cx: &mut TestA
                     ..Default::default()
                 };
                 inbox.state.source = provider.into();
-                inbox.selected = Some(item.key());
-                inbox.snapshot.items = vec![item];
-                inbox.details = Some(Details::default());
+                inbox.selected = Some(item.detail_key());
+                Rc::make_mut(&mut inbox.snapshot).items = vec![item];
+                inbox.detail.details = Some(Details::default());
                 inbox.narrow_detail = true;
                 cx.notify();
             })
@@ -168,11 +167,12 @@ fn narrow_navigation_preserves_the_open_item_and_comment_draft(cx: &mut TestAppC
                 ..Default::default()
             };
             let key = item.key();
-            inbox.snapshot.items = vec![item];
+            Rc::make_mut(&mut inbox.snapshot).items = vec![item];
             inbox.selected = Some(key.clone());
-            inbox.details = Some(Details::default());
+            inbox.detail.details = Some(Details::default());
             inbox.narrow_detail = true;
             inbox
+                .composer
                 .comment
                 .update(cx, |input, cx| input.set_text("Unsent comment".into(), cx));
             cx.notify();
@@ -198,10 +198,64 @@ fn narrow_navigation_preserves_the_open_item_and_comment_draft(cx: &mut TestAppC
     window
         .update(visual, |inbox, _, cx| {
             assert_eq!(inbox.selected.as_deref(), Some(key.as_str()));
-            assert_eq!(inbox.comment.read(cx).content.as_ref(), "Unsent comment");
-            assert!(inbox.details.is_some());
+            assert_eq!(
+                inbox.composer.comment.read(cx).content.as_ref(),
+                "Unsent comment"
+            );
+            assert!(inbox.detail.details.is_some());
         })
         .unwrap();
+}
+
+#[gpui::test]
+fn pinned_connector_tabs_retain_server_identity_and_draft_after_reconnect(cx: &mut TestAppContext) {
+    let window = inbox_window_at_width(cx, 1100.);
+    let old = Item {
+        provider: "jira".into(),
+        kind: "issue".into(),
+        id: "10042".into(),
+        identifier: "DEMO-42".into(),
+        title: "Previous site issue".into(),
+        url: "https://previous.example/browse/DEMO-42".into(),
+        ..Default::default()
+    };
+    let new = Item {
+        title: "Current site issue".into(),
+        url: "https://current.example/browse/DEMO-42".into(),
+        updated_at: "2026-11-10T10:00:00Z".into(),
+        ..old.clone()
+    };
+    assert_eq!(old.key(), new.key());
+    let (previous, current) = window
+        .update(cx, |root, _, cx| {
+            let previous = root.connector_item_page("jira", old.clone(), cx);
+            previous.update(cx, |page, cx| {
+                page.composer.comment.update(cx, |input, cx| {
+                    input.set_text("Draft for the previous site".into(), cx);
+                });
+            });
+            Rc::make_mut(&mut root.snapshot).items = vec![new.clone()];
+            let current = root.connector_item_page("jira", new.clone(), cx);
+            assert_ne!(previous, current);
+            assert!(
+                !crate::workspace::AppPane::ConnectorItem(Box::new(old.clone())).same_resource(
+                    &crate::workspace::AppPane::ConnectorItem(Box::new(new.clone()))
+                )
+            );
+            root.publish_pages(cx);
+            (previous, current)
+        })
+        .unwrap();
+    cx.run_until_parked();
+    cx.update(|cx| {
+        let previous = previous.read(cx);
+        assert_eq!(previous.pinned_item(), Some(&old));
+        assert_eq!(
+            previous.composer.comment.read(cx).content.as_ref(),
+            "Draft for the previous site"
+        );
+        assert_eq!(current.read(cx).pinned_item(), Some(&new));
+    });
 }
 
 #[gpui::test]
@@ -228,20 +282,19 @@ fn a_narrow_connector_tile_uses_its_width_inside_a_wide_window(cx: &mut TestAppC
             |_, cx| {
                 cx.new(|cx| {
                     let store = Arc::new(Mutex::new(
-                        vorkspace_core::store::Store::open(std::path::Path::new(":memory:"))
+                        vorkspace_core::store::Store::test(std::path::Path::new(":memory:"))
                             .unwrap(),
                     ));
                     let inbox = cx.new(|cx| {
-                        let mut inbox = Inbox::new_inner(
+                        let mut inbox = Inbox::new_for_test(
                             store,
                             vec![],
                             PathBuf::from("/private/tmp/inbox-tile"),
-                            false,
                             cx,
                         );
-                        inbox.snapshot.items = vec![item];
+                        Rc::make_mut(&mut inbox.snapshot).items = vec![item];
                         inbox.selected = Some(key.clone());
-                        inbox.details = Some(Details::default());
+                        inbox.detail.details = Some(Details::default());
                         inbox
                     });
                     TiledFixture { inbox, width }
@@ -285,7 +338,7 @@ fn connector_pages_keep_drafts_filters_scroll_and_pending_details_with_one_obser
     let (github, jira) = window
         .update(cx, |root, _, cx| {
             root.loading = true;
-            root.snapshot.items = ["github", "jira"]
+            Rc::make_mut(&mut root.snapshot).items = ["github", "jira"]
                 .into_iter()
                 .map(|provider| Item {
                     provider: provider.into(),
@@ -309,17 +362,18 @@ fn connector_pages_keep_drafts_filters_scroll_and_pending_details_with_one_obser
         ] {
             page.update(cx, |page, cx| {
                 assert_eq!(page.state.source, source);
-                page.selected = Some(page.visible_items(cx)[0].key());
-                page.detail_generation = 5;
-                page.detail_loading = true;
+                page.selected = Some(page.first_visible_key(cx).unwrap());
+                page.detail.generation = 5;
+                page.detail.loading = true;
                 page.search
                     .update(cx, |input, cx| input.set_text(source.into(), cx));
-                page.comment
+                page.composer
+                    .comment
                     .update(cx, |input, cx| input.set_text(draft.into(), cx));
-                page.reply = Some((format!("{source}-thread"), source.into()));
+                page.composer.reply = Some((format!("{source}-thread"), source.into()));
                 page.state.filters.time = if source == "github" { "7d" } else { "30d" }.into();
-                page.summary_scroll = ListState::new(100, ListAlignment::Top, px(200.));
-                page.summary_scroll.scroll_to(gpui::ListOffset {
+                page.summary.scroll = ListState::new(100, ListAlignment::Top, px(200.));
+                page.summary.scroll.scroll_to(gpui::ListOffset {
                     item_ix: 12,
                     offset_in_item: px(4.),
                 });
@@ -335,7 +389,7 @@ fn connector_pages_keep_drafts_filters_scroll_and_pending_details_with_one_obser
                 Err("stale".into()),
                 cx,
             );
-            assert!(page.detail_loading && page.detail_error.is_none());
+            assert!(page.detail.loading && page.detail.error.is_none());
             page.finish_detail(
                 5,
                 "jira:wrong-key".into(),
@@ -343,7 +397,7 @@ fn connector_pages_keep_drafts_filters_scroll_and_pending_details_with_one_obser
                 Err("wrong provider".into()),
                 cx,
             );
-            assert!(page.detail_loading);
+            assert!(page.detail.loading);
             page.finish_detail(
                 5,
                 page.selected.clone().unwrap(),
@@ -354,22 +408,22 @@ fn connector_pages_keep_drafts_filters_scroll_and_pending_details_with_one_obser
                 Ok(Thread::default()),
                 cx,
             );
-            assert_eq!(page.details.as_ref().unwrap().body, "GitHub detail");
+            assert_eq!(page.detail.details.as_ref().unwrap().body, "GitHub detail");
         });
         jira.update(cx, |page, _| {
-            assert!(page.details.is_none() && page.detail_loading)
+            assert!(page.detail.details.is_none() && page.detail.loading)
         });
     });
     let changes = std::rc::Rc::new(std::cell::Cell::new(0));
     let output = changes.clone();
     let _events = window
         .update(cx, |root, _, cx| {
-            let subscription = cx.subscribe(&cx.entity(), move |_, _, event: &Event, _| {
-                if matches!(event, Event::Activity { .. }) {
+            let subscription = cx.subscribe(&root.feed, move |_, _, event: &FeedEvent, _| {
+                if matches!(event, FeedEvent::Discovered { .. }) {
                     output.set(output.get() + 1);
                 }
             });
-            let mut snapshot = root.snapshot.clone();
+            let mut snapshot = (*root.snapshot).clone();
             snapshot.connections.insert(
                 "jira".into(),
                 model::Status {
@@ -381,14 +435,8 @@ fn connector_pages_keep_drafts_filters_scroll_and_pending_details_with_one_obser
                 .errors
                 .insert("github".into(), "Temporarily unavailable".into());
             snapshot.items.retain(|item| item.provider != "github");
-            root.generation = 7;
-            root.finish_refresh(
-                7,
-                root.state.fetch_scope(&root.projects),
-                snapshot,
-                vec![],
-                cx,
-            );
+            let generation = root.stage_fixture_poll(cx);
+            root.finish_fixture_poll(generation, snapshot, cx);
             subscription
         })
         .unwrap();
@@ -396,7 +444,7 @@ fn connector_pages_keep_drafts_filters_scroll_and_pending_details_with_one_obser
     assert_eq!(
         changes.get(),
         1,
-        "only the root observes and emits activity"
+        "the shared feed emits once for both provider pages"
     );
     cx.update(|cx| {
         for (page, source, draft, time) in [
@@ -407,10 +455,13 @@ fn connector_pages_keep_drafts_filters_scroll_and_pending_details_with_one_obser
                 page.set_active(true, cx);
                 assert_eq!(page.state.source, source);
                 assert_eq!(page.search.read(cx).content.as_ref(), source);
-                assert_eq!(page.comment.read(cx).content.as_ref(), draft);
+                assert_eq!(page.composer.comment.read(cx).content.as_ref(), draft);
                 assert_eq!(page.state.filters.time, time);
-                assert_eq!(page.summary_scroll.logical_scroll_top().item_ix, 12);
-                assert_eq!(page.reply.as_ref().unwrap().0, format!("{source}-thread"));
+                assert_eq!(page.summary.scroll.logical_scroll_top().item_ix, 12);
+                assert_eq!(
+                    page.composer.reply.as_ref().unwrap().0,
+                    format!("{source}-thread")
+                );
             });
         }
     });
@@ -418,6 +469,10 @@ fn connector_pages_keep_drafts_filters_scroll_and_pending_details_with_one_obser
         .update(cx, |root, _, cx| {
             assert_eq!(root.pages.len(), 2);
             assert_eq!(root.connector_page("github", cx), github);
+            for page in [&github, &jira] {
+                assert!(Rc::ptr_eq(&root.snapshot, &page.read(cx).snapshot));
+                assert!(Rc::ptr_eq(&root.sessions, &page.read(cx).sessions));
+            }
             let state = ViewState::load(&locked(&root.store).unwrap());
             assert_eq!(state.filters_for("github").time, "7d");
             assert_eq!(state.filters_for("jira").time, "30d");
@@ -447,7 +502,7 @@ fn item_pages_keep_pinned_identity_and_independent_view_state_across_snapshots(
     };
     let (section, first_page, second_page) = window
         .update(cx, |root, _, cx| {
-            root.snapshot.items = vec![
+            Rc::make_mut(&mut root.snapshot).items = vec![
                 Item {
                     project_path: "/work/clone-a".into(),
                     other_project_paths: vec![first.project_path.clone()],
@@ -483,16 +538,17 @@ fn item_pages_keep_pinned_identity_and_independent_view_state_across_snapshots(
             page.update(cx, |page, cx| {
                 assert_eq!(page.pinned_item().unwrap().key(), item.key());
                 assert_eq!(page.document_cwd(), PathBuf::from(&item.project_path));
-                page.comment
+                page.composer
+                    .comment
                     .update(cx, |input, cx| input.set_text(draft.into(), cx));
-                page.reply = Some((item.key(), draft.into()));
-                page.summary_scroll = ListState::new(100, ListAlignment::Top, px(200.));
-                page.summary_scroll.scroll_to(gpui::ListOffset {
+                page.composer.reply = Some((item.key(), draft.into()));
+                page.summary.scroll = ListState::new(100, ListAlignment::Top, px(200.));
+                page.summary.scroll.scroll_to(gpui::ListOffset {
                     item_ix: if item.number == 41 { 12 } else { 24 },
                     offset_in_item: px(4.),
                 });
-                page.detail_generation = 4;
-                page.detail_loading = true;
+                page.detail.generation = 4;
+                page.detail.loading = true;
                 page.finish_detail(
                     4,
                     item.key(),
@@ -508,7 +564,7 @@ fn item_pages_keep_pinned_identity_and_independent_view_state_across_snapshots(
     });
     window
         .update(cx, |root, _, cx| {
-            root.snapshot.items = vec![Item {
+            Rc::make_mut(&mut root.snapshot).items = vec![Item {
                 title: "Second issue updated".into(),
                 updated_at: "2026-11-02T10:00:00Z".into(),
                 ..second.clone()
@@ -521,10 +577,13 @@ fn item_pages_keep_pinned_identity_and_independent_view_state_across_snapshots(
         first_page.update(cx, |page, cx| {
             assert_eq!(page.item().unwrap().key(), first.key());
             assert_eq!(page.pane_title(), "First issue");
-            assert_eq!(page.details.as_ref().unwrap().body, "First draft");
-            assert_eq!(page.comment.read(cx).content.as_ref(), "First draft");
-            assert_eq!(page.reply.as_ref().unwrap().0, first.key());
-            assert_eq!(page.summary_scroll.logical_scroll_top().item_ix, 12);
+            assert_eq!(page.detail.details.as_ref().unwrap().body, "First draft");
+            assert_eq!(
+                page.composer.comment.read(cx).content.as_ref(),
+                "First draft"
+            );
+            assert_eq!(page.composer.reply.as_ref().unwrap().0, first.key());
+            assert_eq!(page.summary.scroll.logical_scroll_top().item_ix, 12);
             page.finish_detail(
                 4,
                 second.key(),
@@ -532,14 +591,17 @@ fn item_pages_keep_pinned_identity_and_independent_view_state_across_snapshots(
                 Err("wrong item".into()),
                 cx,
             );
-            assert_eq!(page.details.as_ref().unwrap().body, "First draft");
+            assert_eq!(page.detail.details.as_ref().unwrap().body, "First draft");
         });
         second_page.update(cx, |page, cx| {
             assert_eq!(page.item().unwrap().key(), second.key());
             assert_eq!(page.pane_title(), "Second issue updated");
-            assert_eq!(page.details.as_ref().unwrap().body, "Second draft");
-            assert_eq!(page.comment.read(cx).content.as_ref(), "Second draft");
-            assert_eq!(page.summary_scroll.logical_scroll_top().item_ix, 24);
+            assert_eq!(page.detail.details.as_ref().unwrap().body, "Second draft");
+            assert_eq!(
+                page.composer.comment.read(cx).content.as_ref(),
+                "Second draft"
+            );
+            assert_eq!(page.summary.scroll.logical_scroll_top().item_ix, 24);
         });
         section.update(cx, |page, _| {
             assert!(page.pinned_item().is_none());
@@ -549,7 +611,7 @@ fn item_pages_keep_pinned_identity_and_independent_view_state_across_snapshots(
     });
     window
         .update(cx, |root, _, cx| {
-            root.snapshot.items = vec![Item {
+            Rc::make_mut(&mut root.snapshot).items = vec![Item {
                 title: "First issue updated".into(),
                 updated_at: "2026-11-03T10:00:00Z".into(),
                 project_path: "/work/clone-a".into(),
@@ -587,7 +649,7 @@ fn item_page_read_receipts_do_not_restore_old_filters_and_closed_pages_are_relea
     };
     let page = window
         .update(cx, |root, _, cx| {
-            root.snapshot.items.push(item.clone());
+            Rc::make_mut(&mut root.snapshot).items.push(item.clone());
             root.connector_item_page("jira", item.clone(), cx)
         })
         .unwrap();
@@ -618,7 +680,7 @@ fn item_page_read_receipts_do_not_restore_old_filters_and_closed_pages_are_relea
             root.connector_item_page("jira", item.clone(), cx)
         })
         .unwrap();
-    retained.update(cx, |page, _| page.posting = true);
+    retained.update(cx, |page, _| page.composer.posting = true);
     window
         .update(cx, |root, _, cx| {
             root.release_item_page(&item, cx);
@@ -627,7 +689,7 @@ fn item_page_read_receipts_do_not_restore_old_filters_and_closed_pages_are_relea
         })
         .unwrap();
     retained.update(cx, |page, cx| {
-        page.posting = false;
+        page.composer.posting = false;
         page.finish_pending_release(cx);
     });
     window
@@ -658,9 +720,9 @@ fn item_tab_actions_keep_ordinary_selection_and_pinned_page_has_no_list(cx: &mut
     let opened = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
     let _subscription = window
         .update(cx, |root, _, cx| {
-            root.snapshot.items = vec![first.clone(), second.clone()];
+            Rc::make_mut(&mut root.snapshot).items = vec![first.clone(), second.clone()];
             root.selected = Some(first.key());
-            root.details = Some(Details::default());
+            root.detail.details = Some(Details::default());
             let opened = opened.clone();
             let subscription = cx.subscribe(&cx.entity(), move |_, _, event: &Event, _| {
                 if let Event::OpenTab(item) = event {
@@ -725,17 +787,16 @@ fn pinned_item_page_renders_detail_without_a_library_list(cx: &mut TestAppContex
             },
             |_, cx| {
                 let store = Arc::new(Mutex::new(
-                    vorkspace_core::store::Store::open(std::path::Path::new(":memory:")).unwrap(),
+                    vorkspace_core::store::Store::test(std::path::Path::new(":memory:")).unwrap(),
                 ));
                 let root = cx.new(|cx| {
-                    let mut root = Inbox::new_inner(
+                    let mut root = Inbox::new_for_test(
                         store,
                         vec![],
                         PathBuf::from("/private/tmp/inbox-pinned"),
-                        false,
                         cx,
                     );
-                    root.snapshot.items = vec![item.clone()];
+                    Rc::make_mut(&mut root.snapshot).items = vec![item.clone()];
                     root
                 });
                 let page = root.update(cx, |root, cx| {
@@ -767,7 +828,7 @@ fn retained_connector_pages_dispatch_with_current_defaults_and_preserve_explicit
                     .to_vec(),
                 cx,
             );
-            root.snapshot.items = ["jira", "gitlab"]
+            Rc::make_mut(&mut root.snapshot).items = ["jira", "gitlab"]
                 .map(|provider| Item {
                     provider: provider.into(),
                     identifier: format!("{provider}-42"),
@@ -791,13 +852,14 @@ fn retained_connector_pages_dispatch_with_current_defaults_and_preserve_explicit
                         .iter()
                         .find(|item| item.provider == *provider)
                         .unwrap()
-                        .key(),
+                        .detail_key(),
                 );
                 page.reset_destination();
-                assert_eq!(page.start_bot.as_deref(), Some("first"));
-                page.comment
+                assert_eq!(page.start.bot.as_deref(), Some("first"));
+                page.composer
+                    .comment
                     .update(cx, |input, cx| input.set_text("Unsent draft".into(), cx));
-                page.start_project = "/chosen/project".into();
+                page.start.project = "/chosen/project".into();
                 let output = sent.clone();
                 cx.subscribe(&cx.entity(), move |_, _, event: &Event, _| {
                     if let Event::StartSession { item, bot, .. } = event {
@@ -817,8 +879,8 @@ fn retained_connector_pages_dispatch_with_current_defaults_and_preserve_explicit
             cx.update(|cx| {
                 for (provider, page) in &pages {
                     page.update(cx, |page, _| {
-                        page.destination_explicit = true;
-                        page.start_bot = (*provider == "jira").then(|| "chosen".into());
+                        page.start.destination_explicit = true;
+                        page.start.bot = (*provider == "jira").then(|| "chosen".into());
                     });
                 }
             });
@@ -840,12 +902,15 @@ fn retained_connector_pages_dispatch_with_current_defaults_and_preserve_explicit
                         } else {
                             (!default.is_empty()).then_some(default)
                         };
-                        assert_eq!(page.start_bot.as_deref(), expected);
+                        assert_eq!(page.start.bot.as_deref(), expected);
                         assert_eq!(
                             page.state.default_bots.get(provider),
                             (!default.is_empty()).then_some(default)
                         );
-                        assert_eq!(page.comment.read(cx).content.as_ref(), "Unsent draft");
+                        assert_eq!(
+                            page.composer.comment.read(cx).content.as_ref(),
+                            "Unsent draft"
+                        );
                         page.set_active(true, cx);
                         page.start(cx);
                         page.set_active(false, cx);
@@ -891,12 +956,12 @@ fn disabling_a_source_removes_controls_unread_and_selection_and_rejects_inflight
             ..Default::default()
         })
         .collect::<Vec<_>>();
-    let old_scope = window
+    let generation = window
         .update(cx, |inbox, _, cx| {
-            inbox.snapshot.items = items.clone();
+            Rc::make_mut(&mut inbox.snapshot).items = items.clone();
             inbox.state.seen.seeded = true;
             for provider in model::PROVIDERS {
-                inbox.snapshot.connections.insert(
+                Rc::make_mut(&mut inbox.snapshot).connections.insert(
                     provider.into(),
                     model::Status {
                         connected: true,
@@ -905,25 +970,22 @@ fn disabling_a_source_removes_controls_unread_and_selection_and_rejects_inflight
                 );
             }
             inbox.selected = Some(items[0].key());
-            inbox.details = Some(Details::default());
-            inbox.loading = true;
-            inbox.generation = 7;
-            let old_scope = inbox.state.fetch_scope(&inbox.projects);
+            inbox.detail.details = Some(Details::default());
+            let generation = inbox.stage_fixture_poll(cx);
             inbox.set_connector_enabled("github", false, cx).unwrap();
             assert_eq!(inbox.unread_count(), 2);
             assert_eq!(inbox.state.source, "gitlab");
-            assert!(inbox.selected.is_none() && inbox.details.is_none());
+            assert!(inbox.selected.is_none() && inbox.detail.details.is_none());
             assert!(!inbox.connection_statuses().contains_key("github"));
             assert_eq!(
                 inbox
                     .visible_items(cx)
-                    .iter()
                     .map(|item| item.provider.as_str())
                     .collect::<Vec<_>>(),
                 ["gitlab"]
             );
             assert!(!model::Connectors::load(&locked(&inbox.store).unwrap()).enabled("github"));
-            old_scope
+            generation
         })
         .unwrap();
     let visual = &mut gpui::VisualTestContext::from_window(window.into(), cx);
@@ -949,12 +1011,12 @@ fn disabling_a_source_removes_controls_unread_and_selection_and_rejects_inflight
                 .into(),
                 ..Default::default()
             };
-            inbox.finish_refresh(7, old_scope, stale, vec![], cx);
+            inbox.finish_fixture_poll(generation, stale, cx);
             assert!(inbox.snapshot.items.is_empty());
             assert!(inbox.connection_statuses().is_empty());
             for provider in ["github", "linear", "azuredevops"] {
                 inbox.open_connection(provider.into(), cx);
-                assert!(inbox.connect_provider.is_none());
+                assert!(inbox.connect.provider.is_none());
             }
         })
         .unwrap();
@@ -963,7 +1025,7 @@ fn disabling_a_source_removes_controls_unread_and_selection_and_rejects_inflight
         .update(visual, |inbox, _, _| {
             assert!(
                 !inbox.loading,
-                "the replacement all-disabled refresh must complete without adapters"
+                "the stale poll must release its loading state with all connectors disabled"
             );
             assert!(inbox.snapshot.items.is_empty() && inbox.snapshot.connections.is_empty());
         })
@@ -978,8 +1040,8 @@ fn own_successful_revision_is_read_suppressed_and_later_remote_revision_can_chim
     let output = changes.clone();
     let _subscription = window
         .update(cx, |inbox, _, cx| {
-            let subscription = cx.subscribe(&cx.entity(), move |_, _, event: &Event, _| {
-                if let Event::Activity { changed, .. } = event {
+            let subscription = cx.subscribe(&inbox.feed, move |_, _, event: &FeedEvent, _| {
+                if let FeedEvent::Discovered { changed, .. } = event {
                     output.borrow_mut().push(changed.len());
                 }
             });
@@ -991,44 +1053,43 @@ fn own_successful_revision_is_read_suppressed_and_later_remote_revision_can_chim
                 updated_at: "2026-10-22T10:00:00Z".into(),
                 ..Default::default()
             };
-            inbox.generation = 1;
-            let scope = inbox.state.fetch_scope(&inbox.projects);
-            inbox.finish_refresh(
-                1,
-                scope.clone(),
+            let generation = inbox.stage_fixture_poll(cx);
+            inbox.finish_fixture_poll(
+                generation,
                 Snapshot {
                     items: vec![item.clone()],
                     ..Default::default()
                 },
-                vec![],
                 cx,
             );
             item.updated_at = "2026-10-22T11:00:00Z".into();
-            inbox.record_self_activity(item.key(), item.updated_ms(), cx);
-            inbox.finish_refresh(
-                1,
-                scope.clone(),
+            inbox.record_self_activity(item.detail_key(), item.updated_ms(), cx);
+            let generation = inbox.stage_fixture_poll(cx);
+            inbox.finish_fixture_poll(
+                generation,
                 Snapshot {
                     items: vec![item.clone()],
                     ..Default::default()
                 },
-                vec![],
                 cx,
             );
             assert!(!inbox.state.seen.unseen(&item));
             assert!(
-                inbox.self_activity.is_empty(),
+                inbox
+                    .feed
+                    .read(cx)
+                    .mutation_revision(&item.detail_key())
+                    .is_none(),
                 "coalesced own mutations are consumed by one remote revision"
             );
             item.updated_at = "2026-10-22T12:00:00Z".into();
-            inbox.finish_refresh(
-                1,
-                scope,
+            let generation = inbox.stage_fixture_poll(cx);
+            inbox.finish_fixture_poll(
+                generation,
                 Snapshot {
                     items: vec![item],
                     ..Default::default()
                 },
-                vec![],
                 cx,
             );
             subscription
@@ -1037,6 +1098,61 @@ fn own_successful_revision_is_read_suppressed_and_later_remote_revision_can_chim
     cx.run_until_parked();
     assert_eq!(*changes.borrow(), vec![0, 0, 1]);
 }
+
+#[gpui::test]
+fn a_comment_receipt_only_clears_the_submitted_draft(cx: &mut TestAppContext) {
+    let window = inbox_window(cx);
+    window
+        .update(cx, |inbox, _, cx| {
+            inbox.selected = Some("selected-item".into());
+            inbox.loading = true;
+            inbox.release_pending = true;
+            inbox
+                .composer
+                .comment
+                .update(cx, |input, cx| input.set_text("First comment".into(), cx));
+        })
+        .unwrap();
+    let posted = window
+        .update(cx, |inbox, _, cx| {
+            let posted = PostedComment {
+                key: inbox.selected.clone().unwrap(),
+                revision: inbox.composer.revision,
+                reply: inbox.composer.reply.clone(),
+            };
+            inbox
+                .composer
+                .comment
+                .update(cx, |input, cx| input.set_text("New draft".into(), cx));
+            posted
+        })
+        .unwrap();
+    let receipt = || {
+        Ok(model::CommentReceipt {
+            url: "https://example.test/comment".into(),
+            revision: None,
+        })
+    };
+    window
+        .update(cx, |inbox, _, cx| {
+            inbox.finish_comment(posted, receipt(), cx);
+            assert_eq!(
+                inbox.composer.comment.read(cx).content.as_ref(),
+                "New draft"
+            );
+            inbox.finish_comment(
+                PostedComment {
+                    key: inbox.selected.clone().unwrap(),
+                    revision: inbox.composer.revision,
+                    reply: inbox.composer.reply.clone(),
+                },
+                receipt(),
+                cx,
+            );
+            assert!(inbox.composer.comment.read(cx).content.is_empty());
+        })
+        .unwrap();
+}
 #[gpui::test]
 fn a_coalesced_external_revision_is_never_consumed_as_own_activity(cx: &mut TestAppContext) {
     let window = inbox_window(cx);
@@ -1044,8 +1160,8 @@ fn a_coalesced_external_revision_is_never_consumed_as_own_activity(cx: &mut Test
     let output = changes.clone();
     let _subscription = window
         .update(cx, |inbox, _, cx| {
-            let subscription = cx.subscribe(&cx.entity(), move |_, _, event: &Event, _| {
-                if let Event::Activity { changed, .. } = event {
+            let subscription = cx.subscribe(&inbox.feed, move |_, _, event: &FeedEvent, _| {
+                if let FeedEvent::Discovered { changed, .. } = event {
                     output.borrow_mut().push(changed.len());
                 }
             });
@@ -1054,65 +1170,85 @@ fn a_coalesced_external_revision_is_never_consumed_as_own_activity(cx: &mut Test
                 kind: "jira".into(),
                 id: "42".into(),
                 identifier: "ENG-42".into(),
+                url: "https://current.example.test/browse/ENG-42".into(),
                 updated_at: "2026-10-22T10:00:00Z".into(),
                 ..Default::default()
             };
-            inbox.generation = 1;
-            let scope = inbox.state.fetch_scope(&inbox.projects);
-            inbox.finish_refresh(
-                1,
-                scope.clone(),
+            let generation = inbox.stage_fixture_poll(cx);
+            inbox.finish_fixture_poll(
+                generation,
                 Snapshot {
                     items: vec![item.clone()],
                     ..Default::default()
                 },
-                vec![],
                 cx,
             );
             let own = model::timestamp_ms("2026-10-22T11:00:00Z");
-            inbox.record_self_activity(item.key(), 0, cx);
+            let mut previous = item.clone();
+            previous.url = "https://previous.example.test/browse/ENG-42".into();
+            inbox.record_self_activity(previous.detail_key(), own, cx);
+            inbox.record_self_activity(item.detail_key(), 0, cx);
             assert!(
-                inbox.self_activity.is_empty(),
+                inbox
+                    .feed
+                    .read(cx)
+                    .mutation_revision(&item.detail_key())
+                    .is_none(),
                 "an uncertain receipt cannot suppress anything"
             );
-            inbox.record_self_activity(item.key(), own, cx);
-            inbox.record_self_activity(item.key(), own - 1, cx);
+            inbox.record_self_activity(item.detail_key(), own, cx);
+            inbox.record_self_activity(item.detail_key(), own - 1, cx);
             assert_eq!(
-                inbox.self_activity[&item.key()].0,
-                own,
+                inbox.feed.read(cx).mutation_revision(&item.detail_key()),
+                Some(own),
                 "older completions cannot overwrite the newer receipt"
             );
             // A poll started before the write can still return the old snapshot.
-            inbox.finish_refresh(
-                1,
-                scope.clone(),
+            let generation = inbox.stage_fixture_poll(cx);
+            inbox.finish_fixture_poll(
+                generation,
                 Snapshot {
                     items: vec![item.clone()],
                     ..Default::default()
                 },
-                vec![],
                 cx,
             );
-            assert_eq!(inbox.self_activity[&item.key()].0, own);
+            assert_eq!(
+                inbox.feed.read(cx).mutation_revision(&item.detail_key()),
+                Some(own)
+            );
             // The own revision is never polled: another person's update arrives first.
             item.updated_at = "2026-10-22T12:00:00Z".into();
-            inbox.finish_refresh(
-                1,
-                scope,
+            let generation = inbox.stage_fixture_poll(cx);
+            inbox.finish_fixture_poll(
+                generation,
                 Snapshot {
                     items: vec![item.clone()],
                     ..Default::default()
                 },
-                vec![],
                 cx,
             );
             assert!(inbox.state.seen.unseen(&item));
-            assert!(inbox.self_activity.is_empty());
+            assert!(
+                inbox
+                    .feed
+                    .read(cx)
+                    .mutation_revision(&item.detail_key())
+                    .is_none()
+            );
+            assert_eq!(
+                inbox
+                    .feed
+                    .read(cx)
+                    .mutation_revision(&previous.detail_key()),
+                Some(own),
+                "a revision from a replacement server cannot consume another server's receipt"
+            );
             subscription
         })
         .unwrap();
     cx.run_until_parked();
-    assert_eq!(*changes.borrow(), vec![0, 0, 1]);
+    assert_eq!(*changes.borrow(), vec![0, 1]);
 }
 #[gpui::test]
 fn saved_bot_destination_is_preselected_and_explicit_project_choice_wins(cx: &mut TestAppContext) {
@@ -1138,28 +1274,28 @@ fn saved_bot_destination_is_preselected_and_explicit_project_choice_wins(cx: &mu
                 ..Default::default()
             };
             inbox.state.source = "jira".into();
-            inbox.snapshot.items = vec![item.clone()];
-            inbox.selected = Some(item.key());
-            inbox.details = Some(Details {
+            Rc::make_mut(&mut inbox.snapshot).items = vec![item.clone()];
+            inbox.selected = Some(item.detail_key());
+            inbox.detail.details = Some(Details {
                 body: "Ticket description".into(),
                 ..Default::default()
             });
             inbox.set_bots(vec![("helper".into(), "Helper".into())], cx);
             inbox.set_default_bot("jira", "helper", cx).unwrap();
-            assert_eq!(inbox.start_bot.as_deref(), Some("helper"));
+            assert_eq!(inbox.start.bot.as_deref(), Some("helper"));
             inbox.start(cx);
-            inbox.start_project = "/chosen/project".into();
-            inbox.start_bot = None;
-            inbox.destination_explicit = true;
+            inbox.start.project = "/chosen/project".into();
+            inbox.start.bot = None;
+            inbox.start.destination_explicit = true;
             inbox.set_default_bot("jira", "helper", cx).unwrap();
             assert!(
-                inbox.start_bot.is_none(),
+                inbox.start.bot.is_none(),
                 "saved defaults cannot override a deliberate destination"
             );
             inbox.start(cx);
-            inbox.destination_explicit = false;
+            inbox.start.destination_explicit = false;
             inbox.set_bots(vec![], cx);
-            assert!(inbox.start_bot.is_none());
+            assert!(inbox.start.bot.is_none());
             assert_eq!(inbox.state.default_bots.get("jira"), Some("helper"));
             subscription
         })
@@ -1181,6 +1317,7 @@ fn long_discussion_materializes_only_viewport_comments_and_reply_focus_reaches_c
         .update(cx, |fixture, _, cx| {
             fixture.inbox.update(cx, |inbox, cx| {
                 let measured = inbox
+                    .detail
                     .comments
                     .iter()
                     .filter(|(_, doc)| doc.read(cx).measured_rows() > 0)
@@ -1189,8 +1326,8 @@ fn long_discussion_materializes_only_viewport_comments_and_reply_focus_reaches_c
                     measured > 0 && measured < 10,
                     "only viewport/overscan cards should be laid out, got {measured}"
                 );
-                assert_eq!(inbox.summary_scroll.item_count(), 103);
-                inbox.summary_scroll.scroll_by(px(2500.));
+                assert_eq!(inbox.summary.scroll.item_count(), 103);
+                inbox.summary.scroll.scroll_by(px(2500.));
             })
         })
         .unwrap();
@@ -1198,11 +1335,11 @@ fn long_discussion_materializes_only_viewport_comments_and_reply_focus_reaches_c
     window
         .update(cx, |fixture, window, cx| {
             fixture.inbox.update(cx, |inbox, cx| {
-                assert!(inbox.summary_scroll.logical_scroll_top().item_ix > 3);
-                inbox.reply = Some(("thread-1".into(), "Reviewer".into()));
-                inbox.summary_scroll.remeasure_items(102..103);
-                inbox.summary_scroll.scroll_to_end();
-                window.focus(&inbox.comment.focus_handle(cx), cx);
+                assert!(inbox.summary.scroll.logical_scroll_top().item_ix > 3);
+                inbox.composer.reply = Some(("thread-1".into(), "Reviewer".into()));
+                inbox.summary.scroll.remeasure_items(102..103);
+                inbox.summary.scroll.scroll_to_end();
+                window.focus(&inbox.composer.comment.focus_handle(cx), cx);
             })
         })
         .unwrap();
@@ -1210,9 +1347,10 @@ fn long_discussion_materializes_only_viewport_comments_and_reply_focus_reaches_c
     window
         .update(cx, |fixture, window, cx| {
             fixture.inbox.update(cx, |inbox, cx| {
-                assert!(inbox.summary_scroll.logical_scroll_top().item_ix > 90);
-                assert!(inbox.comment.focus_handle(cx).is_focused(window));
+                assert!(inbox.summary.scroll.logical_scroll_top().item_ix > 90);
+                assert!(inbox.composer.comment.focus_handle(cx).is_focused(window));
                 inbox
+                    .composer
                     .comment
                     .update(cx, |input, cx| input.set_text("A reply\n".repeat(8), cx));
             })
@@ -1222,8 +1360,8 @@ fn long_discussion_materializes_only_viewport_comments_and_reply_focus_reaches_c
     window
         .update(cx, |fixture, window, cx| {
             fixture.inbox.update(cx, |inbox, cx| {
-                assert!(inbox.comment.focus_handle(cx).is_focused(window));
-                assert_eq!(inbox.summary_scroll.item_count(), 103);
+                assert!(inbox.composer.comment.focus_handle(cx).is_focused(window));
+                assert_eq!(inbox.summary.scroll.item_count(), 103);
             })
         })
         .unwrap();
@@ -1234,19 +1372,20 @@ fn expanding_comment_invalidates_its_height_and_preserves_timeline_order(cx: &mu
     let (id, previous) = window
         .update(cx, |fixture, _, cx| {
             fixture.inbox.update(cx, |inbox, cx| {
-                let Activity::Comment(comment) = &inbox.activity[0] else {
+                let Activity::Comment(comment) = &inbox.summary.activity[0] else {
                     panic!()
                 };
                 let id = comment.id.clone();
                 let doc = &inbox
+                    .detail
                     .comments
                     .iter()
                     .find(|(comment, _)| comment.id == id)
                     .unwrap()
                     .1;
                 let previous = doc.read(cx).measured_rows();
-                inbox.expanded_comments.insert(id.clone());
-                inbox.summary_scroll.remeasure();
+                inbox.detail.expanded_comments.insert(id.clone());
+                inbox.summary.scroll.remeasure();
                 (id, previous)
             })
         })
@@ -1256,17 +1395,18 @@ fn expanding_comment_invalidates_its_height_and_preserves_timeline_order(cx: &mu
         .update(cx, |fixture, _, cx| {
             fixture.inbox.update(cx, |inbox, cx| {
                 let doc = &inbox
+                    .detail
                     .comments
                     .iter()
                     .find(|(comment, _)| comment.id == id)
                     .unwrap()
                     .1;
                 assert!(doc.read(cx).measured_rows() > previous);
-                let Activity::Comment(first) = &inbox.activity[0] else {
+                let Activity::Comment(first) = &inbox.summary.activity[0] else {
                     panic!()
                 };
                 assert_eq!(first.id, id);
-                assert_eq!(inbox.summary_scroll.logical_scroll_top().item_ix, 0);
+                assert_eq!(inbox.summary.scroll.logical_scroll_top().item_ix, 0);
             })
         })
         .unwrap();
@@ -1278,14 +1418,14 @@ fn arriving_comment_preserves_the_readers_item_and_offset(cx: &mut TestAppContex
         .update(cx, |fixture, _, cx| {
             fixture
                 .inbox
-                .update(cx, |inbox, _| inbox.summary_scroll.scroll_by(px(2500.)))
+                .update(cx, |inbox, _| inbox.summary.scroll.scroll_by(px(2500.)))
         })
         .unwrap();
     draw(window, cx);
     let before = window
         .update(cx, |fixture, _, cx| {
             fixture.inbox.update(cx, |inbox, cx| {
-                let before = inbox.summary_scroll.logical_scroll_top();
+                let before = inbox.summary.scroll.logical_scroll_top();
                 let comment = model::Comment {
                     id: "new-comment".into(),
                     body: "A new reply".into(),
@@ -1295,8 +1435,8 @@ fn arriving_comment_preserves_the_readers_item_and_offset(cx: &mut TestAppContex
                 let doc = cx.new(|cx| {
                     document::InboxDocument::new(comment.body.clone(), PathBuf::from("/repo"), cx)
                 });
-                inbox.comments.push((comment.clone(), doc));
-                inbox.thread.as_mut().unwrap().comments.push(comment);
+                inbox.detail.comments.push((comment.clone(), doc));
+                inbox.detail.thread.as_mut().unwrap().comments.push(comment);
                 inbox.rebuild_activity();
                 before
             })
@@ -1306,10 +1446,10 @@ fn arriving_comment_preserves_the_readers_item_and_offset(cx: &mut TestAppContex
     window
         .update(cx, |fixture, _, cx| {
             fixture.inbox.update(cx, |inbox, _| {
-                let after = inbox.summary_scroll.logical_scroll_top();
+                let after = inbox.summary.scroll.logical_scroll_top();
                 assert_eq!(after.item_ix, before.item_ix);
                 assert!((after.offset_in_item - before.offset_in_item).abs() < px(1.));
-                assert_eq!(inbox.summary_scroll.item_count(), 104);
+                assert_eq!(inbox.summary.scroll.item_count(), 104);
             })
         })
         .unwrap();

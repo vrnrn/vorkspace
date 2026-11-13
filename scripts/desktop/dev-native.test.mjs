@@ -167,6 +167,7 @@ test("macOS bundles automatically and preserves the selected data mode for Finde
     [[], "vorkspace-data"],
     [["--dev-data"], "dev-data"],
     [["--vorkspace-data", "--dev-data", "--cwd", "--vorkspace-data"], "dev-data"],
+    [["--dev-data", "--vorkspace-db", "a separate database"], "vorkspace-data"],
   ]) {
     await t.test(`${mode}: ${JSON.stringify(args)}`, async (t) => {
       const f = await fixture(t, {}, { args });
@@ -198,6 +199,7 @@ test("macOS launches the fresh bundle when installation fails and the installed 
     await t.test(`installed: ${installed}`, async (t) => {
       const installs = [];
       const f = await fixture(t, { CI: "", VORKSPACE_NO_INSTALL: "" }, {
+        args: ["--vorkspace-data"],
         installBundle: (source) => { installs.push(source); return installed; },
       });
       await f.until((events) => f.starts(events) === 1);
@@ -213,14 +215,16 @@ test("macOS launches the fresh bundle when installation fails and the installed 
   }
 });
 
-test("CI, explicit no-install, and native-dev launch without attempting installation", async (t) => {
-  for (const [env, profile] of [
-    [{ CI: "1", VORKSPACE_NO_INSTALL: "" }, "release"],
-    [{ CI: "", VORKSPACE_NO_INSTALL: "1" }, "release"],
-    [{ CI: "", VORKSPACE_NO_INSTALL: "" }, "native-dev"],
+test("CI, isolated data, inspection, explicit no-install, and native-dev launch from the build directory", async (t) => {
+  for (const [env, profile, args] of [
+    [{ CI: "1", VORKSPACE_NO_INSTALL: "" }, "release", ["--vorkspace-data"]],
+    [{ CI: "", VORKSPACE_NO_INSTALL: "1" }, "release", ["--vorkspace-data"]],
+    [{ CI: "", VORKSPACE_NO_INSTALL: "" }, "native-dev", ["--vorkspace-data"]],
+    [{ CI: "", VORKSPACE_NO_INSTALL: "" }, "release", ["--dev-data"]],
+    [{ CI: "", VORKSPACE_NO_INSTALL: "" }, "release", ["--check-data"]],
   ]) {
-    await t.test(`${profile}: ${JSON.stringify(env)}`, async (t) => {
-      const f = await fixture(t, env, { profile });
+    await t.test(`${profile} ${args[0]}: ${JSON.stringify(env)}`, async (t) => {
+      const f = await fixture(t, env, { profile, args });
       await f.until((events) => f.starts(events) === 1);
       assert.deepEqual(f.installs, []);
       const app = f.calls.find((call) => !["cargo", "bash"].includes(call.command));

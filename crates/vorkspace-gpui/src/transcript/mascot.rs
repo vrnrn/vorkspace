@@ -1,4 +1,4 @@
-//! ProjectMascot / SubagentMascot: the React transcript's two-frame pixel faces.
+//! Project and subagent mascots: the transcript's two-frame pixel faces.
 use gpui::{Animation, AnimationExt, AnyElement, canvas, div, prelude::*, px};
 use std::time::Duration;
 use vorkspace_core::tool::ToolState;
@@ -6,7 +6,7 @@ use vorkspace_ui::theme::content;
 
 type Frame = [&'static str; 8];
 
-// Keep this order in sync with projectMascots.ts: the name hash indexes it.
+// Don't reorder: the name hash indexes it.
 const REST: [Frame; 10] = [
     [
         "..#..#..", ".######.", "##.##.##", "########", ".######.", ".#.##.#.", "#.#..#.#",
@@ -93,7 +93,7 @@ const TALK: [Frame; 10] = [
     ],
 ];
 
-/// A 12px sprite centered in the same 14px icon slot as the React row.
+/// A 12px sprite centered in a 14px icon slot.
 /// Activity is independent of state: a pending run can already have settled.
 pub(super) fn subagent_mascot(name: &str, state: &ToolState, active: bool) -> AnyElement {
     let color = match state {

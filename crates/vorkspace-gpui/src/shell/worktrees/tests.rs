@@ -57,7 +57,7 @@ fn splitting_reopened_notes_uses_the_selected_project_working_copy(cx: &mut Test
                     .as_deref(),
                 Some(checkout)
             );
-            assert_eq!(shell.session_working_copy(id, cx), checkout);
+            assert_eq!(shell.pane_working_copy(id, cx), checkout);
             assert_eq!(shell.workspace.layout(notes).leaf_ids(), [notes, id]);
             assert_eq!(shell.workspace.tab_workspaces[&notes], checkout);
         })
@@ -132,7 +132,7 @@ fn terminal_split_keeps_its_launch_scope_and_rejects_a_foreign_layout(cx: &mut T
             );
             assert_eq!(shell.workspace.project, project);
             assert_eq!(shell.working_copy(), checkout);
-            assert_eq!(shell.session_working_copy(id, cx), checkout);
+            assert_eq!(shell.pane_working_copy(id, cx), checkout);
             assert_eq!(shell.workspace.layout(terminal).leaf_ids(), [terminal, id]);
         })
         .unwrap();
@@ -150,7 +150,7 @@ fn header_settings_and_worktree_actions_open_focused_native_surfaces(cx: &mut Te
         .update(cx, |shell, w, cx| {
             shell.open_menu(
                 MenuTarget::Header,
-                Anchor::Slot(shell.project_anchor.clone()),
+                Anchor::Slot(shell.sidebar.project_anchor.clone()),
                 w,
                 cx,
             );
@@ -254,14 +254,12 @@ fn copies_keep_running_sessions_and_route_new_tabs_and_splits(cx: &mut TestAppCo
             shell.sessions[&feature_session].update(cx, |session, cx| {
                 session.summary.cwd = project.into();
                 session.settings.worktree_cwd = Some(feature.path.clone());
-                session.busy = true;
+                session.set_running_for_test(true);
                 session
                     .input
                     .update(cx, |input, cx| input.set_text("keep this draft".into(), cx));
             });
-            shell
-                .session_worktrees
-                .insert(feature_session, Some(feature.path.clone()));
+            shell.set_session_worktree(feature_session, Some(feature.path.clone()), cx);
             shell
                 .workspace
                 .tab_workspaces
@@ -269,11 +267,12 @@ fn copies_keep_running_sessions_and_route_new_tabs_and_splits(cx: &mut TestAppCo
             shell.sessions[&main_session]
                 .update(cx, |session, _| session.summary.has_messages = true);
             shell.open(main_session, w, cx);
-            shell
-                .groups
-                .entry(project.into())
-                .or_default()
-                .create_folder(&[main_session], "saved-folder".into());
+            let mut folders = vorkspace_core::session_groups::Groups::default();
+            folders.create_folder(&[main_session], "saved-folder".into());
+            shell.sidebar.groups.insert(
+                project.into(),
+                Arc::new(super::super::session_groups::FolderIndex::new(folders)),
+            );
             shell.select_worktree(Some(feature.clone()), w, cx);
             assert_eq!(shell.workspace.project, project);
             assert_eq!(shell.workspace.active, Some(feature_session));
@@ -355,7 +354,7 @@ fn copies_keep_running_sessions_and_route_new_tabs_and_splits(cx: &mut TestAppCo
             assert_eq!(shell.workspace.project, project);
             assert_eq!(shell.terminal_cwd(cx), other.path);
             let running = shell.sessions[&feature_session].read(cx);
-            assert!(running.busy);
+            assert!(running.responding());
             assert_eq!(running.input.read(cx).content.as_ref(), "keep this draft");
             assert!(shell.worktree_focus.contains_key(project));
             // A directly opened chat joins the selected workspace without

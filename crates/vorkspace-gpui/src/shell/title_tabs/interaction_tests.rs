@@ -155,7 +155,7 @@ fn sidebar_highlights_only_the_visible_bot_or_session(cx: &mut TestAppContext) {
                     cx,
                 );
             }
-            assert_eq!(shell.selected_sessions.len(), 2);
+            assert_eq!(shell.sidebar.selected_sessions.len(), 2);
         })
         .unwrap();
     cx.run_until_parked();
@@ -163,9 +163,9 @@ fn sidebar_highlights_only_the_visible_bot_or_session(cx: &mut TestAppContext) {
     click(&format!("title-tab-{bot_pane}"), cx);
     window
         .update(cx, |shell, _, _| {
-            assert!(shell.selected_sessions.is_empty());
-            assert!(shell.selection_anchor.is_none());
-            assert!(shell.sidebar_target.is_none());
+            assert!(shell.sidebar.selected_sessions.is_empty());
+            assert!(shell.sidebar.selection_anchor.is_none());
+            assert!(shell.sidebar.target.is_none());
         })
         .unwrap();
     assert!(sidebar_highlight(window, bot_row.clone(), cx));

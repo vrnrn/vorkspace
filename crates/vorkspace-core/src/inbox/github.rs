@@ -7,21 +7,21 @@ use std::{
 const MAX_PR_DIFF_BYTES: usize = 2 * 1024 * 1024;
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct GitHubLabel {
+pub(crate) struct GitHubLabel {
     pub name: String,
     pub color: String,
 }
 
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct GitHubAssignee {
+pub(crate) struct GitHubAssignee {
     pub login: String,
     pub avatar_url: String,
 }
 
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct GitHubWorkItem {
+pub(crate) struct GitHubWorkItem {
     pub kind: String,
     pub number: i64,
     pub title: String,
@@ -38,7 +38,7 @@ pub struct GitHubWorkItem {
 
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct GitHubWorkItemDetails {
+pub(crate) struct GitHubWorkItemDetails {
     pub body: String,
     pub author: String,
     pub author_avatar_url: String,
@@ -49,7 +49,7 @@ pub struct GitHubWorkItemDetails {
 
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct GitHubWorkItemComment {
+pub(crate) struct GitHubWorkItemComment {
     pub id: String,
     pub kind: String,
     pub author: String,
@@ -67,7 +67,7 @@ pub struct GitHubWorkItemComment {
 
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct GitHubWorkItemCommit {
+pub(crate) struct GitHubWorkItemCommit {
     pub oid: String,
     pub message_headline: String,
     pub author: String,
@@ -77,7 +77,7 @@ pub struct GitHubWorkItemCommit {
 
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct GitHubWorkItemThread {
+pub(crate) struct GitHubWorkItemThread {
     pub comments: Vec<GitHubWorkItemComment>,
     pub commits: Vec<GitHubWorkItemCommit>,
     pub truncated: bool,
@@ -88,7 +88,7 @@ pub struct GitHubWorkItemThread {
 
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct GitHubPrFile {
+pub(crate) struct GitHubPrFile {
     pub path: String,
     pub additions: i64,
     pub deletions: i64,
@@ -96,7 +96,7 @@ pub struct GitHubPrFile {
 
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct GitHubPrDiff {
+pub(crate) struct GitHubPrDiff {
     pub additions: i64,
     pub deletions: i64,
     pub files: Vec<GitHubPrFile>,
@@ -106,7 +106,7 @@ pub struct GitHubPrDiff {
 
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct GitHubPrCheck {
+pub(crate) struct GitHubPrCheck {
     pub name: String,
     pub workflow: String,
     pub state: String,
@@ -117,7 +117,7 @@ pub struct GitHubPrCheck {
 
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct GitHubPrChecks {
+pub(crate) struct GitHubPrChecks {
     pub head_oid: String,
     pub checks: Vec<GitHubPrCheck>,
 }

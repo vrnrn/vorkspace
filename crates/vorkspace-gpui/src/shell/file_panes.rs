@@ -31,7 +31,7 @@ impl Shell {
         if state.chat_hidden {
             return None;
         }
-        let bounds = self.split_bounds.get(&id)?.get()?;
+        let bounds = self.panes.split_bounds.get(&id)?.get()?;
         let width = bounds.size.width.as_f32();
         let rect = Rect {
             x: width * (1. - state.ratio),
@@ -55,12 +55,16 @@ impl Shell {
         {
             return Some(id);
         }
-        let review = self.reviews.remove(&id)?;
+        let std::collections::hash_map::Entry::Occupied(review) = self.review.reviews.entry(id)
+        else {
+            return None;
+        };
         let pane = self.workspace.fresh_pane_id()?;
+        let review = review.remove();
         self.workspace.review_owners.insert(pane, id);
         self.workspace.reviews.remove(&id);
-        self.reviews.insert(pane, review.clone());
-        self.review_slide = None;
+        self.review.reviews.insert(pane, review.clone());
+        self.review.slide = None;
         review.update(cx, |r, cx| {
             r.state.chat_hidden = true;
             r.set_deferred(false, cx);
@@ -100,7 +104,7 @@ impl Shell {
             .insert(self.workspace.project.clone(), id);
         self.record_worktree_session(id, cx);
         self.history.record(id);
-        self.review_focused = true;
+        self.review.focused = true;
         if let Some(review) = self.review_for(id, cx) {
             review.update(cx, |r, cx| r.focus_active(window, cx));
         }

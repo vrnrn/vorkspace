@@ -6,8 +6,8 @@ use std::{
     path::{Path, PathBuf},
 };
 use vorkspace_core::{
-    agent::{BotContext, MinionContext},
-    bot::{self, CompactionMode, Roster},
+    agent::BotContext,
+    bot::{self, CompactionMode, MinionMetadata, Roster},
     context::Usage,
     tool::{ToolCall, ToolState},
 };
@@ -121,6 +121,7 @@ for line in sys.stdin:
     let (_control, controls) = std::sync::mpsc::channel();
     run_turn_using(
         TurnInput {
+            composer_origin: None,
             summary: summary.clone(),
             prompt: "Back in Vorkspace".into(),
             settings,
@@ -134,13 +135,20 @@ for line in sys.stdin:
     let updates: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
     let finished = updates.last().unwrap();
     assert_eq!(finished.status, "Ready");
-    assert_eq!(finished.start, 0);
-    assert_eq!(finished.source_len, Some(finished.rows.len()));
-    assert_eq!(finished.bot_turn_start, Some(2));
+    assert!(matches!(
+        &finished.transcript,
+        TranscriptPatch::BotSnapshot { turn_start: 2, .. }
+    ));
     assert_eq!(finished.provider_turn_id.as_deref(), Some("managed"));
-    let first = updates.iter().find(|u| !u.rows.is_empty()).unwrap();
-    assert_eq!(first.start, 0);
-    assert_eq!(first.rows[0].text, "From the terminal");
+    let first = updates
+        .iter()
+        .find(|u| !u.transcript.rows().is_empty())
+        .unwrap();
+    assert!(matches!(
+        &first.transcript,
+        TranscriptPatch::BotSnapshot { turn_start: 2, .. }
+    ));
+    assert_eq!(first.transcript.rows()[0].text, "From the terminal");
     let store = locked(&store).unwrap();
     assert_eq!(
         store.bot_session(summary.id).unwrap().unwrap().provider_id,
@@ -217,6 +225,7 @@ fn bot_final_snapshot_includes_imports_when_initial_publication_is_stopped_or_sk
                 let (_control, controls) = std::sync::mpsc::channel();
                 run_turn_using(
                     TurnInput {
+                        composer_origin: None,
                         summary,
                         prompt: "Managed prompt".into(),
                         settings,
@@ -266,24 +275,33 @@ fn bot_final_snapshot_includes_imports_when_initial_publication_is_stopped_or_sk
         let finished = if stopped {
             first
         } else {
-            assert!(!first.finished);
+            assert!(!first.finished());
             rx.try_recv().unwrap()
         };
-        assert!(finished.finished && rx.is_empty());
-        assert_eq!(finished.start, 0);
-        assert_eq!(finished.source_len, Some(finished.rows.len()));
-        assert_eq!(finished.bot_turn_start, Some(4));
-        assert_eq!(finished.provider_id, summary.provider_id);
+        assert!(finished.finished() && rx.is_empty());
+        assert!(matches!(
+            &finished.transcript,
+            TranscriptPatch::BotSnapshot { turn_start: 4, .. }
+        ));
+        assert_eq!(finished.binding, ProviderBinding::Unchanged);
         assert_eq!(finished.delivered.as_deref(), Some(message));
-        assert_eq!(finished.rows[..visible.rows.len()], visible.rows);
-        assert_eq!(finished.rows[2].text, "Terminal prompt");
-        assert_eq!(finished.rows[3].text, "Terminal answer");
-        assert_eq!(finished.rows[4].text, "Managed prompt");
+        assert_eq!(
+            finished.transcript.rows()[..visible.rows.len()],
+            visible.rows
+        );
+        assert_eq!(finished.transcript.rows()[2].text, "Terminal prompt");
+        assert_eq!(finished.transcript.rows()[3].text, "Terminal answer");
+        assert_eq!(finished.transcript.rows()[4].text, "Managed prompt");
         if stopped {
+            assert_eq!(
+                finished.settlement().unwrap().outcome,
+                TurnOutcome::Cancelled
+            );
             assert_eq!(finished.status, "Ready");
         } else {
+            assert_eq!(finished.settlement().unwrap().outcome, TurnOutcome::Failed);
             assert!(finished.status.contains("CLI not found"));
-            assert_eq!(finished.rows.last().unwrap().role, "error");
+            assert_eq!(finished.transcript.rows().last().unwrap().role, "error");
         }
         let owner = locked(&store).unwrap();
         assert_eq!(owner.composer_draft(id).unwrap().unwrap().payload, draft);
@@ -406,7 +424,7 @@ for line in sys.stdin:
                 vorkspace_core::native_history::read(&request.binding, request.cursor.as_ref())
                     .unwrap()
                     .unwrap();
-            assert!(batch.changed);
+            assert!(batch.update.is_some());
             let receipt = vorkspace_core::store::SubmissionInput {
                 attempt_id: "other-turn".into(),
                 user_turn_id: "other-turn".into(),
@@ -546,7 +564,7 @@ fn native_cursor_advance_blocks_stale_bot_and_compaction_admission() {
     let mut submissions = submissions::Submissions::new(store.clone(), summary.id);
     assert!(
         submissions
-            .reserve_initial("Stale prompt", &settings, Some(&checked))
+            .reserve_initial("Stale prompt", &settings, Some(&checked), None)
             .is_err()
     );
     assert!(
@@ -683,6 +701,7 @@ fn rollover_resets_context_before_provider_start_and_keeps_it_reset_on_failure()
         let (_controls, control_rx) = std::sync::mpsc::channel();
         run_turn_using(
             TurnInput {
+                composer_origin: None,
                 summary: summary.clone(),
                 prompt: "Try to continue".into(),
                 settings,
@@ -693,10 +712,10 @@ fn rollover_resets_context_before_provider_start_and_keeps_it_reset_on_failure()
             tx,
             |_| {
                 let reset = std::iter::from_fn(|| rx.try_recv().ok())
-                    .find(|update| update.provider_reset)
+                    .find(|update| update.binding == ProviderBinding::Set(None))
                     .expect("reset must reach the view before provider startup");
-                assert!(!reset.finished);
-                assert_eq!(reset.provider_id, None);
+                assert!(!reset.finished());
+                assert_eq!(reset.binding, ProviderBinding::Set(None));
                 assert_eq!(reset.context, Some(Usage::default()));
                 let store = locked(&store).unwrap();
                 let saved = store.bot_session(summary.id).unwrap().unwrap();
@@ -706,13 +725,14 @@ fn rollover_resets_context_before_provider_start_and_keeps_it_reset_on_failure()
             },
         );
         let finished = std::iter::from_fn(|| rx.try_recv().ok()).last().unwrap();
-        assert!(finished.finished && finished.provider_reset);
+        assert!(finished.finished());
+        assert!(matches!(finished.binding, ProviderBinding::Set(_)));
         assert!(
             finished.status.contains("CLI not found"),
             "{}",
             finished.status
         );
-        assert_eq!(finished.provider_id, None);
+        assert_eq!(finished.binding, ProviderBinding::Set(None));
         assert_eq!(finished.context, Some(Usage::default()));
         drop(store);
         let reopened = Store::open_vorkspace(&root.join("sessions.db")).unwrap();
@@ -788,6 +808,7 @@ for line in sys.stdin:
         let (_controls, control_rx) = std::sync::mpsc::channel();
         run_turn_using(
             TurnInput {
+                composer_origin: None,
                 summary: summary.clone(),
                 prompt: "Keep working.".into(),
                 settings,
@@ -800,19 +821,22 @@ for line in sys.stdin:
         );
         let updates: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
         let finished = updates.last().unwrap();
-        assert!(finished.finished && finished.provider_reset);
+        assert!(finished.finished());
+        assert!(matches!(finished.binding, ProviderBinding::Set(_)));
         assert_eq!(finished.status, "Ready");
-        assert_eq!(finished.provider_id.as_deref(), Some("replacement-thread"));
+        assert_eq!(
+            finished.binding,
+            ProviderBinding::Set(Some("replacement-thread".into()))
+        );
         let new_usage = report_usage.then_some(Usage {
             used: 4200,
             window: Some(272_000),
         });
         assert_eq!(finished.context, Some(new_usage.unwrap_or_default()));
-        assert!(
-            updates[..updates.len() - 1].iter().any(|update| {
-                update.provider_reset && update.context == Some(Usage::default())
-            })
-        );
+        assert!(updates[..updates.len() - 1].iter().any(|update| {
+            matches!(update.binding, ProviderBinding::Set(_))
+                && update.context == Some(Usage::default())
+        }));
 
         let prompt = std::fs::read_to_string(root.join("received-prompt.txt")).unwrap();
         assert!(prompt.contains("Respect the assigned scope."));
@@ -917,6 +941,7 @@ for line in sys.stdin:
         let (_controls, control_rx) = std::sync::mpsc::channel();
         run_turn_using(
             TurnInput {
+                composer_origin: None,
                 summary: summary.clone(),
                 prompt: format!("Work {turn}"),
                 settings: settings.clone(),
@@ -929,9 +954,9 @@ for line in sys.stdin:
         );
         let updates: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
         let finished = updates.last().unwrap();
-        assert!(finished.finished);
+        assert!(finished.finished());
         assert_eq!(finished.status, "Ready");
-        assert_eq!(finished.provider_id, summary.provider_id);
+        assert_eq!(finished.binding, ProviderBinding::Unchanged);
         if turn == 2 {
             std::fs::remove_dir(&pointer_path).unwrap();
             bot::home::write_session(root, &bot_context.bot, &summary, &settings.account).unwrap();
@@ -989,12 +1014,14 @@ fn manual_and_uncertain_compactions_refresh_bot_and_minion_context_without_consu
             let (store, summary, mut settings) = fixture(directory.path());
             settings.bot.as_mut().unwrap().bot.compaction_mode = CompactionMode::Native;
             if minion {
-                let bot = settings.bot.take().unwrap();
-                settings.minion = Some(MinionContext {
-                    bot: bot.bot,
-                    name: "Helper".into(),
-                    root: bot.root,
-                    executable: bot.executable,
+                let actor = &mut settings.bot.as_mut().unwrap().bot;
+                let parent_id = std::mem::replace(&mut actor.id, "helper".into());
+                actor.name = "Helper".into();
+                actor.minion = Some(MinionMetadata {
+                    parent_id,
+                    parent_name: "Parent".into(),
+                    role: "Reviewer".into(),
+                    ..Default::default()
                 });
             }
             let (_, receipt) = prepare(&store, &summary, &settings);

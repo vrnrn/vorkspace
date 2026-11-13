@@ -1,5 +1,5 @@
-//! SearchView.tsx/appSearch.ts: fuzzy titles and paths, literal message/content
-//! matches, stable identities, and the same per-scope ordering and limits.
+//! App search: fuzzy titles and paths, literal message/content matches,
+//! stable identities, and fixed per-scope ordering and limits.
 pub mod project;
 use crate::{files::ProjectFile, session::Session, transcript::Row};
 use std::{
@@ -106,7 +106,7 @@ pub fn grouped(lists: impl IntoIterator<Item = Hit>, scope: Scope) -> Vec<Hit> {
         })
         .collect()
 }
-pub fn recency(updated: u64) -> i64 {
+pub(crate) fn recency(updated: u64) -> i64 {
     if updated == 0 {
         return 0;
     }
@@ -138,44 +138,80 @@ fn pretty_path(path: &str) -> String {
         })
         .unwrap_or_else(|| path.to_owned())
 }
-/// Port of shared/lib/fuzzy.ts. Positions are native UTF-8 byte ranges.
-pub fn fuzzy(query: &str, text: &str) -> Option<(i64, Vec<Range<usize>>)> {
-    let chars: Vec<_> = text
-        .char_indices()
-        .flat_map(|(at, ch)| ch.to_lowercase().map(move |lower| (at, ch, lower)))
-        .collect();
-    let mut score = 0;
-    let mut ranges = Vec::new();
-    for token in query.split_whitespace() {
-        let needle: Vec<_> = token.chars().flat_map(char::to_lowercase).collect();
-        let mut qi = 0;
-        let mut consecutive = 0;
-        for (ix, &(at, ch, lower)) in chars.iter().enumerate() {
-            if qi == needle.len() {
-                break;
-            }
-            if lower != needle[qi] {
-                consecutive = 0;
-                continue;
-            }
-            consecutive += 1;
-            score += 1 + consecutive * 4;
-            if ix == 0 || "/\\-_. ".contains(chars[ix - 1].1) {
-                score += 14;
-            } else if ch.is_ascii_uppercase() && !chars[ix - 1].1.is_ascii_uppercase() {
-                score += 10;
-            }
-            ranges.push(at..at + ch.len_utf8());
-            qi += 1;
+/// A query shares its folded tokens and candidate scratch space across a scan.
+/// Highlight positions are UTF-8 byte ranges in the original candidate.
+struct FuzzyQuery {
+    tokens: Vec<Vec<char>>,
+    characters: Vec<(usize, char, char)>,
+    ranges: Vec<Range<usize>>,
+}
+
+impl FuzzyQuery {
+    fn new(query: &str) -> Self {
+        Self {
+            tokens: query
+                .split_whitespace()
+                .map(|token| token.chars().flat_map(char::to_lowercase).collect())
+                .collect(),
+            characters: Vec::new(),
+            ranges: Vec::new(),
         }
-        if qi != needle.len() {
-            return None;
-        }
-        score -= chars.len() as i64 - needle.len() as i64;
     }
-    ranges.sort_by_key(|r| r.start);
-    ranges.dedup();
-    Some((score, ranges))
+
+    fn score(&mut self, text: &str, highlight: bool) -> Option<i64> {
+        self.ranges.clear();
+        if self.tokens.is_empty() {
+            return Some(0);
+        }
+        self.characters.clear();
+        self.characters.extend(
+            text.char_indices()
+                .flat_map(|(at, ch)| ch.to_lowercase().map(move |lower| (at, ch, lower))),
+        );
+        let chars = &self.characters;
+        let mut score = 0;
+        for needle in &self.tokens {
+            let mut qi = 0;
+            let mut consecutive = 0;
+            for (ix, &(at, ch, lower)) in chars.iter().enumerate() {
+                if lower != needle[qi] {
+                    consecutive = 0;
+                    continue;
+                }
+                consecutive += 1;
+                score += 1 + consecutive * 4;
+                if ix == 0 || "/\\-_. ".contains(chars[ix - 1].1) {
+                    score += 14;
+                } else if ch.is_ascii_uppercase() && !chars[ix - 1].1.is_ascii_uppercase() {
+                    score += 10;
+                }
+                if highlight {
+                    self.ranges.push(at..at + ch.len_utf8());
+                }
+                qi += 1;
+                if qi == needle.len() {
+                    break;
+                }
+            }
+            if qi != needle.len() {
+                return None;
+            }
+            score -= chars.len() as i64 - needle.len() as i64;
+        }
+        Some(score)
+    }
+
+    fn find(&mut self, text: &str) -> Option<(i64, Vec<Range<usize>>)> {
+        let score = self.score(text, true)?;
+        self.ranges.sort_unstable_by_key(|r| r.start);
+        self.ranges.dedup();
+        Some((score, self.ranges.clone()))
+    }
+}
+
+#[cfg(test)]
+fn fuzzy(query: &str, text: &str) -> Option<(i64, Vec<Range<usize>>)> {
+    FuzzyQuery::new(query).find(text)
 }
 /// What an empty query offers: the latest started conversations, the files
 /// opened most recently, and the open projects, grouped like results so the
@@ -232,10 +268,11 @@ pub fn titles(rows: &[Session], query: &str) -> Vec<Hit> {
     if query.trim().is_empty() {
         return vec![];
     }
+    let mut query = FuzzyQuery::new(query);
     rows.iter()
         .filter_map(|s| {
             let title = crate::session::display_title(&s.title, &s.provider);
-            let (score, highlights) = fuzzy(query, title)?;
+            let (score, highlights) = query.find(title)?;
             Some(Hit {
                 id: format!("conversation:{}", s.id),
                 target: Target::Conversation(s.id),
@@ -250,14 +287,15 @@ pub fn titles(rows: &[Session], query: &str) -> Vec<Hit> {
         .collect()
 }
 pub fn projects(paths: &[String], query: &str) -> Vec<Hit> {
+    let mut query = FuzzyQuery::new(query);
     paths
         .iter()
         .filter_map(|path| {
             let title = project_name(path);
-            let (score, highlights) = if let Some((s, h)) = fuzzy(query, &title) {
+            let (score, highlights) = if let Some((s, h)) = query.find(&title) {
                 (s + 80, h)
             } else {
-                (fuzzy(query, path)?.0, vec![])
+                (query.score(path, false)?, vec![])
             };
             Some(Hit {
                 id: format!("project:{path}"),
@@ -273,40 +311,82 @@ pub fn projects(paths: &[String], query: &str) -> Vec<Hit> {
         .collect()
 }
 pub fn filenames(files: &[ProjectFile], query: &str, recent: &[String]) -> Vec<Hit> {
+    struct Candidate<'a> {
+        file: &'a ProjectFile,
+        score: i64,
+        ordinal: usize,
+        highlight_name: bool,
+    }
+
+    let mut query = FuzzyQuery::new(query);
+    let recent: HashMap<_, _> = recent
+        .iter()
+        .take(30)
+        .enumerate()
+        .rev()
+        .map(|(ix, path)| (path.as_str(), (30 - ix) as i64 * 8))
+        .collect();
     let mut hits: Vec<_> = files
         .iter()
-        .filter_map(|f| {
-            let (mut score, highlights) = if let Some((s, h)) = fuzzy(query, &f.name) {
-                (s + 400, h)
+        .enumerate()
+        .filter_map(|(ordinal, file)| {
+            let (score, highlight_name) = if let Some(score) = query.score(&file.name, false) {
+                (score + 400, true)
             } else {
-                (fuzzy(query, &f.relative)?.0, vec![])
+                (query.score(&file.relative, false)?, false)
             };
-            if let Some(ix) = recent.iter().position(|p| p == &f.path) {
-                score += (30 - ix.min(30)) as i64 * 8;
-            }
-            Some(Hit {
-                id: format!("file:{}", f.path),
-                target: Target::File {
-                    path: f.path.clone(),
-                    location: None,
-                },
-                title: f.name.clone(),
-                meta: f.relative.clone(),
-                provider: String::new(),
-                highlights,
+            let score = score + recent.get(file.path.as_str()).copied().unwrap_or(0);
+            Some(Candidate {
+                file,
                 score,
-                updated_at: 0,
+                ordinal,
+                highlight_name,
             })
         })
         .collect();
-    hits.sort_by(|a, b| {
+    let order = |a: &Candidate<'_>, b: &Candidate<'_>| {
         b.score
             .cmp(&a.score)
-            .then(a.meta.len().cmp(&b.meta.len()))
-            .then(a.meta.cmp(&b.meta))
-    });
-    hits.truncate(40);
-    hits
+            .then(a.file.relative.len().cmp(&b.file.relative.len()))
+            .then(a.file.relative.cmp(&b.file.relative))
+            .then(a.ordinal.cmp(&b.ordinal))
+    };
+    if hits.len() > 40 {
+        hits.select_nth_unstable_by(40, order);
+        hits.truncate(40);
+    }
+    hits.sort_unstable_by(order);
+    hits.into_iter()
+        .map(
+            |Candidate {
+                 score,
+                 file,
+                 highlight_name,
+                 ..
+             }| {
+                let highlights = if highlight_name {
+                    query
+                        .find(&file.name)
+                        .map_or_else(Vec::new, |(_, ranges)| ranges)
+                } else {
+                    Vec::new()
+                };
+                Hit {
+                    id: format!("file:{}", file.path),
+                    target: Target::File {
+                        path: file.path.clone(),
+                        location: None,
+                    },
+                    title: file.name.clone(),
+                    meta: file.relative.clone(),
+                    provider: String::new(),
+                    highlights,
+                    score,
+                    updated_at: 0,
+                }
+            },
+        )
+        .collect()
 }
 pub fn literal_ranges(text: &str, query: &str) -> Vec<Range<usize>> {
     if query.is_empty() {
@@ -318,7 +398,7 @@ pub fn literal_ranges(text: &str, query: &str) -> Vec<Range<usize>> {
         .map(|r| r.find_iter(text).map(|m| m.range()).collect())
         .unwrap_or_default()
 }
-pub fn snippet(text: &str, query: &str) -> String {
+pub(crate) fn snippet(text: &str, query: &str) -> String {
     let compact = text.split_whitespace().collect::<Vec<_>>().join(" ");
     let chars: Vec<_> = compact
         .char_indices()

@@ -93,7 +93,7 @@ impl MarkdownParser {
     }
 }
 
-// streamingMarkdown.ts / remend: repair prose blocks while leaving literal
+// Repair unfinished prose blocks while streaming, leaving literal
 // fences untouched. Repairs affect only the display tree, never stored text.
 fn mend_stream(source: &str) -> String {
     let mut out = String::with_capacity(source.len() + 32);

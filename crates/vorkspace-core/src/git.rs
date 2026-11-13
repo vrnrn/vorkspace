@@ -1,10 +1,10 @@
 //! Working-copy operations used by the native composer. Git protects dirty files;
 //! these operations never force a checkout, stash, or discard changes.
-mod remote;
 use serde::Deserialize;
 use std::{
     path::{Path, PathBuf},
     process::Command,
+    sync::Arc,
 };
 
 #[derive(Clone, Debug, Deserialize)]
@@ -27,13 +27,26 @@ pub struct Snapshot {
     pub current: Option<String>,
     pub detached: bool,
     pub linked: bool,
-    pub branches: Vec<Branch>,
-    pub worktrees: Vec<Worktree>,
+    pub branches: Arc<[Branch]>,
+    pub worktrees: Arc<[Worktree]>,
+}
+
+pub struct CheckoutHead {
+    pub current: Option<String>,
+    pub detached: bool,
+    pub linked: bool,
+}
+
+impl From<Snapshot> for CheckoutHead {
+    fn from(snapshot: Snapshot) -> Self {
+        Self {
+            current: snapshot.current,
+            detached: snapshot.detached,
+            linked: snapshot.linked,
+        }
+    }
 }
 pub(crate) fn git(cwd: &Path, args: &[&str]) -> Result<String, String> {
-    if crate::files::remote::is_remote(cwd) {
-        return Err("This isn’t available for projects on another machine yet.".into());
-    }
     let mut command = Command::new("git");
     command
         .current_dir(cwd)
@@ -49,25 +62,12 @@ pub(crate) fn git(cwd: &Path, args: &[&str]) -> Result<String, String> {
     String::from_utf8(out.stdout).map_err(|e| e.to_string())
 }
 pub fn snapshot(cwd: &Path) -> Result<Snapshot, String> {
-    if crate::files::remote::is_remote(cwd) {
-        return remote::snapshot(cwd);
-    }
-    let root = git(cwd, &["rev-parse", "--show-toplevel"])?;
-    let current = git(cwd, &["symbolic-ref", "--short", "HEAD"])
-        .ok()
-        .map(|s| s.trim().to_owned());
-    let detached = current.is_none();
-    let current = current.or_else(|| {
-        git(cwd, &["rev-parse", "--short", "HEAD"])
-            .ok()
-            .map(|s| s.trim().to_owned())
-    });
     let trees = worktrees(cwd)?;
-    let canonical = std::fs::canonicalize(cwd).unwrap_or_else(|_| cwd.to_owned());
-    let root = std::fs::canonicalize(root.trim()).unwrap_or(canonical);
-    let linked = trees
-        .iter()
-        .any(|t| !t.main && std::fs::canonicalize(&t.path).ok().as_ref() == Some(&root));
+    let CheckoutHead {
+        current,
+        detached,
+        linked,
+    } = local_head(cwd, &trees)?;
     let branches = git(
         cwd,
         &[
@@ -99,15 +99,57 @@ pub fn snapshot(cwd: &Path) -> Result<Snapshot, String> {
         detached,
         linked,
         branches,
-        worktrees: trees,
+        worktrees: trees.into(),
+    })
+}
+
+/// Resolve the current checkout without enumerating its branch choices.
+pub fn head(cwd: &Path) -> Result<CheckoutHead, String> {
+    local_head(cwd, &worktrees(cwd)?)
+}
+
+fn local_head(cwd: &Path, trees: &[Worktree]) -> Result<CheckoutHead, String> {
+    let canonical = std::fs::canonicalize(cwd).unwrap_or_else(|_| cwd.to_owned());
+    let working_copy = trees
+        .iter()
+        .filter_map(|tree| {
+            let root = std::fs::canonicalize(&tree.path).ok()?;
+            (canonical.starts_with(&root)
+                && !canonical.starts_with(root.join(".git"))
+                && !tree.head.is_empty())
+            .then_some((root, tree))
+        })
+        .max_by_key(|(root, _)| root.components().count());
+    let (current, linked) = if let Some((_, tree)) = working_copy {
+        (tree.branch.clone(), !tree.main)
+    } else {
+        // Custom Git layouts can put the checkout outside its registered path.
+        // Git must also reject bare repositories and its own metadata directory.
+        let root = git(cwd, &["rev-parse", "--show-toplevel"])?;
+        let root = std::fs::canonicalize(root.trim()).unwrap_or(canonical);
+        let current = git(cwd, &["symbolic-ref", "--short", "HEAD"])
+            .ok()
+            .map(|s| s.trim().to_owned());
+        let linked = trees
+            .iter()
+            .any(|t| !t.main && std::fs::canonicalize(&t.path).ok().as_ref() == Some(&root));
+        (current, linked)
+    };
+    let detached = current.is_none();
+    let current = current.or_else(|| {
+        git(cwd, &["rev-parse", "--short", "HEAD"])
+            .ok()
+            .map(|s| s.trim().to_owned())
+    });
+    Ok(CheckoutHead {
+        current,
+        detached,
+        linked,
     })
 }
 
 /// Listing working copies does not require reading every local/remote branch.
 pub fn worktrees(cwd: &Path) -> Result<Vec<Worktree>, String> {
-    if crate::files::remote::is_remote(cwd) {
-        return remote::worktrees(cwd);
-    }
     let mut trees = Vec::new();
     let mut tree = Worktree::default();
     for field in git(cwd, &["worktree", "list", "--porcelain", "-z"])?.split('\0') {
@@ -127,6 +169,12 @@ pub fn worktrees(cwd: &Path) -> Result<Vec<Worktree>, String> {
     }
     Ok(trees)
 }
+pub fn default_worktree_root(main: &Path) -> PathBuf {
+    main.with_file_name(format!(
+        "{}-worktrees",
+        main.file_name().unwrap_or_default().to_string_lossy()
+    ))
+}
 fn valid_branch(cwd: &Path, name: &str) -> Result<(), String> {
     if name.is_empty() || name.starts_with(['-', '@']) {
         return Err("Enter a valid branch name".into());
@@ -134,9 +182,6 @@ fn valid_branch(cwd: &Path, name: &str) -> Result<(), String> {
     git(cwd, &["check-ref-format", "--branch", name]).map(|_| ())
 }
 pub fn checkout(cwd: &Path, branch: &Branch) -> Result<(), String> {
-    if crate::files::remote::is_remote(cwd) {
-        return remote::checkout(cwd, branch);
-    }
     valid_branch(cwd, &branch.name)?;
     if let Some(remote) = &branch.remote {
         let reference = format!("refs/remotes/{remote}/{}", branch.name);
@@ -165,34 +210,15 @@ pub fn checkout(cwd: &Path, branch: &Branch) -> Result<(), String> {
     Ok(())
 }
 pub fn create_branch(cwd: &Path, name: &str) -> Result<(), String> {
-    if crate::files::remote::is_remote(cwd) {
-        return remote::create_branch(cwd, name);
-    }
     valid_branch(cwd, name)?;
     git(cwd, &["switch", "-c", name])?;
     Ok(())
 }
 pub fn create_worktree(cwd: &Path, base: &str, session: i64) -> Result<PathBuf, String> {
-    if crate::files::remote::is_remote(cwd) {
-        let stamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis();
-        return remote::create_worktree(
-            cwd,
-            &format!("mc/native-{session}-{stamp}"),
-            Some(base),
-            false,
-        )
-        .map(|tree| PathBuf::from(tree.path));
-    }
-    let state = snapshot(cwd)?;
-    let main = state.worktrees.first().ok_or("No working copies found")?;
+    let trees = worktrees(cwd)?;
+    let main = trees.first().ok_or("No working copies found")?;
     let main = Path::new(&main.path);
-    let parent = main.with_file_name(format!(
-        "{}-worktrees",
-        main.file_name().unwrap_or_default().to_string_lossy()
-    ));
+    let parent = default_worktree_root(main);
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -238,30 +264,17 @@ pub fn create_project_worktree(
     base: Option<&str>,
     existing: bool,
 ) -> Result<Worktree, String> {
-    if crate::files::remote::is_remote(cwd) {
-        return remote::create_worktree(cwd, branch.trim(), base, existing);
-    }
     let branch = branch.trim();
     valid_branch(cwd, branch)?;
-    let state = snapshot(cwd)?;
-    if state
-        .worktrees
+    let trees = worktrees(cwd)?;
+    if trees
         .iter()
         .any(|tree| tree.branch.as_deref() == Some(branch))
     {
         return Err("This branch already has a working copy. Select it from the picker.".into());
     }
-    let main = Path::new(
-        &state
-            .worktrees
-            .first()
-            .ok_or("No working copies found")?
-            .path,
-    );
-    let parent = main.with_file_name(format!(
-        "{}-worktrees",
-        main.file_name().unwrap_or_default().to_string_lossy()
-    ));
+    let main = Path::new(&trees.first().ok_or("No working copies found")?.path);
+    let parent = default_worktree_root(main);
     let slug: String = branch
         .chars()
         .map(|c| {
@@ -315,8 +328,7 @@ pub fn create_project_worktree(
         )?;
     }
     crate::worktree_setup::mark_due(&[main, cwd], &path);
-    snapshot(cwd)?
-        .worktrees
+    worktrees(cwd)?
         .into_iter()
         .find(|tree| Path::new(&tree.path) == path)
         .ok_or_else(|| {

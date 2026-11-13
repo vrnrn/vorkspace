@@ -1,10 +1,10 @@
 use super::*;
 use crate::settings::ProjectNotifications;
 use crate::{
+    background_settings::{BackgroundDialog, Event, Owner},
     project_background::ProjectBackground,
-    project_settings::{BackgroundDialog, Event, project_icon},
+    project_mark::project_icon,
 };
-use vorkspace_core::project_appearance::ProjectAppearance;
 
 pub(super) struct OpenBackground {
     pub(super) view: Entity<BackgroundDialog>,
@@ -13,17 +13,6 @@ pub(super) struct OpenBackground {
     _events: Subscription,
 }
 impl Shell {
-    /// A project's look: its folder name and hashed color, over the active
-    /// vorkspace's chat background. Projects have no customization.
-    pub(super) fn appearance(&self, _path: &str) -> ProjectAppearance {
-        ProjectAppearance {
-            background: self
-                .workspace
-                .active_vorkspace()
-                .and_then(|v| v.background.clone()),
-            ..Default::default()
-        }
-    }
     /// Edits a vorkspace's chat background in the background editor, in
     /// place of the vorkspace dialog, which comes back when it closes.
     pub(super) fn open_vorkspace_background(
@@ -35,19 +24,18 @@ impl Shell {
         let Some(def) = self.workspace.vorkspaces.iter().find(|v| v.id == vorkspace) else {
             return;
         };
-        let appearance = ProjectAppearance {
-            name: def.name.clone(),
-            background: def.background.clone(),
-            ..Default::default()
+        let owner = Owner::Vorkspace {
+            id: vorkspace.clone(),
+            label: def.name.clone(),
         };
-        let key = format!("vorkspace:{vorkspace}");
-        let view = cx.new(|cx| BackgroundDialog::new(key, appearance, cx));
+        let view = cx
+            .new(|cx| BackgroundDialog::new(owner, def.background.clone(), self.store.clone(), cx));
         let events = cx.subscribe_in(&view, window, {
             let vorkspace = vorkspace.clone();
             move |this, _, event: &Event, window, cx| match event {
-                Event::Changed(appearance) => {
+                Event::Changed(background) => {
                     if let Some(v) = this.workspace.vorkspace_mut(&vorkspace) {
-                        v.background = appearance.background.clone();
+                        v.background = background.clone();
                     }
                     this.backgrounds.clear();
                     this.invalidate_chrome(cx);
@@ -58,8 +46,8 @@ impl Shell {
             }
         });
         let focus = view.focus_handle(cx);
-        self.vorkspace_dialog = None;
-        self.background_dialog = Some(OpenBackground {
+        self.project_settings.vorkspace_dialog = None;
+        self.project_settings.background_dialog = Some(OpenBackground {
             view,
             vorkspace,
             _events: events,
@@ -68,10 +56,10 @@ impl Shell {
         cx.notify();
     }
     pub(super) fn project_label(&self, path: &str) -> String {
-        ProjectAppearance::default().label(path)
+        crate::workspace::project_name(path)
     }
     pub(super) fn project_mark(&self, path: &str, side: f32) -> AnyElement {
-        project_icon(&ProjectAppearance::default(), path, side)
+        project_icon(path, side)
     }
     /// A project's settings live in its vorkspace's dialog, on its own tab.
     pub(super) fn open_project_settings(
@@ -100,7 +88,7 @@ impl Shell {
             })
             .map(|v| v.id.clone());
         self.open_vorkspace_dialog(vorkspace, window, cx);
-        if let Some(dialog) = self.vorkspace_dialog.as_mut() {
+        if let Some(dialog) = self.project_settings.vorkspace_dialog.as_mut() {
             dialog.project = Some(path);
         }
         cx.notify();
@@ -111,7 +99,6 @@ impl Shell {
         path: &str,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let remote = vorkspace_core::files::remote::is_remote(std::path::Path::new(path));
         let on = crate::codebase::enabled(path, cx);
         let target = path.to_owned();
         div()
@@ -138,11 +125,7 @@ impl Shell {
                                     .text_size(px(12.))
                                     .line_height(px(18.))
                                     .text_color(content(0.5))
-                                    .child(if remote {
-                                        "Not available for remote projects."
-                                    } else {
-                                        "A local index of this project's symbols and calls, for you and its agents. The first use downloads a 48 MB engine."
-                                    }),
+                                    .child("A local index of this project's symbols and calls, for you and its agents. The first use downloads a 48 MB engine."),
                             ),
                     )
                     .child(
@@ -150,12 +133,10 @@ impl Shell {
                             "project-codebase-switch",
                             "Codebase Memory",
                             on,
-                            !remote,
+                            true,
                         )
                         .on_click(cx.listener(move |this, _, window, cx| {
-                            if !remote {
-                                this.configure_codebase(target.clone(), window, cx)
-                            }
+                            this.configure_codebase(target.clone(), window, cx)
                         })),
                     ),
             )
@@ -247,7 +228,11 @@ impl Shell {
     }
 
     pub(super) fn close_background_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let vorkspace = self.background_dialog.take().map(|open| open.vorkspace);
+        let vorkspace = self
+            .project_settings
+            .background_dialog
+            .take()
+            .map(|open| open.vorkspace);
         if let Some(bots) = &self.bots {
             bots.update(cx, |bots, cx| bots.close_background(cx));
         }
@@ -263,6 +248,7 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         let view = self
+            .project_settings
             .background_dialog
             .as_ref()
             .map(|open| open.view.clone())
@@ -288,7 +274,7 @@ impl Shell {
                 .bg(vorkspace_ui::fluid::scrim(0.4))
                 .child(
                     popover("project-background-modal", anchor)
-                        .modal_surface(self.workspace.classic_layout)
+                        .modal_surface()
                         .width(width)
                         .gap(0.)
                         .max_height(viewport.height.as_f32() - 32.)
@@ -317,37 +303,29 @@ impl Shell {
             }
             return div().flex_1().min_h_0();
         };
-        let (path, empty) = {
-            let session = chat.read(cx);
-            (session.summary.cwd.clone(), !session.summary.has_messages)
-        };
-        let mut appearance = self.appearance(&path);
-        if appearance.background.is_none() {
-            let p = &self.workspace.preferences;
-            appearance.background = p.chat_background_settings();
-        }
-        let classic = self.workspace.classic_layout;
-        chat.update(cx, |session, cx| {
-            session.set_project_appearance(appearance.clone(), cx);
-            session.set_classic_layout(classic, cx);
-        });
-        let settings = appearance.background.filter(|b| b.opacity(empty) > 0.);
+        let empty = !chat.read(cx).summary.has_messages;
+        let settings = self
+            .workspace
+            .active_vorkspace()
+            .and_then(|v| v.background.clone())
+            .or_else(|| self.workspace.preferences.chat_background_settings())
+            .filter(|background| background.opacity(empty) > 0.);
+        chat.update(cx, |session, cx| session.set_classic_layout(cx));
         if settings.is_none() {
             self.backgrounds.remove(&id);
         }
         let background = settings.map(|settings| {
-            let clip = (!self.workspace.classic_layout).then(|| self.background_card.clone());
             let background = self
                 .backgrounds
                 .entry(id)
                 .or_insert_with(|| cx.new(|_| ProjectBackground::default()))
                 .clone();
             background.update(cx, |background, cx| {
-                background.configure(Some(settings), empty, clip, cx)
+                background.configure(Some(settings), empty, None, cx)
             });
             background
         });
-        let linked = if self.workspace.active == Some(id) && !self.review_focused {
+        let linked = if self.workspace.active == Some(id) && !self.review.focused {
             self.linked_notice(id, cx)
         } else {
             None

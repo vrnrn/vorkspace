@@ -1,4 +1,4 @@
-//! Generated sidebar titles, following sessions/model/sessionTitle.ts.
+//! Generated sidebar titles.
 use crate::{
     agent::Settings,
     kind::Kind,
@@ -47,16 +47,16 @@ pub struct GeneratedTitle {
     pub work_item: Option<WorkItemHint>,
 }
 
-pub fn supports(kind: Kind) -> bool {
+pub(crate) fn supports(kind: Kind) -> bool {
     matches!(kind, Kind::Codex | Kind::Claude | Kind::Pi | Kind::Omp)
 }
-pub fn prompt(message: &str) -> String {
+pub(crate) fn prompt(message: &str) -> String {
     format!(
         "{PROMPT}\n\nUser message:\n{}",
         crate::response::limit(message, 8_000)
     )
 }
-pub fn sanitize(raw: &str) -> String {
+pub(crate) fn sanitize(raw: &str) -> String {
     let normalized = raw
         .trim()
         .lines()
@@ -76,7 +76,7 @@ pub fn sanitize(raw: &str) -> String {
         )
     }
 }
-pub fn parse(raw: &str, message: &str) -> Option<GeneratedTitle> {
+pub(crate) fn parse(raw: &str, message: &str) -> Option<GeneratedTitle> {
     if let Some(start) = raw.find('{') {
         if let Some(Ok(value)) = serde_json::Deserializer::from_str(&raw[start..])
             .into_iter::<serde_json::Value>()
@@ -109,15 +109,6 @@ pub fn parse(raw: &str, message: &str) -> Option<GeneratedTitle> {
         title,
         work_item: None,
     })
-}
-/// Runs on a worker, outside the user's provider thread and native transcript.
-pub fn generate(
-    kind: Kind,
-    cwd: &Path,
-    message: &str,
-    cancel: Arc<AtomicBool>,
-) -> Option<GeneratedTitle> {
-    generate_for(kind, cwd, message, Default::default(), cancel)
 }
 pub fn generate_for(
     kind: Kind,
@@ -183,7 +174,7 @@ mod tests {
     }
     #[test]
     fn saved_manual_names_and_deleted_sessions_reject_late_results() {
-        let db = crate::store::Store::open(Path::new(":memory:")).unwrap();
+        let mut db = crate::store::Store::test(Path::new(":memory:")).unwrap();
         let session = db.create("codex", "/tmp").unwrap();
         assert!(db
             .replace_title(session.id, &session.title, "Initial prompt")
@@ -192,9 +183,14 @@ mod tests {
         assert!(!db
             .replace_title(session.id, "Initial prompt", "Generated name")
             .unwrap());
+        let deleted = db.create("codex", "/tmp").unwrap();
+        db.delete(deleted.id).unwrap();
         assert!(!db
-            .replace_title(99_999, "Initial prompt", "Generated name")
+            .replace_title(deleted.id, &deleted.title, "Generated name")
             .unwrap());
+        assert!(db
+            .replace_title(99_999, "Initial prompt", "Generated name")
+            .is_err());
         assert_eq!(db.sessions().unwrap()[0].title, "Manual name");
     }
 }

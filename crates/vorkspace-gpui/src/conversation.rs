@@ -20,8 +20,6 @@ mod native_history;
 mod notifications;
 #[cfg(test)]
 pub(crate) mod receive_tests;
-mod remote;
-pub(crate) mod remote_plans;
 mod response_menu;
 mod response_transfer;
 mod responsive_toolbar;
@@ -31,7 +29,9 @@ mod submission_tests;
 mod team_history;
 mod ticket_context;
 mod title;
+pub(crate) mod turn_driver;
 mod turn_flow;
+mod turn_projection;
 mod turn_recovery;
 use crate::{
     git_tools::git_picker::{GitPicker, Mode as GitMode, Picked as GitPicked},
@@ -63,10 +63,10 @@ use std::{
 };
 use vorkspace_core::{
     agent::{AccessMode, Approval, Control, Decision, Settings},
-    catalog::{self, Model},
+    catalog::{self, Model, ModelRows},
 };
 use vorkspace_core::{provider::Kind, store::Session};
-use vorkspace_runtime::runtime::{Database, locked, run_turn};
+use vorkspace_runtime::runtime::{Database, TurnOutcome, locked};
 use vorkspace_ui::clock::Instant;
 use vorkspace_ui::{composer_motion::ComposerMotion, theme::*};
 // Keep empty and docked composers aligned with the transcript column. Below
@@ -76,8 +76,7 @@ const COMPOSER_COLUMN: f32 = COLUMN;
 const SHORT_EMPTY_HEIGHT: f32 = 520.;
 const UNCONFIRMED_TURN: &str =
     "Provider connection ended before completion was confirmed. This turn was not replayed.";
-// RUNTIME_MODE_LABEL and RUNTIME_MODE_HINT from the React session model,
-// with AccessPicker's icons; Full access is amber.
+// Each access mode's id, label, hint and icon; Full access is amber.
 const ACCESS_MODES: &[(&str, &str, &str, &str)] = &[
     (
         "supervised",
@@ -145,21 +144,39 @@ struct OpenMenu {
     _events: Vec<Subscription>,
 }
 use response_menu::ResponseMenu;
-pub(crate) struct SessionChanged;
-/// A tool label changed; token/output changes do not wake session discovery.
-pub(crate) struct SessionActivityChanged;
+#[derive(Clone, Copy)]
+pub(crate) enum SessionChanged {
+    Catalog,
+    Draft,
+    Configuration,
+    Checkout,
+    History,
+    Turn,
+    Settled,
+    Attention,
+    Loaded,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TurnState {
+    Idle,
+    Running,
+    /// The UI has stopped streaming while the worker finishes its durable save.
+    Stopping,
+    Settled(TurnOutcome),
+    Unconfirmed,
+}
+
+impl SessionChanged {
+    pub(crate) fn affects_attention(self) -> bool {
+        matches!(
+            self,
+            Self::Attention | Self::Turn | Self::Settled | Self::Loaded
+        )
+    }
+}
 /// The review card asked to open the session's recorded changes.
 pub(crate) struct OpenSessionChanges(pub(crate) crate::git_tools::review::ReviewTab);
-/// A minion session's context and app environment.
-pub(crate) type MinionAttachment = (
-    vorkspace_core::agent::MinionContext,
-    std::collections::HashMap<String, String>,
-);
-/// Minion sessions by ID, shared with the shell so it can attach them to
-/// their views without reading `Bots`, which may be mid-update.
-pub(crate) type MinionRegistry =
-    std::rc::Rc<std::cell::RefCell<std::collections::HashMap<i64, MinionAttachment>>>;
-
 /// UI admission follows durable identity, including retired members and
 /// disabled Minions. Shared snapshots avoid reborrowing Bots from a chat.
 #[derive(Clone)]
@@ -176,8 +193,6 @@ pub(crate) struct Conversation {
     editing_last_turn: edit_last_turn::State,
     btw: Option<Entity<btw::Btw>>,
     pub(crate) summary: Session,
-    remote_state: remote::State,
-    remote_plans: remote_plans::State,
     store: Database,
     pub(crate) transcript: Entity<TranscriptView>,
     pub(crate) review: Entity<crate::git_tools::session_review::SessionReview>,
@@ -204,33 +219,26 @@ pub(crate) struct Conversation {
     reviewing_submission: bool,
     submission_recovery_epoch: u64,
     app_environment: std::collections::HashMap<String, String>,
-    /// Bots' minion sessions. A minion's turns take its parent's context
-    /// and capability from here as each turn starts, so turning Minions on
-    /// or off reaches sessions that are already open. Never saved.
-    pub(crate) minions: Option<MinionRegistry>,
     pub(crate) team_histories: Option<TeamHistories>,
-    team_dispatch: bool,
     team_look: Option<(crate::avatar::BotLookConfig, String)>,
     planning_orchestration: bool,
     pub(crate) orchestration_plan: Option<vorkspace_core::orchestration::Plan>,
     orchestration_error: Option<String>,
     pub(crate) orchestration_progress: Option<String>,
     status: String,
-    pub(crate) activity: Option<String>,
     loaded: bool,
     history_unloaded: bool,
     history_partial: bool,
     pub(crate) allow_storage_paging: bool,
+    complete_history_requested: bool,
     _history_events: Subscription,
     loaded_history_revision: Option<i64>,
     history_actions: std::collections::VecDeque<history::HistoryAction>,
     pending_search: Option<(usize, String)>,
-    loading: bool,
+    history_read: history::ReadState,
     native_syncing: bool,
     native_recovery: Option<native_history::Recovery>,
-    pub(crate) busy: bool,
-    /// The UI is idle; serialize the next launch behind the worker's last save.
-    pub(crate) stopping: bool,
+    turn_state: TurnState,
     notification_cancelled: bool,
     /// The store's saved-draft flag, until the conversation loads its own.
     pub(crate) draft_hint: bool,
@@ -241,13 +249,11 @@ pub(crate) struct Conversation {
     pub(crate) bot_turn: u64,
     pub(crate) submission_generation: u64,
     bot_ui: bot::ChatState,
-    project_appearance: vorkspace_core::project_appearance::ProjectAppearance,
     classic_layout: bool,
-    catalog: Vec<Model>,
+    catalog: ModelRows,
     catalog_epoch: u64,
     account_switching: bool,
-    _usage_clock: gpui::Task<()>,
-    _account_usage: Option<Subscription>,
+    usage_watch: Option<accounts::UsageWatch>,
     approvals: std::collections::VecDeque<Approval>,
     approval_ui: approvals::State,
     questions: std::collections::VecDeque<(
@@ -256,7 +262,10 @@ pub(crate) struct Conversation {
     )>,
     controls: Option<std::sync::mpsc::Sender<Control>>,
     branch: Option<String>,
-    git: Option<vorkspace_core::git::Snapshot>,
+    git: Option<git_context::Head>,
+    git_cwd: String,
+    git_head_revision: u64,
+    git_refresh: Option<gpui::Task<()>>,
     git_picker: Option<Entity<GitPicker>>,
     git_events: Option<Subscription>,
     preparing_worktree: bool,
@@ -292,9 +301,7 @@ pub(crate) struct Conversation {
 impl Drop for Conversation {
     fn drop(&mut self) {
         let _ = self.composer_draft.flush();
-        if !self.summary.cwd.starts_with("remote://") {
-            self.cancel.store(true, Ordering::Relaxed);
-        }
+        self.cancel.store(true, Ordering::Relaxed);
         self.cancel_title_generation();
     }
 }
@@ -309,12 +316,8 @@ impl Conversation {
     ) -> Option<String> {
         if !self.loaded && self.settings.revision == 0 && self.settings.worktree_cwd != path {
             self.settings.worktree_cwd = path;
-            self.git = self
-                .settings
-                .worktree_cwd
-                .as_deref()
-                .and_then(vorkspace_model::git_cache::get);
-            self.branch = branch.or_else(|| self.git.as_ref().and_then(|s| s.current.clone()));
+            self.seed_git();
+            self.branch = branch.or(self.branch.take());
             self.sync_tool_paths(cx);
             cx.notify();
         } else if !self.loaded && branch.is_some() && self.branch != branch {
@@ -339,9 +342,9 @@ impl Conversation {
             })
             .collect()
     }
-    pub(crate) fn set_classic_layout(&mut self, classic: bool, cx: &mut Context<Self>) {
-        if self.classic_layout != classic {
-            self.classic_layout = classic;
+    pub(crate) fn set_classic_layout(&mut self, cx: &mut Context<Self>) {
+        if !self.classic_layout {
+            self.classic_layout = true;
             cx.notify();
         }
     }
@@ -351,18 +354,7 @@ impl Conversation {
             cx.notify();
         }
     }
-    pub(crate) fn set_project_appearance(
-        &mut self,
-        appearance: vorkspace_core::project_appearance::ProjectAppearance,
-        cx: &mut Context<Self>,
-    ) {
-        if self.project_appearance != appearance {
-            self.project_appearance = appearance;
-            cx.notify();
-        }
-    }
-    /// SessionCardPreview.tsx's compact model/status header and workspace details.
-    /// Its latest message is saved as a draft, not sent (`session.draft`).
+    /// Whether its latest message is saved as a draft, not sent (`session.draft`).
     pub(crate) fn has_saved_draft(&self) -> bool {
         if self.loaded {
             self.follow_ups.state.draft.is_some()
@@ -374,10 +366,28 @@ impl Conversation {
         !self.approvals.is_empty() || !self.questions.is_empty()
     }
     pub(crate) fn is_stopping(&self) -> bool {
-        self.stopping
+        self.turn_state == TurnState::Stopping
     }
     pub(crate) fn responding(&self) -> bool {
-        self.busy && !self.stopping
+        self.turn_state == TurnState::Running
+    }
+    pub(crate) fn turn_in_flight(&self) -> bool {
+        matches!(self.turn_state, TurnState::Running | TurnState::Stopping)
+    }
+    pub(crate) fn turn_state(&self) -> TurnState {
+        self.turn_state
+    }
+    #[cfg(test)]
+    pub(crate) fn set_running_for_test(&mut self, running: bool) {
+        self.turn_state = if running {
+            TurnState::Running
+        } else {
+            TurnState::Idle
+        };
+    }
+    #[cfg(test)]
+    pub(crate) fn complete_turn_for_test(&mut self) {
+        self.turn_state = TurnState::Settled(TurnOutcome::Completed);
     }
     pub(crate) fn new(summary: Session, store: Database, cx: &mut Context<Self>) -> Self {
         #[cfg(test)]
@@ -385,9 +395,12 @@ impl Conversation {
         let input = cx.new(input::Input::composer);
         // A new tab shows its folder's checkout from the first frame; the
         // load below confirms it rather than popping it in.
-        let git = (!summary.has_messages)
-            .then(|| vorkspace_model::git_cache::get(&summary.cwd))
-            .flatten();
+        let (branch, git) = git_context::Head::split(
+            (!summary.has_messages)
+                .then(|| vorkspace_model::git_cache::get(&summary.cwd))
+                .flatten()
+                .map(Into::into),
+        );
         let completion = cx.new(|cx| {
             crate::composer::composer_completion::Completion::new(
                 input.clone(),
@@ -427,20 +440,22 @@ impl Conversation {
             crate::git_tools::session_review::SessionReview::new(summary.id, summary.cwd.clone())
         });
         let review_events = cx.subscribe(&review, |this, review, event, cx| match event {
-            crate::git_tools::session_review::SessionReviewEvent::Open { path } => {
+            crate::git_tools::session_review::SessionReviewEvent::Open { path, turn_id } => {
                 let (session, cwd) = review.read(cx).session();
                 cx.emit(OpenSessionChanges(
                     crate::git_tools::review::ReviewTab::Session {
                         cwd: cwd.to_owned(),
                         session,
                         path: path.clone(),
+                        checkpoint: Some(turn_id.clone()),
                     },
                 ));
             }
-            // Undo and Keep may rewrite files; the checkout's views reread.
-            crate::git_tools::session_review::SessionReviewEvent::Changed => {
-                this.refresh_git(cx);
-                cx.emit(SessionChanged);
+            crate::git_tools::session_review::SessionReviewEvent::Changed { cwd } => {
+                if this.execution_cwd() == cwd {
+                    this.refresh_git(cx);
+                    cx.emit(SessionChanged::Checkout);
+                }
             }
         });
         let review_observation = cx.observe(&review, |this, review, cx| {
@@ -470,23 +485,6 @@ impl Conversation {
                     .selected(Kind::from_id(&summary.provider), &summary.cwd)
             })
             .unwrap_or_default();
-        let usage_clock = cx.spawn(async move |this, cx| {
-            loop {
-                cx.background_executor()
-                    .timer(std::time::Duration::from_secs(30))
-                    .await;
-                if this.update(cx, |this, cx| this.tick_usage(cx)).is_err() {
-                    break;
-                }
-            }
-        });
-        let account_usage = crate::accounts::get(cx).map(|center| {
-            cx.observe(&center, |this, _, cx| {
-                if this.settings.usage_limit.is_some() {
-                    this.tick_usage(cx);
-                }
-            })
-        });
         let draft_state = composer_draft::State::new(store.clone(), summary.id);
         let draft_quit = cx.on_app_quit(|this, cx| {
             this.capture_composer(cx);
@@ -501,7 +499,6 @@ impl Conversation {
             store,
             bot_turn: 0,
             submission_generation: 0,
-            activity: None,
             settings_write_cancel: Arc::new(AtomicBool::new(false)),
             bot_ui: bot::ChatState::default(),
             transcript,
@@ -529,9 +526,7 @@ impl Conversation {
             reviewing_submission: false,
             submission_recovery_epoch: 0,
             app_environment: Default::default(),
-            minions: None,
             team_histories: None,
-            team_dispatch: false,
             team_look: None,
             planning_orchestration: false,
             orchestration_plan: None,
@@ -542,15 +537,15 @@ impl Conversation {
             history_unloaded: false,
             history_partial: false,
             allow_storage_paging: false,
+            complete_history_requested: false,
             _history_events: history_events,
             loaded_history_revision: None,
             history_actions: Default::default(),
             pending_search: None,
-            loading: false,
+            history_read: Default::default(),
             native_syncing: false,
             native_recovery: None,
-            busy: false,
-            stopping: false,
+            turn_state: TurnState::Idle,
             notification_cancelled: false,
             draft_hint: false,
             model: std::env::var(format!(
@@ -565,19 +560,20 @@ impl Conversation {
                 effort: preferred_effort(&summary.provider, cx),
                 ..Default::default()
             },
-            project_appearance: Default::default(),
             classic_layout: false,
-            catalog: Vec::new(),
+            catalog: Default::default(),
             catalog_epoch: 0,
             account_switching: false,
-            _usage_clock: usage_clock,
-            _account_usage: account_usage,
+            usage_watch: None,
             approvals: Default::default(),
             approval_ui: Default::default(),
             questions: Default::default(),
             controls: None,
-            branch: git.as_ref().and_then(|s| s.current.clone()),
+            branch,
             git,
+            git_cwd: summary.cwd.clone(),
+            git_head_revision: 0,
+            git_refresh: None,
             git_picker: None,
             git_events: None,
             preparing_worktree: false,
@@ -605,8 +601,6 @@ impl Conversation {
             response_menu: None,
             response_request: None,
             summary,
-            remote_state: remote::State::default(),
-            remote_plans: remote_plans::State::default(),
         };
         conversation.load_composer(cx);
         conversation
@@ -628,13 +622,10 @@ impl Conversation {
 }
 
 impl EventEmitter<SessionChanged> for Conversation {}
-impl EventEmitter<SessionActivityChanged> for Conversation {}
 impl EventEmitter<OpenSessionChanges> for Conversation {}
 impl EventEmitter<Transfer> for Conversation {}
 impl EventEmitter<composer_features::StartOrchestration> for Conversation {}
 impl EventEmitter<composer_features::StopOrchestration> for Conversation {}
-
-impl Conversation {}
 
 /// The access mode the last composer pick left as the default for new chats.
 pub(crate) fn default_access(cx: &gpui::App) -> AccessMode {
@@ -644,11 +635,9 @@ pub(crate) fn default_access(cx: &gpui::App) -> AccessMode {
         .unwrap_or_default()
 }
 pub(crate) fn remember_access(mode: AccessMode, cx: &mut gpui::App) {
-    if cx.has_global::<vorkspace_ui::preferences::Preferences>() {
-        cx.update_global::<vorkspace_ui::preferences::Preferences, _>(|prefs, _| {
-            prefs.default_access = Some(mode.id().into());
-        });
-    }
+    crate::preference_writes::remember(cx, |prefs| {
+        prefs.default_access = Some(mode.id().into());
+    });
 }
 fn is_effort_key(key: &str) -> bool {
     matches!(
@@ -715,13 +704,6 @@ impl Render for Conversation {
         }
         self.attachment_drop_target("session-chat", cx)
             .relative()
-            .capture_action(
-                cx.listener(|this, _: &vorkspace_ui::actions::DismissMenu, _, cx| {
-                    if this.close_remote_plan(cx) {
-                        cx.stop_propagation();
-                    }
-                }),
-            )
             .flex()
             .flex_col()
             .size_full()
@@ -752,7 +734,6 @@ impl Render for Conversation {
                 ),
             )
             .when_some(self.btw.as_ref(), |d, sheet| d.child(sheet.clone()))
-            .children(self.remote_plan_reader(cx))
             .into_any()
     }
 }

@@ -2,24 +2,14 @@
 use super::{Event, Page};
 use crate::markdown;
 use gpui::{AppContext, Context};
-use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
 use std::{
     sync::{Arc, Mutex},
     time::Duration,
 };
 use vorkspace_meetings::{
-    DraftWrite, EditLease, Meeting, Meetings,
+    Draft, DraftView, DraftWrite, EditLease, MAX_SUMMARY_BYTES, Meeting, Meetings, Snapshot,
     recording::{MAX_TRANSCRIPT, State},
 };
-
-#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-enum DraftView {
-    #[default]
-    Transcript,
-    Summary,
-}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) enum Section {
@@ -42,49 +32,6 @@ pub(super) enum Field {
     Summary,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
-struct Draft {
-    revision: u64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    title: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    transcript: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    summary: Option<String>,
-    view: DraftView,
-    title_focused: bool,
-    start: u32,
-    end: u32,
-}
-
-impl Draft {
-    fn text(&self, field: Field) -> Option<&str> {
-        match field {
-            Field::Transcript => self.transcript.as_deref(),
-            Field::Summary => self.summary.as_deref(),
-        }
-    }
-
-    fn set_text(&mut self, field: Field, text: String) {
-        *match field {
-            Field::Transcript => &mut self.transcript,
-            Field::Summary => &mut self.summary,
-        } = Some(text);
-    }
-}
-
-#[derive(Deserialize)]
-pub(super) struct Snapshot {
-    pub meeting: Meeting,
-    pub state: State,
-    pub transcript: String,
-    #[serde(default)]
-    pub sequence: u64,
-    draft: Option<Draft>,
-    pub(super) draft_version: Option<String>,
-    draft_error: Option<String>,
-}
-
 pub(super) struct Document {
     pub state: State,
     pub saved: Option<Snapshot>,
@@ -103,7 +50,7 @@ impl Document {
             awaiting_transcript: false,
             draft: snapshot.draft.take(),
             version: snapshot.draft_version.clone(),
-            checkpoint_error: snapshot.draft_error.take(),
+            checkpoint_error: None,
             saved: Some(snapshot),
         }
     }
@@ -154,7 +101,10 @@ impl Document {
     }
 
     pub(super) fn text(&self, field: Field) -> &str {
-        if let Some(text) = self.draft.as_ref().and_then(|draft| draft.text(field)) {
+        if let Some(text) = self.draft.as_ref().and_then(|draft| match field {
+            Field::Transcript => draft.transcript.as_deref(),
+            Field::Summary => draft.summary.as_deref(),
+        }) {
             return text;
         }
         match field {
@@ -198,12 +148,14 @@ impl Document {
     }
 
     fn write(&self) -> Result<DraftWrite, String> {
-        DraftWrite::from_params(json!({
-            "id": self.id(),
-            "version": self.version,
-            "expected": self.saved.as_ref().and_then(|saved| saved.draft_version.as_deref()),
-            "draft": self.draft,
-        }))
+        DraftWrite::new(
+            self.id().to_owned(),
+            self.saved
+                .as_ref()
+                .and_then(|saved| saved.draft_version.clone()),
+            self.version.clone().ok_or("Missing draft version")?,
+            self.draft.clone().ok_or("Missing draft content")?,
+        )
     }
 
     fn apply_save(&mut self, meeting: Meeting, version: String, submitted: Draft) {
@@ -214,14 +166,13 @@ impl Document {
             sequence: 0,
             draft: None,
             draft_version: None,
-            draft_error: None,
         });
         if meeting.revision < saved.meeting.revision {
             return;
         }
         saved.draft_version = Some(version.clone());
         if let Some(text) = submitted.transcript {
-            saved.transcript = text;
+            saved.transcript = text.to_string();
         }
         saved.meeting = meeting;
         if self.version.as_ref() == Some(&version) {
@@ -284,10 +235,10 @@ impl DraftBuffer {
     ) -> Result<(), String> {
         let mut pending = self.pending.lock().unwrap();
         if let Some(old) = pending.as_ref() {
-            if old.write.id == write.id && old.write.version == write.version {
+            if old.write.id() == write.id() && old.write.version() == write.version() {
                 return Ok(());
             }
-            if old.write.id != write.id || !write.follows(&old.write.version) {
+            if old.write.id() != write.id() || !write.follows(old.write.version()) {
                 return Err(
                     "Another meeting draft is still being checkpointed. Try again shortly.".into(),
                 );
@@ -310,7 +261,7 @@ impl DraftBuffer {
             .lock()
             .unwrap()
             .as_ref()
-            .is_some_and(|edit| edit.write.id == id)
+            .is_some_and(|edit| edit.write.id() == id)
     }
 
     pub(super) fn flush(&self, meetings: &Meetings) -> Result<(), String> {
@@ -320,7 +271,7 @@ impl DraftBuffer {
         };
         let materialized = edit.lease.0.lock().unwrap().is_some();
         if !edit.skip_unmaterialized || materialized {
-            edit.lease.materialize(meetings, &edit.write.id)?;
+            edit.lease.materialize(meetings, edit.write.id())?;
             meetings.checkpoint_draft(&edit.write)?;
         }
         let mut pending = self.pending.lock().unwrap();
@@ -335,7 +286,7 @@ impl DraftBuffer {
 
     fn clear(&self, id: &str) {
         let mut pending = self.pending.lock().unwrap();
-        if pending.as_ref().is_some_and(|edit| edit.write.id == id) {
+        if pending.as_ref().is_some_and(|edit| edit.write.id() == id) {
             *pending = None;
         }
     }
@@ -353,26 +304,26 @@ impl DraftBuffer {
                 .map(|lease| Arc::new(EditorLease(Mutex::new(Some(lease))))),
         };
         if lease.is_none() {
-            return decode(meetings.read(id)?).map(|saved| Document::new(saved, None));
+            return meetings.read(id).map(|saved| Document::new(saved, None));
         }
         let checkpoint = self.flush(meetings);
-        let mut snapshot = meetings.open_document(id)?;
+        let mut document = Document::new(meetings.open_document(id)?, lease);
         if let Err(error) = checkpoint
             && let Some(edit) = self
                 .pending
                 .lock()
                 .unwrap()
                 .as_ref()
-                .filter(|edit| edit.write.id == id)
+                .filter(|edit| edit.write.id() == id)
         {
-            edit.write.restore_pending(&mut snapshot, error)?;
+            // Keep the observed slot version as the compare-and-swap base.
+            // A failed write can leave a newer edit in memory.
+            document.draft = Some(edit.write.draft().clone());
+            document.version = Some(edit.write.version().to_owned());
+            document.checkpoint_error = Some(error);
         }
-        decode(snapshot).map(|snapshot| Document::new(snapshot, lease))
+        Ok(document)
     }
-}
-
-pub(super) fn decode<T: serde::de::DeserializeOwned>(value: Value) -> Result<T, String> {
-    serde_json::from_value(value).map_err(|error| error.to_string())
 }
 
 impl Page {
@@ -389,7 +340,7 @@ impl Page {
         let selection = input.selection_utf16();
         let oversized = match field {
             Field::Transcript => text.len() > MAX_TRANSCRIPT,
-            Field::Summary => text.len() > 64 * 1024,
+            Field::Summary => text.len() > MAX_SUMMARY_BYTES,
         };
         if oversized {
             let previous = doc.text(field).to_owned();
@@ -405,15 +356,12 @@ impl Page {
         self.error = None;
         let draft = doc.draft.get_or_insert_with(|| Draft {
             revision: doc.saved.as_ref().map_or(0, |saved| saved.meeting.revision),
-            title: None,
-            transcript: None,
-            summary: None,
-            view: DraftView::Transcript,
-            title_focused: false,
-            start: 0,
-            end: 0,
+            ..Draft::default()
         });
-        draft.set_text(field, text.to_string());
+        *match field {
+            Field::Transcript => &mut draft.transcript,
+            Field::Summary => &mut draft.summary,
+        } = Some(text.into());
         draft.view = if self.section == Section::Transcript {
             DraftView::Transcript
         } else {
@@ -751,9 +699,16 @@ impl Page {
         let version = doc.version.clone().unwrap();
         let lease = doc.lease.clone().unwrap();
         let empty_temporary = doc.saved.is_none() && doc.unrecorded() && !doc.has_content();
-        if let Err(error) = doc
-            .write()
-            .and_then(|write| self.drafts.stage(write, lease.clone(), empty_temporary))
+        // A reopened draft is already in the slot. Its version is the save
+        // target, not a successor checkpoint.
+        let checkpointed = doc
+            .saved
+            .as_ref()
+            .is_some_and(|saved| saved.draft_version.as_ref() == Some(&version));
+        if !checkpointed
+            && let Err(error) = doc
+                .write()
+                .and_then(|write| self.drafts.stage(write, lease.clone(), empty_temporary))
         {
             self.after_save = None;
             self.fail(error, cx);
@@ -769,7 +724,9 @@ impl Page {
             if empty_temporary && lease.0.lock().unwrap().is_none() {
                 Ok(None)
             } else {
-                decode(meetings.save_draft(&submitted_id, &submitted_version)?).map(Some)
+                meetings
+                    .save_draft(&submitted_id, &submitted_version)
+                    .map(Some)
             }
         });
         cx.spawn(async move |this, cx| {
@@ -858,11 +815,13 @@ impl Page {
             // The latest input may have failed to checkpoint. Discard the
             // durable slot and then clear the matching pending memory.
             let current = meetings.open_document(&id)?;
-            if let Some(version) = current["draft_version"].as_str() {
+            if let Some(version) = current.draft_version.as_deref() {
                 meetings.discard_draft(&id, version)?;
             }
             drafts.clear(&id);
-            decode(meetings.open_document(&id)?).map(|doc| Document::new(doc, lease))
+            meetings
+                .open_document(&id)
+                .map(|doc| Document::new(doc, lease))
         });
         cx.spawn(async move |this, cx| {
             let result = work.await;
