@@ -840,10 +840,10 @@ fn retained_connector_pages_dispatch_with_current_defaults_and_preserve_explicit
                         .detail_key(),
                 );
                 page.reset_destination();
-                assert_eq!(page.start_bot.as_deref(), Some("first"));
+                assert_eq!(page.start.bot.as_deref(), Some("first"));
                 page.comment
                     .update(cx, |input, cx| input.set_text("Unsent draft".into(), cx));
-                page.start_project = "/chosen/project".into();
+                page.start.project = "/chosen/project".into();
                 let output = sent.clone();
                 cx.subscribe(&cx.entity(), move |_, _, event: &Event, _| {
                     if let Event::StartSession { item, bot, .. } = event {
@@ -863,8 +863,8 @@ fn retained_connector_pages_dispatch_with_current_defaults_and_preserve_explicit
             cx.update(|cx| {
                 for (provider, page) in &pages {
                     page.update(cx, |page, _| {
-                        page.destination_explicit = true;
-                        page.start_bot = (*provider == "jira").then(|| "chosen".into());
+                        page.start.destination_explicit = true;
+                        page.start.bot = (*provider == "jira").then(|| "chosen".into());
                     });
                 }
             });
@@ -886,7 +886,7 @@ fn retained_connector_pages_dispatch_with_current_defaults_and_preserve_explicit
                         } else {
                             (!default.is_empty()).then_some(default)
                         };
-                        assert_eq!(page.start_bot.as_deref(), expected);
+                        assert_eq!(page.start.bot.as_deref(), expected);
                         assert_eq!(
                             page.state.default_bots.get(provider),
                             (!default.is_empty()).then_some(default)
@@ -1258,20 +1258,20 @@ fn saved_bot_destination_is_preselected_and_explicit_project_choice_wins(cx: &mu
             });
             inbox.set_bots(vec![("helper".into(), "Helper".into())], cx);
             inbox.set_default_bot("jira", "helper", cx).unwrap();
-            assert_eq!(inbox.start_bot.as_deref(), Some("helper"));
+            assert_eq!(inbox.start.bot.as_deref(), Some("helper"));
             inbox.start(cx);
-            inbox.start_project = "/chosen/project".into();
-            inbox.start_bot = None;
-            inbox.destination_explicit = true;
+            inbox.start.project = "/chosen/project".into();
+            inbox.start.bot = None;
+            inbox.start.destination_explicit = true;
             inbox.set_default_bot("jira", "helper", cx).unwrap();
             assert!(
-                inbox.start_bot.is_none(),
+                inbox.start.bot.is_none(),
                 "saved defaults cannot override a deliberate destination"
             );
             inbox.start(cx);
-            inbox.destination_explicit = false;
+            inbox.start.destination_explicit = false;
             inbox.set_bots(vec![], cx);
-            assert!(inbox.start_bot.is_none());
+            assert!(inbox.start.bot.is_none());
             assert_eq!(inbox.state.default_bots.get("jira"), Some("helper"));
             subscription
         })

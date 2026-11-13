@@ -292,7 +292,7 @@ impl Inbox {
                                         if let Some(mut item) = this.item() {
                                             if item.project_path.is_empty() {
                                                 item.project_path =
-                                                    this.start_project.to_string_lossy().into_owned();
+                                                    this.start.project.to_string_lossy().into_owned();
                                             }
                                             let evidence = failed
                                                 .iter()

@@ -108,6 +108,29 @@ impl ItemActions {
     }
 }
 
+/// Where a session started from the open item goes: a project checkout or a bot.
+struct SessionStart {
+    project: PathBuf,
+    bots: Vec<(String, String)>,
+    bot: Option<String>,
+    destination_explicit: bool,
+    project_picker: bool,
+    project_anchor: AnchorSlot,
+}
+
+impl SessionStart {
+    fn new(project: PathBuf) -> Self {
+        Self {
+            project,
+            bots: vec![],
+            bot: None,
+            destination_explicit: false,
+            project_picker: false,
+            project_anchor: AnchorSlot::default(),
+        }
+    }
+}
+
 pub(crate) struct Inbox {
     /// The root retains the pane entities. Each pane owns its details and inputs.
     owner: Option<WeakEntity<Inbox>>,
@@ -167,12 +190,7 @@ pub(crate) struct Inbox {
     filter_anchor: AnchorSlot,
     connect: ConnectForm,
     connection_revision: u64,
-    start_project: PathBuf,
-    bots: Vec<(String, String)>,
-    start_bot: Option<String>,
-    destination_explicit: bool,
-    project_picker: bool,
-    project_anchor: AnchorSlot,
+    start: SessionStart,
     actions: ItemActions,
     resize_start: Option<(f32, f32)>,
     active: bool,
@@ -343,12 +361,7 @@ impl Inbox {
             filter_anchor: AnchorSlot::default(),
             connect,
             connection_revision,
-            start_project: cwd,
-            bots: vec![],
-            start_bot: None,
-            destination_explicit: false,
-            project_picker: false,
-            project_anchor: AnchorSlot::default(),
+            start: SessionStart::new(cwd),
             actions: ItemActions::new(),
             resize_start: None,
             active: false,
@@ -373,14 +386,14 @@ impl Inbox {
         poll_projects: Vec<PathBuf>,
         cx: &mut Context<Self>,
     ) {
-        if self.projects != projects || self.start_project != cwd {
+        if self.projects != projects || self.start.project != cwd {
             self.projects = projects;
             self.service.cwd = if cwd.is_dir() {
                 cwd.clone()
             } else {
                 self.service.data_dir.clone()
             };
-            self.start_project = cwd;
+            self.start.project = cwd;
             self.publish_pages(cx);
             cx.notify();
         }
@@ -486,27 +499,28 @@ impl Inbox {
         })?;
         self.adopt_preferences(&saved, true, cx);
         self.publish_pages(cx);
-        if !self.destination_explicit {
+        if !self.start.destination_explicit {
             self.reset_destination();
         }
         cx.notify();
         Ok(())
     }
     pub(crate) fn set_bots(&mut self, bots: Vec<(String, String)>, cx: &mut Context<Self>) {
-        if self.bots != bots {
-            self.bots = bots;
+        if self.start.bots != bots {
+            self.start.bots = bots;
             if self.owner.is_none() {
                 self.publish_pages(cx);
             }
-            if !self.destination_explicit {
+            if !self.start.destination_explicit {
                 self.reset_destination();
             }
             if self
-                .start_bot
+                .start
+                .bot
                 .as_ref()
-                .is_some_and(|id| !self.bots.iter().any(|(key, _)| key == id))
+                .is_some_and(|id| !self.start.bots.iter().any(|(key, _)| key == id))
             {
-                self.start_bot = None;
+                self.start.bot = None;
             }
             cx.notify();
         }
@@ -749,7 +763,7 @@ impl Inbox {
             let defaults_changed = self.state.default_bots != next.default_bots;
             let connectors_changed = self.state.connectors != next.connectors;
             self.state = next;
-            if defaults_changed && !self.destination_explicit {
+            if defaults_changed && !self.start.destination_explicit {
                 self.reset_destination();
             }
             if connectors_changed && self.owner.is_none() {
@@ -811,7 +825,7 @@ impl Inbox {
             let mut page = Self::new_inner(
                 self.store.clone(),
                 self.projects.clone(),
-                self.start_project.clone(),
+                self.start.project.clone(),
                 self.feed.clone(),
                 cx,
             );
@@ -822,7 +836,7 @@ impl Inbox {
             page.saved_state = page.state.clone();
             page.snapshot = self.snapshot.clone();
             page.sessions = self.sessions.clone();
-            page.bots = self.bots.clone();
+            page.start.bots = self.start.bots.clone();
             page.loading = self.loading;
             page
         });
@@ -856,7 +870,7 @@ impl Inbox {
                 self.store.clone(),
                 self.projects.clone(),
                 if item.project_path.is_empty() {
-                    self.start_project.clone()
+                    self.start.project.clone()
                 } else {
                     PathBuf::from(&item.project_path)
                 },
@@ -870,7 +884,7 @@ impl Inbox {
             page.saved_state = page.state.clone();
             page.snapshot = self.snapshot.clone();
             page.sessions = self.sessions.clone();
-            page.bots = self.bots.clone();
+            page.start.bots = self.start.bots.clone();
             page.loading = self.loading;
             page.selected = Some(item_key);
             page.pinned_item = Some(item);
@@ -1001,8 +1015,8 @@ impl Inbox {
                         root.sessions.clone(),
                         root.projects.clone(),
                         root.service.clone(),
-                        root.start_project.clone(),
-                        root.bots.clone(),
+                        root.start.project.clone(),
+                        root.start.bots.clone(),
                         root.loading,
                         root.pages.values().cloned().collect::<Vec<_>>(),
                     )
@@ -1017,9 +1031,9 @@ impl Inbox {
                     page.service = service.clone();
                     if scope_changed
                         && page.pinned_item.is_none()
-                        && !page.projects.contains(&page.start_project)
+                        && !page.projects.contains(&page.start.project)
                     {
-                        page.start_project = cwd.clone();
+                        page.start.project = cwd.clone();
                     }
                     page.set_bots(bots.clone(), cx);
                     page.loading = loading;
@@ -1095,7 +1109,7 @@ impl Inbox {
             return;
         }
         self.selected = Some(key);
-        self.destination_explicit = false;
+        self.start.destination_explicit = false;
         self.reset_destination();
         self.summary_scroll = ListState::new(0, ListAlignment::Top, px(200.));
         self.activity.clear();
@@ -1132,17 +1146,17 @@ impl Inbox {
                 self.save(cx);
             }
             if !item.project_path.is_empty() {
-                self.start_project = PathBuf::from(&item.project_path);
+                self.start.project = PathBuf::from(&item.project_path);
             }
         }
         self.load_detail(true, cx);
         cx.notify();
     }
     fn reset_destination(&mut self) {
-        self.start_bot = self
+        self.start.bot = self
             .item()
             .and_then(|item| self.state.default_bots.get(&item.provider))
-            .filter(|id| self.bots.iter().any(|(key, _)| key == id))
+            .filter(|id| self.start.bots.iter().any(|(key, _)| key == id))
             .map(str::to_owned);
     }
     fn change_source(&mut self, source: String, cx: &mut Context<Self>) {
@@ -1430,12 +1444,12 @@ impl Inbox {
         self.item()
             .filter(|item| !item.project_path.is_empty())
             .map(|item| PathBuf::from(item.project_path))
-            .unwrap_or_else(|| self.start_project.clone())
+            .unwrap_or_else(|| self.start.project.clone())
     }
     fn start(&mut self, cx: &mut Context<Self>) {
         if let Some(mut item) = self.item() {
-            if self.start_bot.is_none() {
-                item.project_path = self.start_project.to_string_lossy().into_owned();
+            if self.start.bot.is_none() {
+                item.project_path = self.start.project.to_string_lossy().into_owned();
             }
             let body = self.details.as_ref().map(|d| d.body.as_str()).unwrap_or("");
             let discussion = self
@@ -1448,7 +1462,7 @@ impl Inbox {
             cx.emit(Event::StartSession {
                 item: Box::new(item),
                 prompt,
-                bot: self.start_bot.clone(),
+                bot: self.start.bot.clone(),
             });
         }
     }

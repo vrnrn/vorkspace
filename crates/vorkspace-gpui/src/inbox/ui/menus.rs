@@ -323,13 +323,13 @@ impl Inbox {
         let weak = cx.entity().downgrade();
         popover(
             "inbox-project-menu",
-            Anchor::Slot(self.project_anchor.clone()),
+            Anchor::Slot(self.start.project_anchor.clone()),
         )
         .width(240.)
         .padding(4.)
         .on_dismiss(move |_, cx| {
             let _ = weak.update(cx, |this, cx| {
-                this.project_picker = false;
+                this.start.project_picker = false;
                 cx.notify();
             });
         })
@@ -338,22 +338,23 @@ impl Inbox {
             menu_row(
                 format!("inbox-start-project-{ix}"),
                 project_name(project),
-                self.start_bot.is_none() && *project == self.start_project,
+                self.start.bot.is_none() && *project == self.start.project,
             )
             .child(crate::project_mark::project_icon(
                 &project.to_string_lossy(),
                 14.,
             ))
             .on_click(cx.listener(move |this, _, _, cx| {
-                this.start_project = path.clone();
-                this.start_bot = None;
-                this.destination_explicit = true;
-                this.project_picker = false;
+                this.start.project = path.clone();
+                this.start.bot = None;
+                this.start.destination_explicit = true;
+                this.start.project_picker = false;
                 cx.notify();
             }))
         }))
         .children(
-            self.bots
+            self.start
+                .bots
                 .iter()
                 .filter(|_| {
                     self.item()
@@ -364,13 +365,13 @@ impl Inbox {
                     menu_row(
                         format!("inbox-start-bot-{id}"),
                         name.clone(),
-                        self.start_bot.as_ref() == Some(&id),
+                        self.start.bot.as_ref() == Some(&id),
                     )
                     .child(icon("bot", 14.))
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        this.start_bot = Some(id.clone());
-                        this.destination_explicit = true;
-                        this.project_picker = false;
+                        this.start.bot = Some(id.clone());
+                        this.start.destination_explicit = true;
+                        this.start.project_picker = false;
                         cx.notify();
                     }))
                 }),

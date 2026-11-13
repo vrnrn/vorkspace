@@ -650,9 +650,9 @@ impl gpui::Render for Inbox {
                         if !this.actions.acting {
                             this.actions.confirm_action = None;
                         }
-                    } else if this.filters_open || this.project_picker || this.actions.menu {
+                    } else if this.filters_open || this.start.project_picker || this.actions.menu {
                         this.filters_open = false;
-                        this.project_picker = false;
+                        this.start.project_picker = false;
                         this.actions.menu = false;
                     } else if this.pinned_item.is_none()
                         && this.is_narrow(window)
@@ -739,7 +739,9 @@ impl gpui::Render for Inbox {
             )
             .when_some(self.error.clone(), |d, text| d.child(error(text)))
             .when(self.filters_open, |d| d.child(self.filters_menu(cx)))
-            .when(self.project_picker, |d| d.child(self.project_menu(cx)))
+            .when(self.start.project_picker, |d| {
+                d.child(self.project_menu(cx))
+            })
             .when(self.actions.menu, |d| d.child(self.action_menu_view(cx)))
             .when(self.connect.provider.is_some(), |d| {
                 d.child(self.connection_dialog(cx))

@@ -229,16 +229,18 @@ impl Inbox {
                         icon_action(
                             "inbox-choose-project",
                             &self
-                                .start_bot
+                                .start
+                                .bot
                                 .as_ref()
                                 .and_then(|id| {
-                                    self.bots
+                                    self.start
+                                        .bots
                                         .iter()
                                         .find(|(key, _)| key == id)
                                         .map(|(_, name)| name.clone())
                                 })
-                                .unwrap_or_else(|| project_name(&self.start_project)),
-                            if self.start_bot.is_some() {
+                                .unwrap_or_else(|| project_name(&self.start.project)),
+                            if self.start.bot.is_some() {
                                 "bot"
                             } else {
                                 "folder"
@@ -249,9 +251,9 @@ impl Inbox {
                         .border_1()
                         .border_color(page::divider())
                         .child(action_icon("chevron-down", page::secondary_ink()))
-                        .child(self.project_anchor.probe())
+                        .child(self.start.project_anchor.probe())
                         .on_click(cx.listener(|this, _, _, cx| {
-                            this.project_picker = !this.project_picker;
+                            this.start.project_picker = !this.start.project_picker;
                             cx.notify();
                         })),
                     )
