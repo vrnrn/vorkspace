@@ -53,7 +53,7 @@ impl Inbox {
             self.summary_scroll.splice_focusable(
                 prefix..rows.keys.len() - suffix,
                 (prefix..keys.len() - suffix)
-                    .map(|ix| (ix + 1 == count).then(|| self.comment.focus_handle(cx))),
+                    .map(|ix| (ix + 1 == count).then(|| self.composer.comment.focus_handle(cx))),
             );
             *rows = SummaryRows {
                 revision: self.activity_revision,
@@ -101,9 +101,9 @@ impl Inbox {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let can_post = !self.posting
+        let can_post = !self.composer.posting
             && self.detail_target_error.is_none()
-            && !self.comment.read(cx).content.trim().is_empty();
+            && !self.composer.comment.read(cx).content.trim().is_empty();
         let body = if ix == 0 {
             div()
                 .py(self.detail_inset(window))
@@ -157,7 +157,7 @@ impl Inbox {
                         .flex()
                         .flex_col()
                         .gap(px(8.))
-                        .when_some(self.reply.clone(), |d, (_, author)| {
+                        .when_some(self.composer.reply.clone(), |d, (_, author)| {
                             d.child(
                                 page::meta()
                                     .flex()
@@ -172,8 +172,8 @@ impl Inbox {
                                     .child(
                                         icon_button("inbox-cancel-reply", "Cancel reply", "close")
                                             .on_click(cx.listener(|this, _, _, cx| {
-                                                this.reply = None;
-                                                this.post_error = None;
+                                                this.composer.reply = None;
+                                                this.composer.post_error = None;
                                                 cx.notify();
                                             })),
                                     ),
@@ -191,13 +191,13 @@ impl Inbox {
                                     div()
                                         .px(px(12.))
                                         .py(px(8.))
-                                        .when(self.posting, |d| d.opacity(0.4))
-                                        .child(self.comment.clone()),
+                                        .when(self.composer.posting, |d| d.opacity(0.4))
+                                        .child(self.composer.comment.clone()),
                                 )
                                 .child({
-                                    let label = if self.posting {
+                                    let label = if self.composer.posting {
                                         "Posting…"
-                                    } else if self.reply.is_some() {
+                                    } else if self.composer.reply.is_some() {
                                         "Reply"
                                     } else {
                                         "Comment"
@@ -211,7 +211,9 @@ impl Inbox {
                                     )
                                 }),
                         )
-                        .when_some(self.post_error.clone(), |d, text| d.child(error(text))),
+                        .when_some(self.composer.post_error.clone(), |d, text| {
+                            d.child(error(text))
+                        }),
                 )
                 .into_any_element()
         } else if discussion && ix == 1 {

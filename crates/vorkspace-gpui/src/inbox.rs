@@ -131,6 +131,29 @@ impl SessionStart {
     }
 }
 
+/// The comment composer: its draft input, reply target and posting progress.
+struct CommentComposer {
+    comment: Entity<Input>,
+    revision: u64,
+    focus_comment: bool,
+    reply: Option<(String, String)>,
+    posting: bool,
+    post_error: Option<String>,
+}
+
+impl CommentComposer {
+    fn new(comment: Entity<Input>) -> Self {
+        Self {
+            comment,
+            revision: 0,
+            focus_comment: false,
+            reply: None,
+            posting: false,
+            post_error: None,
+        }
+    }
+}
+
 pub(crate) struct Inbox {
     /// The root retains the pane entities. Each pane owns its details and inputs.
     owner: Option<WeakEntity<Inbox>>,
@@ -147,15 +170,13 @@ pub(crate) struct Inbox {
     publication_queued: bool,
     focus: FocusHandle,
     search: Entity<Input>,
-    comment: Entity<Input>,
-    comment_revision: u64,
+    composer: CommentComposer,
     summary_scroll: ListState,
     list_scroll: ScrollHandle,
     summary_width: std::rc::Rc<std::cell::Cell<Pixels>>,
     activity: Vec<ui::Activity>,
     activity_revision: u64,
     summary_rows: std::cell::RefCell<ui::SummaryRows>,
-    focus_comment: bool,
     selected: Option<String>,
     /// A detail-only page keeps its item identity when a list refresh omits it.
     /// The last available summary is retained until a matching item arrives.
@@ -175,15 +196,12 @@ pub(crate) struct Inbox {
     loading: bool,
     detail_loading: bool,
     extra_loading: bool,
-    posting: bool,
     error: Option<String>,
     detail_target_error: Option<String>,
     detail_error: Option<String>,
     extra_error: Option<String>,
-    post_error: Option<String>,
     thread_error: Option<String>,
     expanded_comments: std::collections::HashSet<String>,
-    reply: Option<(String, String)>,
     detail_generation: u64,
     extra_request: u64,
     filters_open: bool,
@@ -276,7 +294,7 @@ impl Inbox {
         let subscriptions = vec![
             cx.subscribe(&search, |_, _, _: &input::Changed, cx| cx.notify()),
             cx.subscribe(&comment, |this, _, _: &input::Changed, cx| {
-                this.comment_revision = this.comment_revision.wrapping_add(1);
+                this.composer.revision = this.composer.revision.wrapping_add(1);
                 let count = this.summary_scroll.item_count();
                 this.summary_scroll
                     .remeasure_items(count.saturating_sub(1)..count);
@@ -289,12 +307,13 @@ impl Inbox {
                 if let DiffEvent::Comment(request) = event
                     && view.read(cx).owns_comment(request)
                 {
-                    this.comment
+                    this.composer
+                        .comment
                         .update(cx, |input, cx| input.set_text(request.text.clone(), cx));
                     view.update(cx, |view, cx| view.complete_comment(request, Ok(()), cx));
                     this.tab = Tab::Summary;
                     this.summary_scroll.scroll_to_end();
-                    this.focus_comment = true;
+                    this.composer.focus_comment = true;
                     cx.notify();
                 }
             }),
@@ -321,15 +340,13 @@ impl Inbox {
             publication_queued: false,
             focus: cx.focus_handle(),
             search,
-            comment,
-            comment_revision: 0,
+            composer: CommentComposer::new(comment),
             summary_scroll: ListState::new(0, ListAlignment::Top, px(200.)),
             list_scroll: ScrollHandle::new(),
             summary_width: Default::default(),
             activity: vec![],
             activity_revision: 0,
             summary_rows: Default::default(),
-            focus_comment: false,
             selected: None,
             pinned_item: None,
             pane_width: None,
@@ -346,15 +363,12 @@ impl Inbox {
             loading,
             detail_loading: false,
             extra_loading: false,
-            posting: false,
             error: None,
             detail_target_error: None,
             detail_error: None,
             extra_error: None,
-            post_error: None,
             thread_error: None,
             expanded_comments: Default::default(),
-            reply: None,
             detail_generation: 0,
             extra_request: 0,
             filters_open: false,
@@ -656,7 +670,7 @@ impl Inbox {
             page.update(cx, |page, cx| {
                 if page.selected.is_none()
                     || page.detail_loading
-                    || page.posting
+                    || page.composer.posting
                     || page.actions.acting
                 {
                     return;
@@ -901,14 +915,14 @@ impl Inbox {
         let busy = page.update(cx, |page, cx| {
             page.set_active(false, cx);
             page.release_pending = true;
-            page.posting || page.actions.acting
+            page.composer.posting || page.actions.acting
         });
         if !busy {
             self.pages.remove(&page_key);
         }
     }
     fn finish_pending_release(&mut self, cx: &mut Context<Self>) {
-        if !self.release_pending || self.posting || self.actions.acting {
+        if !self.release_pending || self.composer.posting || self.actions.acting {
             return;
         }
         let (Some(owner), Some(item)) = (self.owner.clone(), self.pinned_item.as_ref()) else {
@@ -1115,7 +1129,7 @@ impl Inbox {
         self.activity.clear();
         self.activity_revision += 1;
         self.summary_rows = Default::default();
-        self.focus_comment = false;
+        self.composer.focus_comment = false;
         self.tab = Tab::Summary;
         self.diff = None;
         self.extra_request += 1;
@@ -1129,8 +1143,8 @@ impl Inbox {
         self.detail_target_error = None;
         self.document = None;
         self.comments.clear();
-        self.reply = None;
-        self.post_error = None;
+        self.composer.reply = None;
+        self.composer.post_error = None;
         self.thread_error = None;
         self.expanded_comments.clear();
         self.actions.merge_action = "merge".into();
@@ -1138,7 +1152,8 @@ impl Inbox {
         self.actions.error = None;
         self.actions.notice = None;
         self.actions.menu = false;
-        self.comment
+        self.composer
+            .comment
             .update(cx, |input, cx| input.set_text(String::new(), cx));
         if let Some(item) = self.item() {
             if self.active {
@@ -1218,8 +1233,8 @@ impl Inbox {
                     }
                     Err(error) => {
                         this.detail_loading = false;
-                        if this.post_error.as_ref() == Some(&error) {
-                            this.post_error = None;
+                        if this.composer.post_error.as_ref() == Some(&error) {
+                            this.composer.post_error = None;
                         }
                         this.detail_target_error = Some(error);
                         cx.notify();
@@ -1373,22 +1388,22 @@ impl Inbox {
     }
 
     fn post_comment(&mut self, cx: &mut Context<Self>) {
-        if self.posting || self.detail_target_error.is_some() {
+        if self.composer.posting || self.detail_target_error.is_some() {
             return;
         }
         let Some(item) = self.item() else {
             return;
         };
-        let body = self.comment.read(cx).content.trim().to_string();
+        let body = self.composer.comment.read(cx).content.trim().to_string();
         if body.is_empty() {
             return;
         }
-        self.posting = true;
-        self.post_error = None;
+        self.composer.posting = true;
+        self.composer.post_error = None;
         let posted = PostedComment {
             key: item.detail_key(),
-            revision: self.comment_revision,
-            reply: self.reply.clone(),
+            revision: self.composer.revision,
+            reply: self.composer.reply.clone(),
         };
         let service = self.service.clone();
         let reply_id = posted
@@ -1414,17 +1429,20 @@ impl Inbox {
         result: Result<model::CommentReceipt, String>,
         cx: &mut Context<Self>,
     ) {
-        self.posting = false;
+        self.composer.posting = false;
         let selected = self.selected.as_ref() == Some(&posted.key);
         match result {
             Ok(receipt) => {
                 let revision = receipt.revision.as_deref().map_or(0, model::timestamp_ms);
                 self.record_self_activity(posted.key, revision, cx);
                 if selected {
-                    if self.comment_revision == posted.revision && self.reply == posted.reply {
-                        self.comment
+                    if self.composer.revision == posted.revision
+                        && self.composer.reply == posted.reply
+                    {
+                        self.composer
+                            .comment
                             .update(cx, |input, cx| input.set_text(String::new(), cx));
-                        self.reply = None;
+                        self.composer.reply = None;
                     }
                     if !self.release_pending {
                         self.load_detail(false, cx);
@@ -1433,7 +1451,7 @@ impl Inbox {
                 self.refresh(cx);
             }
             Err(error) if selected && self.detail_target_error.as_ref() != Some(&error) => {
-                self.post_error = Some(error)
+                self.composer.post_error = Some(error)
             }
             Err(_) => {}
         }

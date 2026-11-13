@@ -172,6 +172,7 @@ fn narrow_navigation_preserves_the_open_item_and_comment_draft(cx: &mut TestAppC
             inbox.details = Some(Details::default());
             inbox.narrow_detail = true;
             inbox
+                .composer
                 .comment
                 .update(cx, |input, cx| input.set_text("Unsent comment".into(), cx));
             cx.notify();
@@ -197,7 +198,10 @@ fn narrow_navigation_preserves_the_open_item_and_comment_draft(cx: &mut TestAppC
     window
         .update(visual, |inbox, _, cx| {
             assert_eq!(inbox.selected.as_deref(), Some(key.as_str()));
-            assert_eq!(inbox.comment.read(cx).content.as_ref(), "Unsent comment");
+            assert_eq!(
+                inbox.composer.comment.read(cx).content.as_ref(),
+                "Unsent comment"
+            );
             assert!(inbox.details.is_some());
         })
         .unwrap();
@@ -226,7 +230,7 @@ fn pinned_connector_tabs_retain_server_identity_and_draft_after_reconnect(cx: &m
         .update(cx, |root, _, cx| {
             let previous = root.connector_item_page("jira", old.clone(), cx);
             previous.update(cx, |page, cx| {
-                page.comment.update(cx, |input, cx| {
+                page.composer.comment.update(cx, |input, cx| {
                     input.set_text("Draft for the previous site".into(), cx);
                 });
             });
@@ -247,7 +251,7 @@ fn pinned_connector_tabs_retain_server_identity_and_draft_after_reconnect(cx: &m
         let previous = previous.read(cx);
         assert_eq!(previous.pinned_item(), Some(&old));
         assert_eq!(
-            previous.comment.read(cx).content.as_ref(),
+            previous.composer.comment.read(cx).content.as_ref(),
             "Draft for the previous site"
         );
         assert_eq!(current.read(cx).pinned_item(), Some(&new));
@@ -363,9 +367,10 @@ fn connector_pages_keep_drafts_filters_scroll_and_pending_details_with_one_obser
                 page.detail_loading = true;
                 page.search
                     .update(cx, |input, cx| input.set_text(source.into(), cx));
-                page.comment
+                page.composer
+                    .comment
                     .update(cx, |input, cx| input.set_text(draft.into(), cx));
-                page.reply = Some((format!("{source}-thread"), source.into()));
+                page.composer.reply = Some((format!("{source}-thread"), source.into()));
                 page.state.filters.time = if source == "github" { "7d" } else { "30d" }.into();
                 page.summary_scroll = ListState::new(100, ListAlignment::Top, px(200.));
                 page.summary_scroll.scroll_to(gpui::ListOffset {
@@ -450,10 +455,13 @@ fn connector_pages_keep_drafts_filters_scroll_and_pending_details_with_one_obser
                 page.set_active(true, cx);
                 assert_eq!(page.state.source, source);
                 assert_eq!(page.search.read(cx).content.as_ref(), source);
-                assert_eq!(page.comment.read(cx).content.as_ref(), draft);
+                assert_eq!(page.composer.comment.read(cx).content.as_ref(), draft);
                 assert_eq!(page.state.filters.time, time);
                 assert_eq!(page.summary_scroll.logical_scroll_top().item_ix, 12);
-                assert_eq!(page.reply.as_ref().unwrap().0, format!("{source}-thread"));
+                assert_eq!(
+                    page.composer.reply.as_ref().unwrap().0,
+                    format!("{source}-thread")
+                );
             });
         }
     });
@@ -530,9 +538,10 @@ fn item_pages_keep_pinned_identity_and_independent_view_state_across_snapshots(
             page.update(cx, |page, cx| {
                 assert_eq!(page.pinned_item().unwrap().key(), item.key());
                 assert_eq!(page.document_cwd(), PathBuf::from(&item.project_path));
-                page.comment
+                page.composer
+                    .comment
                     .update(cx, |input, cx| input.set_text(draft.into(), cx));
-                page.reply = Some((item.key(), draft.into()));
+                page.composer.reply = Some((item.key(), draft.into()));
                 page.summary_scroll = ListState::new(100, ListAlignment::Top, px(200.));
                 page.summary_scroll.scroll_to(gpui::ListOffset {
                     item_ix: if item.number == 41 { 12 } else { 24 },
@@ -569,8 +578,11 @@ fn item_pages_keep_pinned_identity_and_independent_view_state_across_snapshots(
             assert_eq!(page.item().unwrap().key(), first.key());
             assert_eq!(page.pane_title(), "First issue");
             assert_eq!(page.details.as_ref().unwrap().body, "First draft");
-            assert_eq!(page.comment.read(cx).content.as_ref(), "First draft");
-            assert_eq!(page.reply.as_ref().unwrap().0, first.key());
+            assert_eq!(
+                page.composer.comment.read(cx).content.as_ref(),
+                "First draft"
+            );
+            assert_eq!(page.composer.reply.as_ref().unwrap().0, first.key());
             assert_eq!(page.summary_scroll.logical_scroll_top().item_ix, 12);
             page.finish_detail(
                 4,
@@ -585,7 +597,10 @@ fn item_pages_keep_pinned_identity_and_independent_view_state_across_snapshots(
             assert_eq!(page.item().unwrap().key(), second.key());
             assert_eq!(page.pane_title(), "Second issue updated");
             assert_eq!(page.details.as_ref().unwrap().body, "Second draft");
-            assert_eq!(page.comment.read(cx).content.as_ref(), "Second draft");
+            assert_eq!(
+                page.composer.comment.read(cx).content.as_ref(),
+                "Second draft"
+            );
             assert_eq!(page.summary_scroll.logical_scroll_top().item_ix, 24);
         });
         section.update(cx, |page, _| {
@@ -665,7 +680,7 @@ fn item_page_read_receipts_do_not_restore_old_filters_and_closed_pages_are_relea
             root.connector_item_page("jira", item.clone(), cx)
         })
         .unwrap();
-    retained.update(cx, |page, _| page.posting = true);
+    retained.update(cx, |page, _| page.composer.posting = true);
     window
         .update(cx, |root, _, cx| {
             root.release_item_page(&item, cx);
@@ -674,7 +689,7 @@ fn item_page_read_receipts_do_not_restore_old_filters_and_closed_pages_are_relea
         })
         .unwrap();
     retained.update(cx, |page, cx| {
-        page.posting = false;
+        page.composer.posting = false;
         page.finish_pending_release(cx);
     });
     window
@@ -841,7 +856,8 @@ fn retained_connector_pages_dispatch_with_current_defaults_and_preserve_explicit
                 );
                 page.reset_destination();
                 assert_eq!(page.start.bot.as_deref(), Some("first"));
-                page.comment
+                page.composer
+                    .comment
                     .update(cx, |input, cx| input.set_text("Unsent draft".into(), cx));
                 page.start.project = "/chosen/project".into();
                 let output = sent.clone();
@@ -891,7 +907,10 @@ fn retained_connector_pages_dispatch_with_current_defaults_and_preserve_explicit
                             page.state.default_bots.get(provider),
                             (!default.is_empty()).then_some(default)
                         );
-                        assert_eq!(page.comment.read(cx).content.as_ref(), "Unsent draft");
+                        assert_eq!(
+                            page.composer.comment.read(cx).content.as_ref(),
+                            "Unsent draft"
+                        );
                         page.set_active(true, cx);
                         page.start(cx);
                         page.set_active(false, cx);
@@ -1089,6 +1108,7 @@ fn a_comment_receipt_only_clears_the_submitted_draft(cx: &mut TestAppContext) {
             inbox.loading = true;
             inbox.release_pending = true;
             inbox
+                .composer
                 .comment
                 .update(cx, |input, cx| input.set_text("First comment".into(), cx));
         })
@@ -1097,10 +1117,11 @@ fn a_comment_receipt_only_clears_the_submitted_draft(cx: &mut TestAppContext) {
         .update(cx, |inbox, _, cx| {
             let posted = PostedComment {
                 key: inbox.selected.clone().unwrap(),
-                revision: inbox.comment_revision,
-                reply: inbox.reply.clone(),
+                revision: inbox.composer.revision,
+                reply: inbox.composer.reply.clone(),
             };
             inbox
+                .composer
                 .comment
                 .update(cx, |input, cx| input.set_text("New draft".into(), cx));
             posted
@@ -1115,17 +1136,20 @@ fn a_comment_receipt_only_clears_the_submitted_draft(cx: &mut TestAppContext) {
     window
         .update(cx, |inbox, _, cx| {
             inbox.finish_comment(posted, receipt(), cx);
-            assert_eq!(inbox.comment.read(cx).content.as_ref(), "New draft");
+            assert_eq!(
+                inbox.composer.comment.read(cx).content.as_ref(),
+                "New draft"
+            );
             inbox.finish_comment(
                 PostedComment {
                     key: inbox.selected.clone().unwrap(),
-                    revision: inbox.comment_revision,
-                    reply: inbox.reply.clone(),
+                    revision: inbox.composer.revision,
+                    reply: inbox.composer.reply.clone(),
                 },
                 receipt(),
                 cx,
             );
-            assert!(inbox.comment.read(cx).content.is_empty());
+            assert!(inbox.composer.comment.read(cx).content.is_empty());
         })
         .unwrap();
 }
@@ -1311,10 +1335,10 @@ fn long_discussion_materializes_only_viewport_comments_and_reply_focus_reaches_c
         .update(cx, |fixture, window, cx| {
             fixture.inbox.update(cx, |inbox, cx| {
                 assert!(inbox.summary_scroll.logical_scroll_top().item_ix > 3);
-                inbox.reply = Some(("thread-1".into(), "Reviewer".into()));
+                inbox.composer.reply = Some(("thread-1".into(), "Reviewer".into()));
                 inbox.summary_scroll.remeasure_items(102..103);
                 inbox.summary_scroll.scroll_to_end();
-                window.focus(&inbox.comment.focus_handle(cx), cx);
+                window.focus(&inbox.composer.comment.focus_handle(cx), cx);
             })
         })
         .unwrap();
@@ -1323,8 +1347,9 @@ fn long_discussion_materializes_only_viewport_comments_and_reply_focus_reaches_c
         .update(cx, |fixture, window, cx| {
             fixture.inbox.update(cx, |inbox, cx| {
                 assert!(inbox.summary_scroll.logical_scroll_top().item_ix > 90);
-                assert!(inbox.comment.focus_handle(cx).is_focused(window));
+                assert!(inbox.composer.comment.focus_handle(cx).is_focused(window));
                 inbox
+                    .composer
                     .comment
                     .update(cx, |input, cx| input.set_text("A reply\n".repeat(8), cx));
             })
@@ -1334,7 +1359,7 @@ fn long_discussion_materializes_only_viewport_comments_and_reply_focus_reaches_c
     window
         .update(cx, |fixture, window, cx| {
             fixture.inbox.update(cx, |inbox, cx| {
-                assert!(inbox.comment.focus_handle(cx).is_focused(window));
+                assert!(inbox.composer.comment.focus_handle(cx).is_focused(window));
                 assert_eq!(inbox.summary_scroll.item_count(), 103);
             })
         })

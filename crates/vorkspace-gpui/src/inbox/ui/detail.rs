@@ -636,9 +636,9 @@ impl Inbox {
                         .px_0()
                         .text_color(page::secondary_ink())
                         .on_click(cx.listener(move |this, _, window, cx| {
-                            this.reply = Some((reply_id.clone(), name.clone()));
+                            this.composer.reply = Some((reply_id.clone(), name.clone()));
                             this.summary_scroll.scroll_to_end();
-                            window.focus(&this.comment.focus_handle(cx), cx);
+                            window.focus(&this.composer.comment.focus_handle(cx), cx);
                             cx.notify();
                         })),
                 )

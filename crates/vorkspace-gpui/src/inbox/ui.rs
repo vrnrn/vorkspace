@@ -626,9 +626,9 @@ impl gpui::Render for Inbox {
         let narrow = self.is_narrow(window);
         let pinned = self.pinned_item.is_some();
         let showing_detail = pinned || (narrow && self.narrow_detail && self.item().is_some());
-        if self.focus_comment && (!narrow || showing_detail) {
-            self.focus_comment = false;
-            window.focus(&self.comment.focus_handle(cx), cx);
+        if self.composer.focus_comment && (!narrow || showing_detail) {
+            self.composer.focus_comment = false;
+            window.focus(&self.composer.comment.focus_handle(cx), cx);
         }
         div()
             .id("inbox-view")
