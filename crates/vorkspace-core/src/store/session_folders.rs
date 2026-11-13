@@ -1,5 +1,5 @@
 //! Project folder membership and publication against the current saved groups.
-use super::{shared, Store};
+use super::{sessions, Store};
 use crate::session_groups::{FolderDestination, Groups};
 use rusqlite::{Transaction, TransactionBehavior};
 
@@ -26,7 +26,7 @@ impl Store {
         self.update_settings(|settings| {
             let mut groups = self.groups_from(settings.get(&key).map(String::as_str))?;
             edit(&mut groups)?;
-            Ok(((), vec![(key, shared::encode(&groups)?)]))
+            Ok(((), vec![(key, sessions::encode(&groups)?)]))
         })
     }
 

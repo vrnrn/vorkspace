@@ -1,4 +1,4 @@
-//! Session storage. Desktop launches use vorkspace's existing schema directly.
+//! Session storage. Launches open vorkspace's existing database and schema directly.
 mod agent_configuration;
 pub use agent_configuration::ProviderSource;
 mod app_commands;
@@ -27,8 +27,8 @@ pub use session_metadata::{SessionMetadata, SessionSidebarMetadata};
 mod session_preview;
 pub use session_preview::SessionPreviewData;
 mod edit;
-mod shared;
-pub use shared::{IndexedHistoryCursor, IndexedHistoryPage};
+mod sessions;
+pub use sessions::{IndexedHistoryCursor, IndexedHistoryPage};
 mod native_history;
 mod side_threads;
 mod turn_history;
@@ -74,7 +74,7 @@ pub struct LocalAgentBinding {
 pub struct Store {
     conn: Connection,
     path: std::path::PathBuf,
-    shared: shared::Shared,
+    shared: sessions::Shared,
     project_deletions: std::collections::HashSet<String>,
     #[cfg(any(test, feature = "test-support"))]
     test_directory: Option<std::sync::Arc<tempfile::TempDir>>,
@@ -138,7 +138,7 @@ impl Store {
         message: &str,
         token: &str,
     ) -> Result<(), String> {
-        if !shared::has_table(&self.conn, "native_bot_dispatch_claims")? {
+        if !sessions::has_table(&self.conn, "native_bot_dispatch_claims")? {
             return Ok(());
         }
         self.conn.execute("DELETE FROM native_bot_dispatch_claims WHERE bot_id=?1 AND message_id=?2 AND token=?3", params![bot,message,token]).map_err(|e| e.to_string())?;
@@ -276,7 +276,7 @@ impl Store {
             id,
             &[(
                 "linked_work_item_json",
-                item.map(shared::encode)
+                item.map(sessions::encode)
                     .transpose()?
                     .map(serde_json::Value::String)
                     .unwrap_or(serde_json::Value::Null),

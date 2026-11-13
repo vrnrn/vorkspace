@@ -1,4 +1,4 @@
-//! The desktop schema keeps queued messages and saved drafts in separate rows.
+//! The session schema keeps queued messages and saved drafts in separate rows.
 use super::*;
 use crate::follow_up::{Message, State};
 use crate::store::follow_up::FollowUpWrite;

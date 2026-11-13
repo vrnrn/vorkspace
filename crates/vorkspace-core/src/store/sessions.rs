@@ -1,5 +1,6 @@
-//! A view adapter over the desktop schema. Opening preserves existing session
-//! identities and storage. Native bookkeeping is created on explicit writes.
+//! The native session store: the sessions table, session histories and the
+//! settings sidecar. Opening preserves existing session identities and storage.
+//! Native bookkeeping is created on explicit writes.
 mod accounts;
 mod agent;
 pub(super) mod blocks;
@@ -311,7 +312,7 @@ impl Store {
         if !exists && !read_only {
             sql(conn.execute_batch("PRAGMA journal_mode=WAL;"))?;
             let tx = sql(conn.unchecked_transaction())?;
-            sql(tx.execute_batch(include_str!("shared_schema.sql")))?;
+            sql(tx.execute_batch(include_str!("sessions_schema.sql")))?;
             sql(tx.commit())?;
         }
         let columns = sql(sql(conn.prepare("PRAGMA table_info(sessions)"))?

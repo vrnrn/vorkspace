@@ -194,7 +194,7 @@ pub(crate) fn delete_session(conn: &Connection, session_id: &str) -> rusqlite::R
 }
 
 pub(super) fn delete_if_present(conn: &Connection, source: &str) -> Result<(), String> {
-    if super::shared::has_table(conn, "local_submissions")? {
+    if super::sessions::has_table(conn, "local_submissions")? {
         ensure_table(conn).map_err(|e| e.to_string())?;
         delete_session(conn, source).map_err(|e| e.to_string())?;
     }
@@ -418,7 +418,7 @@ impl Store {
     /// Recover the workspace when opening it for normal desktop use.
     /// A validation-only open does not call this.
     pub fn recover_local_submissions(&self) -> Result<(), String> {
-        if super::shared::has_table(&self.conn, "local_submissions")? {
+        if super::sessions::has_table(&self.conn, "local_submissions")? {
             self.conn
                 .execute_batch(RECOVERY_INDEX)
                 .map_err(|error| error.to_string())?;
@@ -432,7 +432,7 @@ impl Store {
         &self,
         session: i64,
     ) -> Result<Option<SubmissionReceipt>, String> {
-        if !super::shared::has_table(&self.conn, "local_submissions")? {
+        if !super::sessions::has_table(&self.conn, "local_submissions")? {
             return Ok(None);
         }
         let source = self.submission_source_id(session)?;
@@ -517,7 +517,7 @@ impl Store {
         settle(&self.conn, attempt, outcome, error)
     }
     pub fn local_submissions(&self, session: i64) -> Result<Vec<SubmissionReceipt>, String> {
-        if !super::shared::has_table(&self.conn, "local_submissions")? {
+        if !super::sessions::has_table(&self.conn, "local_submissions")? {
             return Ok(Vec::new());
         }
         let source = self.submission_source_id(session)?;
@@ -534,7 +534,7 @@ impl Store {
         &self,
         session: i64,
     ) -> Result<Option<SubmissionReceipt>, String> {
-        if !super::shared::has_table(&self.conn, "local_submissions")? {
+        if !super::sessions::has_table(&self.conn, "local_submissions")? {
             return Ok(None);
         }
         let source = self.submission_source_id(session)?;

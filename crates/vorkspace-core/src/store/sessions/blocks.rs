@@ -1,5 +1,5 @@
-//! Lossless desktop block adaptation. Unknown fields and non-displayed blocks
-//! stay in the source document when native rows are appended or edited.
+//! Lossless projection of stored blocks into transcript rows. Unknown fields and
+//! non-displayed blocks stay in the source document when rows are appended or edited.
 use crate::{
     tool::{tasks, ToolCall, ToolState},
     transcript::{Row, Transcript},

@@ -437,7 +437,7 @@ impl Store {
     /// Durable links, including deletion tombstones and unsaved reservations.
     /// Reading older databases never creates or migrates their schema.
     pub fn note_recordings(&self) -> Result<Vec<NoteRecording>, String> {
-        if !super::shared::has_table(&self.conn, "note_recordings")? {
+        if !super::sessions::has_table(&self.conn, "note_recordings")? {
             return Ok(Vec::new());
         }
         self.conn
@@ -454,7 +454,7 @@ impl Store {
 
     pub fn note_recording(&self, note_id: &str) -> Result<Option<NoteRecording>, String> {
         valid_id(note_id)?;
-        if !super::shared::has_table(&self.conn, "note_recordings")? {
+        if !super::sessions::has_table(&self.conn, "note_recordings")? {
             return Ok(None);
         }
         self.conn
@@ -750,7 +750,7 @@ impl Store {
         let tx = Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)
             .map_err(|e| e.to_string())?;
         if let Some(expected) = expected {
-            let current = if super::shared::has_table(&tx, "notes")? {
+            let current = if super::sessions::has_table(&tx, "notes")? {
                 ensure_notes_table(&tx).map_err(|e| e.to_string())?;
                 get_content(&tx, id, "note").map_err(|e| e.to_string())?
             } else {
@@ -763,14 +763,14 @@ impl Store {
         }
         // Reservations have no note row yet, so the delete trigger alone is
         // insufficient. Keep this mutation in the same transaction as deletion.
-        if super::shared::has_table(&tx, "note_recordings")? {
+        if super::sessions::has_table(&tx, "note_recordings")? {
             tx.execute(
                 "UPDATE note_recordings SET deleted = 1 WHERE note_id = ?1 AND deleted = 0",
                 [id],
             )
             .map_err(|e| e.to_string())?;
         }
-        if super::shared::has_table(&tx, "notes")? {
+        if super::sessions::has_table(&tx, "notes")? {
             ensure_notes_table(&tx).map_err(|e| e.to_string())?;
             delete_note(&tx, id).map_err(|e| e.to_string())?;
         }
@@ -795,7 +795,7 @@ impl Store {
         }
         let native_id = format!("gpui-note-{}", note.id);
         let existing = self.list_note_summaries()?.into_iter().find(|saved| {
-            saved.id == native_id || super::shared::handle(&saved.id) as u64 == note.id
+            saved.id == native_id || super::sessions::handle(&saved.id) as u64 == note.id
         });
         let update = NoteUpsert {
             id: existing
@@ -813,7 +813,7 @@ impl Store {
         };
         // The legacy facade also edits older note rows carrying an artifact
         // subtype. Preserve it instead of reclassifying or duplicating the row.
-        if existing.is_some() && super::shared::has_table(&self.conn, "notes")? {
+        if existing.is_some() && super::sessions::has_table(&self.conn, "notes")? {
             self.shared_writable()?;
             ensure_notes_table(&self.conn).map_err(|e| e.to_string())?;
             let subtype: Option<String> = self

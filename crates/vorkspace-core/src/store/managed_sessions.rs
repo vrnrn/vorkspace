@@ -120,7 +120,7 @@ impl Store {
             if let Some(item) = item {
                 fields.push((
                     "linked_work_item_json",
-                    Value::String(super::shared::encode(item)?),
+                    Value::String(super::sessions::encode(item)?),
                 ));
             }
             self.shared_patch(id, &fields)?;

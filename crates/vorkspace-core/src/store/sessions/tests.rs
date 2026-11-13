@@ -44,7 +44,7 @@ fn bot_claim_waiting_for_edit_or_detach_never_holds_the_sidecar_lock() {
         let output = std::process::Command::new(std::env::current_exe().unwrap())
             .args([
                 "--exact",
-                "store::shared::tests::bot_claim_waiting_for_edit_or_detach_never_holds_the_sidecar_lock",
+                "store::sessions::tests::bot_claim_waiting_for_edit_or_detach_never_holds_the_sidecar_lock",
                 "--nocapture",
             ])
             .env(CHILD, "1")

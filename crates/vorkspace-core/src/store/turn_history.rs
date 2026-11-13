@@ -313,7 +313,7 @@ impl Store {
     }
 
     fn saved_turn_recoveries(&self, id: i64) -> Result<Vec<RecoveredTurn>, String> {
-        if !shared::has_table(&self.conn, "conversation_turn_recoveries")? {
+        if !sessions::has_table(&self.conn, "conversation_turn_recoveries")? {
             return Ok(Vec::new());
         }
         let mut query = self.conn.prepare(
@@ -343,7 +343,7 @@ impl Store {
                 return Ok(Some(pending.rows.clone()));
             }
         }
-        if !shared::has_table(&self.conn, "conversation_turn_recoveries")? {
+        if !sessions::has_table(&self.conn, "conversation_turn_recoveries")? {
             return Ok(None);
         }
         let raw: Option<String> = self.conn.query_row(

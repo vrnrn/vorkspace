@@ -183,7 +183,7 @@ fn real_store_uses_original_session_identity_and_reads_do_not_create_tables() {
     let session = store.create("codex", "/project").unwrap();
     assert!(store.local_submissions(session.id).unwrap().is_empty());
     store.recover_local_submissions().unwrap();
-    assert!(!super::super::shared::has_table(&store.conn, "local_submissions").unwrap());
+    assert!(!super::super::sessions::has_table(&store.conn, "local_submissions").unwrap());
     let reserved = store
         .reserve_local_submission(session.id, input("durable"))
         .unwrap();

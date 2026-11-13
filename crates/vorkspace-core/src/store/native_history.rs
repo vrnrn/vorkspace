@@ -41,7 +41,7 @@ pub struct NativeHistoryResult {
 struct NativePublication {
     imported: usize,
     reload_provider: bool,
-    append: Option<shared::HistoryAppend>,
+    append: Option<sessions::HistoryAppend>,
 }
 
 impl NativePublication {

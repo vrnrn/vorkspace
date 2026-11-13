@@ -1,6 +1,6 @@
 //! Rewind claims share the provider admission lane with prompts and compaction.
 use super::{dispatch, get, instance, pid_alive, settle, Store, SubmissionInput, SubmissionOwner};
-use crate::store::{shared, EditSnapshot};
+use crate::store::{sessions, EditSnapshot};
 use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
 use serde_json::json;
 use std::sync::Arc;
@@ -62,7 +62,7 @@ impl Drop for EditClaim {
 
 impl Store {
     pub fn edit_barrier(&self, session: i64) -> Result<Option<EditBarrier>, String> {
-        if shared::has_table(&self.conn, "local_submissions")? {
+        if sessions::has_table(&self.conn, "local_submissions")? {
             let source = self.submission_source_id(session)?;
             let row = self
                 .conn

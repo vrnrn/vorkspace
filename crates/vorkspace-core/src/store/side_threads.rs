@@ -1,6 +1,6 @@
 //! Read-only adaptation of original Block.btwThreads. Opening the side surface
 //! never rewrites source blocks, provider bindings, or the desktop schema.
-use super::{shared, Store};
+use super::{sessions, Store};
 use crate::transcript::{Row, Transcript};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
@@ -253,7 +253,7 @@ impl Store {
                             .as_array()
                             .filter(|blocks| !blocks.is_empty())
                         {
-                            rows.extend(shared::blocks::project(activity)?);
+                            rows.extend(sessions::blocks::project(activity)?);
                             continue;
                         }
                     }
@@ -286,7 +286,7 @@ impl Store {
                     original: thread.clone(),
                 });
             }
-            source_turn += shared::blocks::project(std::slice::from_ref(block))?.len();
+            source_turn += sessions::blocks::project(std::slice::from_ref(block))?.len();
         }
         imported.sort_by_key(|thread| thread.original["createdAt"].as_u64().unwrap_or(0));
         Ok(imported)

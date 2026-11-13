@@ -150,7 +150,7 @@ impl Store {
             return Ok(false);
         }
         let revision = i64::try_from(origin.revision).map_err(|error| error.to_string())?;
-        if shared::has_table(&self.conn, "composer_transfers")?
+        if sessions::has_table(&self.conn, "composer_transfers")?
             && self
                 .conn
                 .query_row(
@@ -204,7 +204,7 @@ impl Store {
         if inserted == 0 {
             return Err("This version of the draft was already accepted.".into());
         }
-        if shared::has_table(transaction, "composer_draft_recoveries")? {
+        if sessions::has_table(transaction, "composer_draft_recoveries")? {
             transaction
                 .execute(
                     "DELETE FROM composer_draft_recoveries
@@ -229,7 +229,7 @@ impl Store {
         Ok(())
     }
     pub fn composer_recoveries(&self, id: i64) -> Result<Vec<ComposerRecovery>, String> {
-        if !shared::has_table(&self.conn, "composer_draft_recoveries")? {
+        if !sessions::has_table(&self.conn, "composer_draft_recoveries")? {
             return Ok(Vec::new());
         }
         let source = self.persisted_session_id(id)?;
@@ -324,7 +324,7 @@ impl Store {
         Ok((revision, recovery))
     }
     pub fn clear_composer_recovery(&self, id: i64, owner: &str) -> Result<(), String> {
-        if !shared::has_table(&self.conn, "composer_draft_recoveries")? {
+        if !sessions::has_table(&self.conn, "composer_draft_recoveries")? {
             return Ok(());
         }
         let source = self.persisted_session_id(id)?;
@@ -337,7 +337,7 @@ impl Store {
         Ok(())
     }
     pub fn composer_draft(&self, id: i64) -> Result<Option<ComposerDraft>, String> {
-        if !shared::has_table(&self.conn, "composer_drafts")? {
+        if !sessions::has_table(&self.conn, "composer_drafts")? {
             return Ok(None);
         }
         self.read_composer_row(

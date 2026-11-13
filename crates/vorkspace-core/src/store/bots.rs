@@ -121,7 +121,7 @@ impl Store {
                 |r| r.get(0),
             )
             .map_err(|e| e.to_string())?;
-        let notes = if super::shared::has_table(&self.conn, "notes")? {
+        let notes = if super::sessions::has_table(&self.conn, "notes")? {
             self.conn
                 .query_row(
                     "SELECT updated_at FROM notes ORDER BY updated_at DESC LIMIT 1",
@@ -153,7 +153,7 @@ impl Store {
         id: &str,
         body: bool,
     ) -> Result<Option<crate::bot::Document>, String> {
-        if !super::shared::has_table(&self.conn, "notes")? {
+        if !super::sessions::has_table(&self.conn, "notes")? {
             return Ok(None);
         }
         let has_kind: bool = self.conn.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('notes') WHERE name='artifact_kind')", [], |r| r.get(0)).map_err(|e| e.to_string())?;

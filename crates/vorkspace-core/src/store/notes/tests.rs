@@ -423,7 +423,7 @@ fn recording_links_read_does_not_create_schema() {
     let before = schema_version(&store);
     assert!(store.note_recordings().unwrap().is_empty());
     assert_eq!(schema_version(&store), before);
-    assert!(!super::super::shared::has_table(&store.conn, "note_recordings").unwrap());
+    assert!(!super::super::sessions::has_table(&store.conn, "note_recordings").unwrap());
     let reader = Store::read_vorkspace(&path).unwrap();
     assert!(reader.note_recordings().unwrap().is_empty());
     assert!(reader.attach_note_recording("note", RECORDING_A).is_err());
@@ -709,7 +709,7 @@ fn recording_link_ids_are_validated_before_any_schema_write() {
     assert_eq!(schema_version(&store), version);
     assert_eq!(store.conn.total_changes(), changes);
     assert!(store.list_notes().unwrap().is_empty());
-    assert!(!super::super::shared::has_table(&store.conn, "note_recordings").unwrap());
+    assert!(!super::super::sessions::has_table(&store.conn, "note_recordings").unwrap());
 }
 
 #[test]

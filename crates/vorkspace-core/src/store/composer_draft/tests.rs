@@ -312,16 +312,16 @@ fn missing_draft_table_is_read_without_creation_and_failed_writes_rollback() {
     let store = Store::open_vorkspace(&path).unwrap();
     let session = store.create("codex", "/project").unwrap();
     assert!(store.composer_draft(session.id).unwrap().is_none());
-    assert!(!shared::has_table(&store.conn, "composer_drafts").unwrap());
+    assert!(!sessions::has_table(&store.conn, "composer_drafts").unwrap());
     assert!(store
         .save_composer_draft(session.id, 1, &payload())
         .is_err());
-    assert!(!shared::has_table(&store.conn, "composer_drafts").unwrap());
+    assert!(!sessions::has_table(&store.conn, "composer_drafts").unwrap());
     let reader = Store::read_vorkspace(&path).unwrap();
     assert!(reader
         .save_composer_draft(session.id, 0, &payload())
         .is_err());
-    assert!(!shared::has_table(&store.conn, "composer_drafts").unwrap());
+    assert!(!sessions::has_table(&store.conn, "composer_drafts").unwrap());
 }
 #[test]
 fn malformed_or_unavailable_draft_fields_are_preserved_for_recovery() {
@@ -378,7 +378,7 @@ fn independent_writers_keep_distinct_recovery_rows_and_clear_only_their_owner() 
     let session = first.create("codex", "/project").unwrap();
     let second = Store::open_vorkspace(&path).unwrap();
     assert!(first.composer_recoveries(session.id).unwrap().is_empty());
-    assert!(!shared::has_table(&first.conn, "composer_draft_recoveries").unwrap());
+    assert!(!sessions::has_table(&first.conn, "composer_draft_recoveries").unwrap());
     for (store, owner) in [(&first, "writer-one"), (&second, "writer-two")] {
         store
             .save_composer_recovery(

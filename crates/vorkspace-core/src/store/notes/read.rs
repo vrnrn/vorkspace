@@ -12,7 +12,7 @@ struct NoteColumns {
 
 impl NoteColumns {
     fn discover(conn: &Connection) -> Result<Option<Self>, String> {
-        if !super::super::shared::has_table(conn, "notes")? {
+        if !super::super::sessions::has_table(conn, "notes")? {
             return Ok(None);
         }
         let columns = conn

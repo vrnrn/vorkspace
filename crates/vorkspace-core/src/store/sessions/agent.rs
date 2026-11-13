@@ -1,4 +1,4 @@
-//! Transactional local agent preferences. Desktop columns retain their wire format.
+//! Transactional local agent preferences. Session columns keep their stored format.
 use super::*;
 
 pub(super) fn ensure_schema(conn: &Connection) -> Result<(), String> {

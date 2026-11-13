@@ -1,4 +1,4 @@
-//! Fixtures use the desktop schema and keep temporary files alive with the store.
+//! Fixtures use the session schema and keep temporary files alive with the store.
 use super::*;
 
 impl Store {

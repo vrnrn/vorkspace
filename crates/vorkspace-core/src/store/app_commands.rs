@@ -111,7 +111,7 @@ impl Store {
                         .into(),
                 );
             }
-            if super::shared::has_table(&self.conn, "orchestration_workers")? {
+            if super::sessions::has_table(&self.conn, "orchestration_workers")? {
                 let original = self.persisted_session_id(target)?;
                 if self
                     .conn
@@ -169,7 +169,7 @@ impl Store {
         self.persisted_session_id(caller)
     }
     pub fn app_command_known(&self, caller: i64, request: &str) -> Result<bool, String> {
-        if !super::shared::has_table(&self.conn, "app_command_receipts")? {
+        if !super::sessions::has_table(&self.conn, "app_command_receipts")? {
             return Ok(false);
         }
         let caller = self.app_caller_identity(caller)?;
