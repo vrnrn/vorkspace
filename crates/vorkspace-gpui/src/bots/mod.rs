@@ -209,7 +209,6 @@ pub(crate) struct Bots {
     picker: Option<OpenPicker>,
     settings_anchor: AnchorSlot,
     model_anchor: AnchorSlot,
-    projects_anchor: AnchorSlot,
     access_anchor: AnchorSlot,
     menu: Option<(String, Entity<Menu>, Vec<Subscription>)>,
     menu_anchor: Anchor,
@@ -479,7 +478,6 @@ impl Bots {
             picker: None,
             settings_anchor: AnchorSlot::default(),
             model_anchor: AnchorSlot::default(),
-            projects_anchor: AnchorSlot::default(),
             access_anchor: AnchorSlot::default(),
             menu: None,
             menu_anchor: Anchor::Point(gpui::Point::default()),
@@ -620,6 +618,9 @@ impl Bots {
     }
     pub(crate) fn current(&self) -> Option<&Bot> {
         self.active.as_deref().and_then(|id| self.roster.get(id))
+    }
+    pub(crate) fn open_chats(&self) -> impl Iterator<Item = &Entity<Conversation>> {
+        self.chats.values()
     }
     pub(crate) fn chat(&self) -> Option<Entity<Conversation>> {
         self.active

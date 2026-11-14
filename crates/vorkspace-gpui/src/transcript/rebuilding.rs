@@ -69,11 +69,17 @@ impl TranscriptView {
         for (ix, row) in rows.into_iter().enumerate() {
             let ix = start + ix;
             let bytes = row.text.capacity().saturating_add(row.role.capacity());
+            if row.role == "tool" || row.is_prompt() {
+                self.turn_changes.take();
+            }
             if ix < self.source.len() {
                 if !row.first || row.role != "assistant" {
                     self.reveals.active.remove(&ix);
                 }
                 let old = &self.source[ix];
+                if old.role == "tool" || old.is_prompt() {
+                    self.turn_changes.take();
+                }
                 if self.bot
                     && self.streaming
                     && self.visible

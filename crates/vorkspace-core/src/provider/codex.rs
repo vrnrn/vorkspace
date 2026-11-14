@@ -457,7 +457,12 @@ impl Protocol {
             tool.input = input.to_string();
         }
         if let Some(changes) = item["changes"].as_array().filter(|_| name == "fileChange") {
-            tool.input = serde_json::to_string(&json!({"path": changes.first().and_then(|c| c["path"].as_str()).unwrap_or("Files")})).unwrap_or_default();
+            let mut input = json!({"path": changes.first().and_then(|c| c["path"].as_str()).unwrap_or("Files")});
+            if changes.len() > 1 {
+                // The caption names the first file; this keeps the rest.
+                input["paths"] = changes.iter().filter_map(|c| c["path"].as_str()).collect();
+            }
+            tool.input = input.to_string();
             tool.output = changes
                 .iter()
                 .map(|c| {

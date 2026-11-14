@@ -9,6 +9,23 @@ impl Shell {
     pub(crate) fn bot_manager(&self) -> Entity<crate::bots::Bots> {
         self.bots.as_ref().unwrap().clone()
     }
+    /// Where a clicked file link really is. Links arrive resolved against
+    /// their writer's folder; a missing one is looked for under the focused
+    /// checkout, the vorkspace's projects and every open chat's folder.
+    pub(super) fn reachable_link(&self, path: String, checkout: &str, cx: &App) -> String {
+        let chats = self
+            .sessions
+            .values()
+            .chain(self.bots.iter().flat_map(|bots| bots.read(cx).open_chats()));
+        let mut folders = vec![checkout.to_owned()];
+        folders.extend(self.workspace.vorkspace_projects());
+        folders.extend(
+            chats.filter_map(|chat| chat.read(cx).transcript.read(cx).file_link_base.clone()),
+        );
+        folders.retain(|folder| !folder.is_empty());
+        crate::file_link::reroot(&path, &folders, |candidate| candidate.exists()).unwrap_or(path)
+    }
+
     pub(super) fn bot_active(&self, _cx: &App) -> bool {
         self.workspace.active.is_some_and(|id| self.is_bot_pane(id))
     }
@@ -205,10 +222,5 @@ impl BotsHost for gpui::WeakEntity<Shell> {
         self.update(cx, |shell, cx| {
             shell.app_notes_action(caller, projects, action, input, true, cx)
         })
-    }
-    fn projects(&self, cx: &App) -> Vec<String> {
-        self.upgrade()
-            .map(|shell| shell.read(cx).workspace.vorkspace_projects())
-            .unwrap_or_default()
     }
 }

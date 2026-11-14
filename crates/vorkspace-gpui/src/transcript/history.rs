@@ -325,6 +325,7 @@ impl TranscriptView {
         // Move the surviving prefix and reuse its parsers. A compacted host
         // history must not copy or parse all unchanged text on the UI thread.
         let mut retained = std::mem::take(&mut self.source);
+        self.turn_changes.take();
         retained.truncate(start);
         retained.extend(rows);
         let start = if self.bot {
@@ -629,6 +630,7 @@ impl TranscriptView {
             following: self.list.is_following_tail(),
         });
         self.source = Vec::new();
+        self.turn_changes.take();
         self.source_bytes = 0;
         self.history_start = 0;
         self.history_loading = false;
@@ -678,6 +680,7 @@ impl TranscriptView {
         let position = self.history_position.take();
         // Reopening also handles a source that became empty in another window.
         self.source = Vec::new();
+        self.turn_changes.take();
         self.source_bytes = 0;
         self.messages = Vec::new();
         self.rows = Vec::new();

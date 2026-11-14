@@ -79,5 +79,4 @@ pub(crate) trait BotsHost {
         window: &mut Window,
         cx: &mut App,
     ) -> gpui::Result<Result<Value, String>>;
-    fn projects(&self, cx: &App) -> Vec<String>;
 }

@@ -406,6 +406,9 @@ pub(crate) struct TranscriptView {
     selection_focus: Option<gpui::FocusHandle>,
     links: links::State,
     source: Vec<Row>,
+    /// The files the latest turn's completed edits name, as written. Derived
+    /// from `source`; every change to a tool or prompt row there forgets it.
+    turn_changes: std::cell::RefCell<Option<Vec<String>>>,
     source_bytes: usize,
     attachment_images: HashMap<String, gpui::Entity<attachments::Photo>>,
     visuals: HashMap<usize, visuals::CachedVisual>,
@@ -700,6 +703,57 @@ impl TranscriptView {
         };
         self.turns.entry(turn).or_default().provider_turn_id = Some(id);
     }
+    /// Files the latest turn changed, in the order it first touched them, as
+    /// paths resolved against this conversation's folder. Only edits and
+    /// writes that completed count: a failed or cancelled one wrote nothing.
+    pub(crate) fn latest_turn_changes(&self) -> Vec<String> {
+        let mut written = self.turn_changes.borrow_mut();
+        let written = written.get_or_insert_with(|| {
+            let start = self
+                .source
+                .iter()
+                .rposition(Row::is_prompt)
+                .map_or(0, |prompt| prompt + 1);
+            let mut files = Vec::new();
+            for row in self.source[start..].iter().filter(|row| row.role == "tool") {
+                let Ok(tool) = serde_json::from_str::<ToolCall>(&row.text) else {
+                    continue;
+                };
+                if tool.state != ToolState::Completed {
+                    continue;
+                }
+                let shown = tool.presentation();
+                if !matches!(shown.action.as_str(), "Edit" | "Write") {
+                    continue;
+                }
+                // One patch may change several files; it lists them all.
+                let listed = serde_json::from_str::<serde_json::Value>(&tool.input)
+                    .ok()
+                    .and_then(|input| {
+                        let paths = input.get("paths")?.as_array()?;
+                        Some(
+                            paths
+                                .iter()
+                                .filter_map(|path| path.as_str().map(str::to_owned))
+                                .collect::<Vec<_>>(),
+                        )
+                    })
+                    .unwrap_or_else(|| vec![shown.file_path.unwrap_or(shown.target)]);
+                files.extend(listed);
+            }
+            files
+        });
+        let base = self.file_link_base.as_deref().unwrap_or("");
+        let mut files = Vec::new();
+        for path in written.iter().filter(|path| !path.is_empty()) {
+            let path = crate::file_link::file_location(path, base).0;
+            if !files.contains(&path) {
+                files.push(path);
+            }
+        }
+        files
+    }
+
     pub(crate) fn response_rows(&self, turn: usize) -> (Vec<Row>, Vec<Row>) {
         let (rows, through) = self.response_slices(turn);
         (rows.to_vec(), through.to_vec())
@@ -779,6 +833,7 @@ impl TranscriptView {
             selection_focus: None,
             links: Default::default(),
             source: Vec::new(),
+            turn_changes: Default::default(),
             source_bytes: 0,
             attachment_images: HashMap::new(),
             visuals: HashMap::new(),

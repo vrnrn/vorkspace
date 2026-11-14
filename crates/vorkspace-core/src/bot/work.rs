@@ -241,6 +241,7 @@ impl super::Bot {
                 launch.notify_on_complete = previous.notify_on_complete;
                 launch.completed = previous.completed;
                 launch.dismissed = previous.dismissed;
+                launch.started_at = previous.started_at;
             }
         }
 

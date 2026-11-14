@@ -818,7 +818,7 @@ impl Conversation {
                 })
                 .unwrap_or_default();
             let line = if bot.projects.is_empty() {
-                "Add the projects I should work on in my settings, or just ask me something."
+                "Add a folder to this vorkspace for me to work on, or just ask me something."
                     .to_owned()
             } else {
                 format!(

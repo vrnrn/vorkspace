@@ -56,6 +56,11 @@ fn rail_sessions_list_running_work_across_projects_without_hydrating_history(
     // Both projects are in the vorkspace, so both running sessions are listed.
     assert!(bounds(visual, format!("rail-session-{a}")).is_some());
     assert!(bounds(visual, format!("rail-session-{b}")).is_some());
+    // A working session shimmers its title; an idle one draws it plainly.
+    assert!(bounds(visual, format!("rail-session-working-{a}")).is_some());
+    busy(window, b, false, visual);
+    assert!(bounds(visual, format!("rail-session-working-{b}")).is_none());
+    busy(window, b, true, visual);
     // The Working card is only for the icon rail.
     assert!(visual.debug_bounds("sidebar-activity-card").is_none());
     // Listing another project's session never loads its saved transcript.

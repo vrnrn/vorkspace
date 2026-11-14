@@ -103,12 +103,14 @@ impl Bot {
             if named.len() == 1 {
                 return Ok(named[0].clone());
             }
-            return Err("Choose one of this Bot's assigned projects by full path".into());
+            return Err("Choose one of the projects in this Bot's vorkspace by full path".into());
         }
         match self.projects.as_slice() {
             [project] => Ok(project.clone()),
-            [] => Err("Add a project in this Bot's settings first".into()),
-            _ => Err("This Bot has several projects; include project with its path".into()),
+            [] => Err("Add a folder to this Bot's vorkspace first".into()),
+            _ => Err(
+                "This Bot's vorkspace has several projects; include project with its path".into(),
+            ),
         }
     }
     pub fn normalize(&mut self) {
@@ -476,7 +478,7 @@ pub fn context(bot: &Bot, files: &files::AgentFiles, executable: &Path) -> Strin
     );
     let minions_enabled = minions_enabled();
     let projects = if bot.projects.is_empty() {
-        "No projects assigned yet. Ask the user to add projects in your settings before doing project work.".into()
+        "Your vorkspace has no projects yet. Ask the user to add a folder to it before doing project work.".into()
     } else {
         bot.projects
             .iter()

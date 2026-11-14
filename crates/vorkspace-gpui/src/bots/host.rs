@@ -172,6 +172,7 @@ impl Bots {
             harness: start.summary.provider.clone(),
             model: start.settings.model.clone(),
             notify_on_complete: flag(&call.input, "notifyOnComplete", !start.draft),
+            started_at: vorkspace_core::time::now_ms(),
             ..Default::default()
         };
         launch.set_origin(caller, origin);

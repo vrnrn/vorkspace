@@ -2,8 +2,8 @@
 //!
 //! Membership is a view, not ownership. A folder may belong to several
 //! vorkspaces and its sessions appear in each; removing it from one only
-//! hides it there. The same holds for Bots, which keep running wherever
-//! they are listed.
+//! hides it there. A Bot is listed in one vorkspace at a time, works on
+//! every project of that vorkspace, and keeps running wherever it is listed.
 use super::Workspace;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;

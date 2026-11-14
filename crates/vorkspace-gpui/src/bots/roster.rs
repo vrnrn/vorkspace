@@ -236,6 +236,39 @@ impl SharedRoster {
         })
     }
 
+    /// A Bot reaches every project of its vorkspace. The vorkspace definitions
+    /// own that list; `Bot.projects` is the copy the core and providers read.
+    /// Bots absent from `projects` have not been placed yet and are left alone.
+    pub(crate) fn follow_vorkspace_projects(
+        &mut self,
+        projects: HashMap<String, Vec<String>>,
+        cx: &mut Context<Self>,
+    ) {
+        fn stale(roster: &Roster, projects: &HashMap<String, Vec<String>>) -> bool {
+            roster.bots.iter().any(|bot| {
+                !bot.is_minion() && projects.get(&bot.id).is_some_and(|p| *p != bot.projects)
+            })
+        }
+        if !self
+            .committed()
+            .is_some_and(|roster| stale(roster, &projects))
+        {
+            return;
+        }
+        let _ = self.write(None, cx, move |db| {
+            let mut roster = Roster::load(db)?;
+            if !stale(&roster, &projects) {
+                return Ok((None, Ok(())));
+            }
+            for bot in roster.bots.iter_mut().filter(|bot| !bot.is_minion()) {
+                if let Some(projects) = projects.get(&bot.id) {
+                    bot.projects.clone_from(projects);
+                }
+            }
+            Ok((Some(roster.save_snapshot(db)?), Ok(())))
+        });
+    }
+
     fn ids(roster: &Roster) -> Vec<String> {
         roster
             .bots
