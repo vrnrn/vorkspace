@@ -268,7 +268,7 @@ pub(super) fn context(bot: &Bot, files: &files::AgentFiles, executable: &Path) -
         m.specialties.join(", "),
         m.team.join("; "),
         if bot.projects.is_empty() {
-            "No projects assigned; do not perform project work".into()
+            "The vorkspace has no projects; do not perform project work".into()
         } else {
             bot.projects.join(", ")
         },

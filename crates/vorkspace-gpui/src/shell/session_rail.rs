@@ -286,8 +286,9 @@ impl Shell {
                     .min_h(px(RAIL_CARD_HEIGHT))
                     .px_2()
                     .child(
-                        gpui::list(self.rail.list.clone(), move |ix, _, cx| {
+                        gpui::list(self.rail.list.clone(), move |ix, window, cx| {
                             let id = sessions[ix];
+                            let shown = window.is_visible();
                             owner
                                 .update(cx, |this, cx| {
                                     div()
@@ -296,6 +297,7 @@ impl Shell {
                                             id,
                                             launcher_ids.get(&id),
                                             now,
+                                            shown,
                                             cx,
                                         ))
                                         .into_any_element()
@@ -315,6 +317,8 @@ impl Shell {
         id: i64,
         launcher: Option<&String>,
         now: u64,
+        // A hidden window draws the working title still, so it keeps no clock.
+        shown: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let meta = self.session_metadata(id, cx);
@@ -366,10 +370,8 @@ impl Shell {
                 .child("Approval")
                 .into_any_element()
         } else if s.busy {
-            div()
-                .text_color(accent_color())
-                .child("Working…")
-                .into_any_element()
+            // The title shimmers while the session works.
+            div().into_any_element()
         } else {
             div()
                 .text_color(content(0.45))
@@ -437,7 +439,20 @@ impl Shell {
                             .text_size(px(13.))
                             .line_height(px(18.))
                             .text_color(content(if active { 1. } else { 0.85 }))
-                            .child(s.title),
+                            .child(if s.busy && !s.needs_input && shown {
+                                static SWEEP: std::sync::OnceLock<vorkspace_ui::clock::Instant> =
+                                    std::sync::OnceLock::new();
+                                let started = SWEEP.get_or_init(vorkspace_ui::clock::Instant::now);
+                                div()
+                                    .debug_selector(move || format!("rail-session-working-{id}"))
+                                    .child(crate::activity::shimmer(
+                                        s.title,
+                                        started.elapsed().as_secs_f32(),
+                                    ))
+                                    .into_any_element()
+                            } else {
+                                s.title.into_any_element()
+                            }),
                     )
                     .when(s.pinned, |d| {
                         d.child(icon("pin", 11.).flex_shrink_0().text_color(content(0.45)))

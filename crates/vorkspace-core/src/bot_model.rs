@@ -162,6 +162,10 @@ pub struct Launch {
     pub completed: bool,
     #[serde(default)]
     pub dismissed: bool,
+    /// Unix milliseconds when the Bot started the session; zero when unknown,
+    /// as for a launch recovered from history or saved by an older build.
+    #[serde(default)]
+    pub started_at: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -187,6 +191,13 @@ impl LaunchGroup {
 }
 
 impl Launch {
+    /// How long a Bot's panel keeps listing a session it started.
+    pub const LISTED_FOR_MS: u64 = 24 * 60 * 60 * 1000;
+
+    /// A launch of unknown age is never listed.
+    pub fn listed(&self, now_ms: u64) -> bool {
+        self.started_at > 0 && now_ms.saturating_sub(self.started_at) < Self::LISTED_FOR_MS
+    }
     pub fn set_origin(&mut self, session_id: i64, turn: u64) {
         self.origin = Some(LaunchOrigin { session_id, turn });
         self.origin_turn = ((session_id as u64) << 32) | (turn & u64::from(u32::MAX));

@@ -700,6 +700,41 @@ impl TranscriptView {
         };
         self.turns.entry(turn).or_default().provider_turn_id = Some(id);
     }
+    /// Counts rows, so a caller can tell when `latest_turn_changes` is stale.
+    pub(crate) fn row_count(&self) -> usize {
+        self.source.len()
+    }
+
+    /// Files the latest turn edited or wrote, in the order it first touched
+    /// them, as paths resolved against this conversation's folder.
+    pub(crate) fn latest_turn_changes(&self) -> Vec<String> {
+        let start = self
+            .source
+            .iter()
+            .rposition(Row::is_prompt)
+            .map_or(0, |prompt| prompt + 1);
+        let mut files = Vec::new();
+        for row in self.source[start..].iter().filter(|row| row.role == "tool") {
+            let Ok(tool) = serde_json::from_str::<ToolCall>(&row.text) else {
+                continue;
+            };
+            let shown = tool.presentation();
+            if !matches!(shown.action.as_str(), "Edit" | "Write") {
+                continue;
+            }
+            let path = shown.file_path.unwrap_or(shown.target);
+            if path.is_empty() {
+                continue;
+            }
+            let base = self.file_link_base.as_deref().unwrap_or("");
+            let path = crate::file_link::file_location(&path, base).0;
+            if !files.contains(&path) {
+                files.push(path);
+            }
+        }
+        files
+    }
+
     pub(crate) fn response_rows(&self, turn: usize) -> (Vec<Row>, Vec<Row>) {
         let (rows, through) = self.response_slices(turn);
         (rows.to_vec(), through.to_vec())

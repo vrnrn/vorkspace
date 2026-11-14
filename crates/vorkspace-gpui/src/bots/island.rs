@@ -9,6 +9,7 @@ pub(crate) const ISLAND_BREAKPOINT: f32 = COLUMN + LANE_WIDTH;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Section {
+    Changes,
     Sessions,
     Documents,
 }
@@ -28,7 +29,7 @@ impl Bots {
         let id = bot.id.clone();
         icon_button(
             "bot-island-toggle",
-            "Show launched sessions and documents",
+            "Show changes, launched sessions and documents",
             "bot-island",
         )
         .debug_selector(|| "bot-island-toggle".into())
@@ -54,13 +55,17 @@ impl Bots {
         let settings_id = bot.id.clone();
         let close_id = bot.id.clone();
         let expanded = self.expanded_islands.get(&bot.id).copied();
-        let status = self
-            .chats
-            .get(&bot.id)
-            .map(|chat| chat.read(cx).bot_status_label())
-            .unwrap_or("Ready");
+        let changes = self.latest_changes(&bot.id, cx);
+        let now = vorkspace_core::time::now_ms();
+        let launches: Vec<_> = bot
+            .launches
+            .iter()
+            .rev()
+            .filter(|launch| launch.listed(now))
+            .collect();
         let mut body = div()
             .id(match expanded {
+                Some(Section::Changes) => "bot-island-changes",
                 Some(Section::Sessions) => "bot-island-sessions",
                 Some(Section::Documents) => "bot-island-documents",
                 None => "bot-island-overview",
@@ -72,61 +77,94 @@ impl Bots {
             .px_2()
             .pb_2()
             .when(expanded.is_some(), |d| d.flex_1());
-        if expanded != Some(Section::Documents) && !bot.launches.is_empty() {
-            let limit = if expanded == Some(Section::Sessions) {
+        let limit = |section| {
+            if expanded == Some(section) {
                 usize::MAX
             } else {
                 3
-            };
-            body = body
-                .child(section("Launched sessions", bot.launches.len()))
-                .children(bot.launches.iter().rev().take(limit).map(|launch| {
-                    let session = launch.session_id;
-                    let bot = bot.id.clone();
-                    let title = if launch.title.is_empty() {
-                        format!("Session {session}")
-                    } else {
-                        launch.title.clone()
-                    };
-                    let state = if launch.completed {
-                        "Finished"
-                    } else {
-                        "In progress"
-                    };
+            }
+        };
+        if expanded.is_none() || expanded == Some(Section::Changes) {
+            if changes.is_empty() {
+                body = body.child(
                     div()
-                        .id(("bot-island-session", session as usize))
-                        .role(Role::Button)
-                        .aria_label(format!("Open session {title}"))
-                        .aria_description(state)
-                        .map(vorkspace_ui::theme::tab_reachable)
-                        .flex()
-                        .items_center()
-                        .gap_2()
+                        .id("bot-island-unchanged")
+                        .debug_selector(|| "bot-island-unchanged".into())
                         .px_2()
-                        .py_2()
-                        .rounded(px(radius::CONTROL))
-                        .cursor_pointer()
-                        .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.08)))
-                        .child(icon("message-multiple", 14.).text_color(content(0.55)))
-                        .child(
+                        .pb_1()
+                        .text_size(px(12.))
+                        .line_height(px(18.))
+                        .text_color(content(0.45))
+                        .child("Files it changed in its latest turn appear here."),
+                );
+            }
+            body = body.children(
+                changes
+                    .iter()
+                    .take(limit(Section::Changes))
+                    .enumerate()
+                    .map(|(index, path)| change_row(index, path)),
+            );
+            if expanded.is_none() && changes.len() > 3 {
+                body = body.child(self.island_more(bot, Section::Changes, false, cx));
+            }
+        }
+        if (expanded.is_none() || expanded == Some(Section::Sessions)) && !launches.is_empty() {
+            body = body
+                .child(section("Launched sessions", launches.len()))
+                .children(
+                    launches
+                        .iter()
+                        .take(limit(Section::Sessions))
+                        .map(|launch| {
+                            let session = launch.session_id;
+                            let bot = bot.id.clone();
+                            let title = if launch.title.is_empty() {
+                                format!("Session {session}")
+                            } else {
+                                launch.title.clone()
+                            };
+                            let state = if launch.completed {
+                                "Finished"
+                            } else {
+                                "In progress"
+                            };
                             div()
-                                .min_w_0()
-                                .flex_1()
-                                .truncate()
-                                .text_size(px(12.))
-                                .child(title),
-                        )
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.set_workspace_context(Some(&bot), cx);
-                            this.open_session_workspace_pane(session, cx);
-                            cx.stop_propagation();
-                        }))
-                }));
-            if expanded.is_none() && bot.launches.len() > 3 {
+                                .id(("bot-island-session", session as usize))
+                                .debug_selector(|| "bot-island-session".into())
+                                .role(Role::Button)
+                                .aria_label(format!("Open session {title}"))
+                                .aria_description(state)
+                                .map(vorkspace_ui::theme::tab_reachable)
+                                .flex()
+                                .items_center()
+                                .gap_2()
+                                .px_2()
+                                .py_2()
+                                .rounded(px(radius::CONTROL))
+                                .cursor_pointer()
+                                .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.08)))
+                                .child(icon("message-multiple", 14.).text_color(content(0.55)))
+                                .child(
+                                    div()
+                                        .min_w_0()
+                                        .flex_1()
+                                        .truncate()
+                                        .text_size(px(12.))
+                                        .child(title),
+                                )
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.set_workspace_context(Some(&bot), cx);
+                                    this.open_session_workspace_pane(session, cx);
+                                    cx.stop_propagation();
+                                }))
+                        }),
+                );
+            if expanded.is_none() && launches.len() > 3 {
                 body = body.child(self.island_more(bot, Section::Sessions, false, cx));
             }
         }
-        if expanded == Some(Section::Sessions) {
+        if matches!(expanded, Some(Section::Changes | Section::Sessions)) {
             // The expanded view keeps its own scroll position.
         } else if bot.documents.is_empty() {
             body = body.child(
@@ -152,7 +190,7 @@ impl Bots {
             .id(SharedString::from(format!("bot-island-{}", bot.id)))
             .debug_selector(|| "bot-island".into())
             .role(Role::Complementary)
-            .aria_label(format!("{} sessions and documents", bot.label()))
+            .aria_label(format!("{} changes, sessions and documents", bot.label()))
             .w_full()
             .max_h_full()
             .min_h_0()
@@ -176,16 +214,26 @@ impl Bots {
                     .gap_3()
                     .child(
                         div()
-                            .id("bot-island-status")
-                            .debug_selector(|| "bot-island-status".into())
-                            .role(Role::Status)
+                            .id("bot-island-title")
+                            .debug_selector(|| "bot-island-title".into())
                             .flex_1()
                             .min_w_0()
+                            .flex()
+                            .items_center()
+                            .gap_2()
                             .text_size(px(13.))
                             .text_color(content(0.75))
                             .font_weight(gpui::FontWeight::MEDIUM)
-                            .truncate()
-                            .child(status),
+                            .child("Changes")
+                            .when(!changes.is_empty(), |d| {
+                                d.child(
+                                    div()
+                                        .text_size(px(11.))
+                                        .font_weight(gpui::FontWeight::NORMAL)
+                                        .text_color(content(0.35))
+                                        .child(changes.len().to_string()),
+                                )
+                            }),
                     )
                     .child(
                         icon_button("bot-island-settings", "Bot settings", "settings")
@@ -230,6 +278,7 @@ impl Bots {
     ) -> AnyElement {
         let id = bot.id.clone();
         let (control, label) = match (section, expanded) {
+            (Section::Changes, false) => ("bot-island-more-changes", "View all changes"),
             (Section::Sessions, false) => {
                 ("bot-island-more-sessions", "View all launched sessions")
             }
@@ -259,6 +308,26 @@ impl Bots {
             cx.stop_propagation();
         }))
         .into_any_element()
+    }
+
+    /// The files the Bot's visible chat changed in its latest turn. A turn only
+    /// adds rows, so the row count tells when the saved answer is stale.
+    fn latest_changes(&mut self, id: &str, cx: &App) -> Vec<String> {
+        let Some(chat) = self.chats.get(id) else {
+            self.island_changes.remove(id);
+            return Vec::new();
+        };
+        let transcript = chat.read(cx).transcript.read(cx);
+        let read = (chat.entity_id(), transcript.row_count());
+        match self.island_changes.get(id) {
+            Some((seen, changes)) if *seen == read => changes.clone(),
+            _ => {
+                let changes = transcript.latest_turn_changes();
+                self.island_changes
+                    .insert(id.into(), (read, changes.clone()));
+                changes
+            }
+        }
     }
 
     pub(super) fn island_lane(&mut self, bot: &Bot, cx: &mut Context<Self>) -> AnyElement {
@@ -311,6 +380,50 @@ impl Bots {
             )
             .into_any_element()
     }
+}
+
+fn change_row(index: usize, path: &str) -> gpui::Stateful<gpui::Div> {
+    let (name, folder) = match path.rsplit_once('/') {
+        Some((folder, name)) if !name.is_empty() => (name.to_owned(), folder.to_owned()),
+        _ => (path.to_owned(), String::new()),
+    };
+    let open = path.to_owned();
+    div()
+        .id(("bot-island-change", index))
+        .debug_selector(|| "bot-island-change".into())
+        .role(Role::Button)
+        .aria_label(format!("Open {path}"))
+        .map(vorkspace_ui::theme::tab_reachable)
+        .flex()
+        .items_center()
+        .gap_2()
+        .px_2()
+        .py_2()
+        .rounded(px(radius::CONTROL))
+        .cursor_pointer()
+        .hover(|s| s.bg(vorkspace_ui::fluid::hover(0.08)))
+        .child(crate::activity::file_icon(&name, 14.))
+        .child(
+            div()
+                .flex_shrink_0()
+                .max_w_full()
+                .truncate()
+                .text_size(px(12.))
+                .child(name),
+        )
+        .child(
+            div()
+                .min_w_0()
+                .flex_1()
+                .truncate()
+                .text_size(px(11.))
+                .text_color(content(0.4))
+                .child(folder),
+        )
+        .on_click(move |_, window, cx| {
+            cx.stop_propagation();
+            window.dispatch_action(Box::new(crate::file_link::OpenPath(open.clone())), cx);
+        })
 }
 
 fn section(title: &'static str, count: usize) -> gpui::Div {

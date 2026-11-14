@@ -856,6 +856,83 @@ fn shared_vorkspace_changes_reconcile_other_windows_project_and_dialog(cx: &mut 
 }
 
 #[gpui::test]
+fn a_bot_reaches_every_project_of_its_vorkspace_in_every_window(cx: &mut TestAppContext) {
+    let (a, b, _, dir) = two_windows(cx);
+    let path = |name: &str| dir.path().join(name).to_string_lossy().into_owned();
+    let (first, second, third) = (path("project"), path("second"), path("third"));
+    let (bot, main) = a
+        .update(cx, |shell, w, cx| {
+            let bot = shell.bot_manager().update(cx, |bots, cx| {
+                // What a Bot is created with does not outlive its placement.
+                bots.create_named(vec![path("elsewhere")], w, cx);
+                bots.roster.bots.last().unwrap().id.clone()
+            });
+            (bot, shell.workspace.active_vorkspace.clone())
+        })
+        .unwrap();
+    let projects = |cx: &mut TestAppContext| {
+        cx.run_until_parked();
+        let saved = a
+            .update(cx, |shell, _, _| {
+                let durable =
+                    vorkspace_core::bot::Roster::load(&locked(&shell.store).unwrap()).unwrap();
+                durable.get(&bot).unwrap().projects.clone()
+            })
+            .unwrap();
+        for window in [a, b] {
+            window
+                .update(cx, |shell, _, cx| {
+                    let roster = &shell.bot_manager().read(cx).roster;
+                    assert_eq!(roster.get(&bot).unwrap().projects, saved);
+                })
+                .unwrap();
+        }
+        saved
+    };
+    assert_eq!(projects(cx), std::slice::from_ref(&first));
+
+    b.update(cx, |shell, _, cx| {
+        shell.workspace.add_project_to_vorkspace(&main, &second);
+        shell.persist(cx);
+    })
+    .unwrap();
+    assert_eq!(projects(cx), [first.clone(), second.clone()]);
+
+    // A project leaves the vorkspace, and so leaves its Bots.
+    b.update(cx, |shell, _, cx| {
+        shell
+            .workspace
+            .remove_project_from_vorkspace(&main, &second);
+        shell.persist(cx);
+    })
+    .unwrap();
+    assert_eq!(projects(cx), std::slice::from_ref(&first));
+
+    // Moving the Bot gives it the other vorkspace's projects instead.
+    let side = a
+        .update(cx, |shell, _, cx| {
+            let side = shell.workspace.create_vorkspace("Side");
+            shell.workspace.add_project_to_vorkspace(&side, &third);
+            shell.persist(cx);
+            side
+        })
+        .unwrap();
+    cx.run_until_parked();
+    a.update(cx, |shell, _, cx| {
+        shell.set_bot_membership(&bot, &side, true, cx)
+    })
+    .unwrap();
+    assert_eq!(projects(cx), std::slice::from_ref(&third));
+
+    // Listed nowhere, it reaches no project.
+    a.update(cx, |shell, _, cx| {
+        shell.set_bot_membership(&bot, &side, false, cx)
+    })
+    .unwrap();
+    assert!(projects(cx).is_empty());
+}
+
+#[gpui::test]
 fn quitting_waits_for_an_accepted_reminder_edit(cx: &mut TestAppContext) {
     quit_with_reminder_edit(cx, false);
 }

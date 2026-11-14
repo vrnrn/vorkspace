@@ -2827,6 +2827,7 @@ impl Shell {
                 cx.listener(|this, event: &crate::file_link::OpenPath, window, cx| {
                     let cwd = this.git.read(cx).project().to_owned();
                     let (path, location) = crate::file_link::file_location(&event.0, &cwd);
+                    let path = this.reachable_link(path, &cwd, cx);
                     this.open_review(
                         crate::git_tools::review::ReviewTab::File { cwd, path },
                         window,

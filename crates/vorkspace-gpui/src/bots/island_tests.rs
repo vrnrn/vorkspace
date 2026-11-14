@@ -103,7 +103,9 @@ fn bot_island_collapses_to_face_and_button_and_opens_settings(cx: &mut TestAppCo
     let island = visual.debug_bounds("bot-island").unwrap();
     let pane = visual.debug_bounds("main-pane-frame").unwrap();
     assert!(island.left() > pane.left() && island.right() < pane.right());
-    // A Bot with no sessions or documents yet explains both in one line.
+    // A Bot with no changes, sessions or documents yet explains what will appear.
+    assert!(visual.debug_bounds("bot-island-title").is_some());
+    assert!(visual.debug_bounds("bot-island-unchanged").is_some());
     assert!(visual.debug_bounds("bot-island-fresh").is_some());
     assert!(visual.debug_bounds("bot-session-list").is_none());
     click(visual, "bot-island-settings");
@@ -125,6 +127,112 @@ fn bot_island_collapses_to_face_and_button_and_opens_settings(cx: &mut TestAppCo
         chat.read_with(visual, |chat, cx| chat.input.read(cx).content.clone()),
         "Keep my Bot draft"
     );
+}
+
+#[gpui::test]
+fn bot_island_lists_latest_turn_changes_and_recent_launches(cx: &mut TestAppContext) {
+    use vorkspace_core::{tool::ToolCall, transcript::Row};
+    vorkspace_ui::clock::use_test_clock(cx);
+    let s = setup(cx);
+    s.window
+        .update(cx, |shell, _, cx| {
+            shell.workspace.sidebar_visible = false;
+            cx.notify();
+        })
+        .unwrap();
+    let row = |role: &str, text: String| Row {
+        role: role.into(),
+        text,
+        first: true,
+        sent_at: None,
+    };
+    let edit = |id: &str, name: &str, path: &str| {
+        row(
+            "tool",
+            serde_json::to_string(&ToolCall {
+                input: json!({ "file_path": path }).to_string(),
+                ..ToolCall::new(id, name)
+            })
+            .unwrap(),
+        )
+    };
+    let now = vorkspace_core::time::now_ms();
+    let sessions: Vec<_> = (0..3)
+        .map(|_| {
+            locked(&s.store)
+                .unwrap()
+                .create("codex", &s.project)
+                .unwrap()
+        })
+        .collect();
+    let transcript = s.manager.update(cx, |m, cx| {
+        m.settings = None;
+        let bot = m.roster.get_mut(&s.id).unwrap();
+        // Unknown age, a day old, and started within the day.
+        for (session, started_at) in sessions.iter().zip([
+            0,
+            now - bot::Launch::LISTED_FOR_MS,
+            now - bot::Launch::LISTED_FOR_MS + 60_000,
+        ]) {
+            bot.launches.push(bot::Launch {
+                session_id: session.id,
+                title: format!("Launch {}", session.id),
+                cwd: s.project.clone(),
+                harness: "codex".into(),
+                started_at,
+                ..Default::default()
+            });
+        }
+        cx.notify();
+        m.chat().unwrap().read(cx).transcript.clone()
+    });
+    transcript.update(cx, |transcript, cx| {
+        transcript.replace_history(
+            vec![
+                row("user", "First request".into()),
+                edit("old", "Write", "/work/earlier.rs"),
+                row("user", "Second request".into()),
+                edit("read", "Read", "/work/only-read.rs"),
+                edit("a", "Edit", "/work/src/a.rs"),
+                edit("b", "Write", "/work/b.md"),
+                edit("a-again", "Edit", "/work/src/a.rs"),
+                row("assistant", "Finished".into()),
+            ],
+            cx,
+        );
+        assert_eq!(
+            transcript.latest_turn_changes(),
+            ["/work/src/a.rs", "/work/b.md"]
+        );
+    });
+    let visual = &mut gpui::VisualTestContext::from_window(s.window.into(), cx);
+    visual.simulate_resize(gpui::size(px(1440.), px(900.)));
+    visual.run_until_parked();
+    assert!(visual.debug_bounds("bot-island-change").is_some());
+    assert!(visual.debug_bounds("bot-island-unchanged").is_none());
+    assert!(visual.debug_bounds("bot-island-status").is_none());
+    s.manager.read_with(visual, |m, _| {
+        assert_eq!(m.island_changes[&s.id].1, ["/work/src/a.rs", "/work/b.md"]);
+    });
+    // Only the launch started within the last day is listed.
+    assert!(visual.debug_bounds("bot-island-session").is_some());
+    assert!(visual.debug_bounds("bot-island-more-sessions").is_none());
+
+    // The next turn starts with nothing changed.
+    transcript.update(visual, |transcript, cx| {
+        let mut rows = transcript.response_rows(0).1;
+        rows.push(row("user", "Third request".into()));
+        transcript.replace_history(rows, cx);
+    });
+    s.manager.update(visual, |m, cx| {
+        let bot = m.roster.get_mut(&s.id).unwrap();
+        bot.launches.pop();
+        cx.notify();
+    });
+    visual.run_until_parked();
+    assert!(visual.debug_bounds("bot-island-unchanged").is_some());
+    assert!(visual.debug_bounds("bot-island-change").is_none());
+    assert!(visual.debug_bounds("bot-island-session").is_none());
 }
 
 #[test]
@@ -193,6 +301,7 @@ fn native_bot_island_capture() {
                 title: session.title.clone(),
                 cwd: project.clone(),
                 harness: "codex".into(),
+                started_at: vorkspace_core::time::now_ms(),
                 ..Default::default()
             })
             .collect();

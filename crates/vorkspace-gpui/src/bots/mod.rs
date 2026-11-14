@@ -188,6 +188,9 @@ pub(crate) struct Bots {
     habit_panel: Entity<habit_panel::HabitPanel>,
     open_islands: HashSet<String>,
     expanded_islands: HashMap<String, island::Section>,
+    /// Each Bot's latest-turn file changes, with the chat and row count they
+    /// were read from.
+    island_changes: HashMap<String, ((gpui::EntityId, usize), Vec<String>)>,
     route: Option<Route>,
     settings: Option<SettingsSection>,
     creation: Option<creation::Creation>,
@@ -209,7 +212,6 @@ pub(crate) struct Bots {
     picker: Option<OpenPicker>,
     settings_anchor: AnchorSlot,
     model_anchor: AnchorSlot,
-    projects_anchor: AnchorSlot,
     access_anchor: AnchorSlot,
     menu: Option<(String, Entity<Menu>, Vec<Subscription>)>,
     menu_anchor: Anchor,
@@ -455,6 +457,7 @@ impl Bots {
             habit_panel,
             open_islands: HashSet::new(),
             expanded_islands: HashMap::new(),
+            island_changes: HashMap::new(),
             team_histories: Default::default(),
             conversation_views: Default::default(),
             retired_teams: Default::default(),
@@ -479,7 +482,6 @@ impl Bots {
             picker: None,
             settings_anchor: AnchorSlot::default(),
             model_anchor: AnchorSlot::default(),
-            projects_anchor: AnchorSlot::default(),
             access_anchor: AnchorSlot::default(),
             menu: None,
             menu_anchor: Anchor::Point(gpui::Point::default()),
@@ -620,6 +622,9 @@ impl Bots {
     }
     pub(crate) fn current(&self) -> Option<&Bot> {
         self.active.as_deref().and_then(|id| self.roster.get(id))
+    }
+    pub(crate) fn open_chats(&self) -> impl Iterator<Item = &Entity<Conversation>> {
+        self.chats.values()
     }
     pub(crate) fn chat(&self) -> Option<Entity<Conversation>> {
         self.active

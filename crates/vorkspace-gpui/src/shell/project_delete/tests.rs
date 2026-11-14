@@ -95,13 +95,15 @@ fn failure_after_one_delete_reports_exact_partial_result() {
     );
 }
 #[test]
-fn bot_association_blocks_deletion() {
+fn bot_conversations_block_deletion_but_vorkspace_access_does_not() {
     let mut roster = vorkspace_core::bot::Roster::default();
     let mut bot = vorkspace_core::bot::Bot::default();
+    // Every Bot of the vorkspace reaches the project; that alone holds nothing.
     bot.projects.push("/project".into());
+    bot.session_id = Some(7);
     roster.bots.push(bot);
-    assert!(check_bots(&roster, "/project", &[]).is_err());
-    assert!(check_bots(&roster, "/other", &[]).is_ok());
+    assert!(check_bots(&roster, &[3]).is_ok());
+    assert!(check_bots(&roster, &[7]).is_err());
 }
 #[test]
 fn symlink_alias_to_project_is_refused() {

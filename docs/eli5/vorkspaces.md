@@ -2,13 +2,13 @@
 
 A vorkspace is a bundle of local project folders and Bots you use for one kind of work, like "Main" or "Side projects". The name at the top left of the window shows which one you are in. Click it to switch, or choose **Manage vorkspaces** to make, change or delete one.
 
-The same folder can be in more than one vorkspace, and its sessions show up in each. Taking a folder out of a vorkspace only hides it there; nothing is deleted. Bots belong to one vorkspace each: a Bot you create joins the vorkspace you are in, and adding it to another vorkspace moves it there. The first time you open this version, all your existing folders and Bots go into one vorkspace called Main.
+The same folder can be in more than one vorkspace, and its sessions show up in each. Taking a folder out of a vorkspace only hides it there; nothing is deleted. Bots belong to one vorkspace each: a Bot you create joins the vorkspace you are in, and adding it to another vorkspace moves it there. A Bot can work in every folder of its vorkspace; you no longer pick projects for each Bot. Add or remove a folder in the vorkspace and all its Bots follow. The first time you open this version, all your existing folders and Bots go into one vorkspace called Main.
 
-The left rail shows five sessions at a time. Anything running or waiting for approval comes first, followed by pinned and recent conversations. The arrow under the list shows more. Each card shows its AI and project, along with its folder and the Bot that started it when those apply. Search finds sessions by title or folder name. The filter can narrow the list, and the plus starts a new session.
+The left rail shows five sessions at a time. Anything running or waiting for approval comes first, followed by pinned and recent conversations. The arrow under the list shows more. A session that is working shimmers its title. Each card shows its AI and project, along with its folder and the Bot that started it when those apply. Search finds sessions by title or folder name. The filter can narrow the list, and the plus starts a new session.
 
 Right-click a card to pin, rename, move, archive, or delete it. **Move to folder** lets you pick a folder, create one, or remove the session from its current folder. Select several conversations from the same project to move them together. The change appears in your other open windows. Hover to peek at a conversation, or drag it into the workspace to open it side by side.
 
-Use the project name at the top of the sidebar to switch projects. The button beside it opens project actions such as archiving. A Bot's panel opens its launched sessions and documents, including sessions it keeps out of the rail.
+Use the project name at the top of the sidebar to switch projects. The button beside it opens project actions such as archiving. A Bot's panel shows the files it changed in its latest turn, the sessions it started in the last day (including ones it keeps out of the rail), and its documents.
 
 Opening a conversation from another vorkspace through Search or the Back shortcut switches to a vorkspace that contains it. A new session starts in the checkout shown by the chat you are working in. Connector automations keep watching their projects while you work in another vorkspace.
 

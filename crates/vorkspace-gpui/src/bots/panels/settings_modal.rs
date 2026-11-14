@@ -398,7 +398,6 @@ impl Bots {
             .is_some_and(|draft| draft.bot.id == bot.id);
         let narrow = window.viewport_size().width < px(780.);
         let name = self.general_name_field(bot, creating, cx);
-        let add = bot.id.clone();
         let (model, provider, mode, model_options) = self.general_model_values(cx);
         let access_icon = match mode {
             AccessMode::FullAccess => "shield-alert",
@@ -456,15 +455,10 @@ impl Bots {
                     .child(identity)
                     .child(model_controls),
             )
-            .child(heading(
-                "Projects",
-                Some("It can see every session, note and folder in these."),
-            ))
-            .child(self.general_project_card(bot, add, cx))
             .child(heading("Sessions it starts", None))
             .child(card().child(switch_setting(
                 "Show sessions in sidebar",
-                "Sessions it starts appear in the Sessions list for its projects.",
+                "Sessions it starts appear in the Sessions list.",
                 self.switch(
                     "bot-show-started",
                     "Show sessions in sidebar",
@@ -779,120 +773,6 @@ impl Bots {
         )
     }
 
-    fn general_project_row(
-        bot: &Bot,
-        project: &str,
-        ix: usize,
-        cx: &Context<Self>,
-    ) -> gpui::Stateful<Div> {
-        let remove = project.to_owned();
-        let owner = bot.id.clone();
-        let label = crate::workspace::project_name(project);
-        let pretty = std::env::var("HOME")
-            .ok()
-            .and_then(|home| project.strip_prefix(&home).map(|rest| format!("~{rest}")))
-            .unwrap_or_else(|| project.to_owned());
-        let group: SharedString = format!("bot-project-{ix}").into();
-        div()
-            .id(("bot-project", ix))
-            .group(group.clone())
-            .min_h(px(48.))
-            .flex()
-            .items_center()
-            .gap_3()
-            .px_3()
-            .py_2()
-            .when(ix > 0, |d| d.border_t_1().border_color(content(0.04)))
-            .child(
-                div()
-                    .size(px(32.))
-                    .flex_shrink_0()
-                    .rounded(px(radius::CONTAINER))
-                    .bg(content(0.05))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .child(crate::project_mark::project_icon(project, 16.)),
-            )
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .child(
-                        div()
-                            .text_size(px(13.))
-                            .line_height(px(20.))
-                            .text_color(content(0.9))
-                            .truncate()
-                            .child(label),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(11.))
-                            .line_height(px(16.))
-                            .text_color(content(0.4))
-                            .truncate()
-                            .child(pretty),
-                    ),
-            )
-            .child(
-                icon_button("bot-remove-project", "Remove project", "close")
-                    .opacity(0.)
-                    .group_hover(group, |s| s.opacity(1.))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.edit_settings_bot(
-                            &owner,
-                            |bot| bot.projects.retain(|path| path != &remove),
-                            cx,
-                        );
-                    })),
-            )
-    }
-
-    fn general_project_card(&self, bot: &Bot, add: String, cx: &Context<Self>) -> Div {
-        card()
-            .children(
-                bot.projects
-                    .iter()
-                    .enumerate()
-                    .map(|(ix, project)| Self::general_project_row(bot, project, ix, cx)),
-            )
-            .child(
-                div()
-                    .id("bot-add-project")
-                    .role(Role::Button)
-                    .aria_label("Add project")
-                    .h(px(44.))
-                    .px_3()
-                    .flex()
-                    .items_center()
-                    .gap_3()
-                    .text_size(px(13.))
-                    .text_color(content(0.55))
-                    .hover(|s| {
-                        s.bg(vorkspace_ui::fluid::hover(0.04))
-                            .text_color(content(1.))
-                    })
-                    .when(!bot.projects.is_empty(), |d| {
-                        d.border_t_1().border_color(content(0.04))
-                    })
-                    .child(self.projects_anchor.probe())
-                    .child(
-                        div()
-                            .size(px(32.))
-                            .rounded(px(radius::CONTAINER))
-                            .border_1()
-                            .border_color(content(0.15))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .child(icon("plus", 14.)),
-                    )
-                    .child("Add project")
-                    .on_click(cx.listener(move |this, _, w, cx| this.pick_project(&add, w, cx))),
-            )
-    }
-
     pub(super) fn switch(
         &self,
         id: &'static str,
@@ -1198,77 +1078,6 @@ impl Bots {
             _events: vec![picked],
         });
         cx.notify();
-    }
-    pub(super) fn pick_project(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
-        let projects = self.owner.projects(cx);
-        let bot = id.to_string();
-        let paths = projects.clone();
-        let mut items: Vec<MenuItem> = projects
-            .into_iter()
-            .enumerate()
-            .map(|(ix, path)| {
-                MenuAction::new(
-                    format!("project:{ix}"),
-                    crate::workspace::project_name(&path),
-                )
-                .icon("folder")
-                .icon_color(rgb(vorkspace_core::project_appearance::project_color(&path)).into())
-                .description(path)
-                .into()
-            })
-            .collect();
-        items.push(MenuItem::Separator);
-        items.push(MenuAction::new("browse", "Open project…").into());
-        let menu = cx.new(|cx| {
-            Menu::new("Add project", items, window, cx)
-                .style(MenuStyle::Composer)
-                .width(300.)
-        });
-        let picked = cx.subscribe(&menu, move |this, _, event: &MenuEvent, cx| {
-            this.picker = None;
-            if let MenuEvent::Picked(action, _) = event {
-                if action == "browse" {
-                    this.browse_project(&bot, cx);
-                } else if let Some(path) = action
-                    .strip_prefix("project:")
-                    .and_then(|n| n.parse::<usize>().ok())
-                    .and_then(|ix| paths.get(ix))
-                {
-                    this.add_project(&bot, path.clone(), cx);
-                }
-            }
-            cx.notify();
-        });
-        self.picker = Some(OpenPicker {
-            menu,
-            anchor: Anchor::Slot(self.projects_anchor.clone()),
-            width: 300.,
-            align: crate::popover::Align::Start,
-            _events: vec![picked],
-        });
-        cx.notify();
-    }
-    pub(super) fn add_project(&mut self, id: &str, path: String, cx: &mut Context<Self>) {
-        self.edit_settings_bot(id, |bot| bot.projects.push(path), cx);
-    }
-    pub(super) fn browse_project(&mut self, id: &str, cx: &mut Context<Self>) {
-        let picked = cx.prompt_for_paths(gpui::PathPromptOptions {
-            files: false,
-            directories: true,
-            multiple: false,
-            prompt: Some("Add project".into()),
-        });
-        let id = id.to_string();
-        cx.spawn(async move |this, cx| {
-            if let Ok(Ok(Some(paths))) = picked.await
-                && let Some(path) = paths.into_iter().next()
-            {
-                let _ = this.update(cx, |this, cx| {
-                    this.add_project(&id, path.to_string_lossy().into(), cx)
-                });
-            }
-        })
-        .detach();
     }
     pub(crate) fn open_bot_settings(
         &mut self,

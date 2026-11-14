@@ -135,17 +135,16 @@ fn check_worktrees(path: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn check_bots(roster: &vorkspace_core::bot::Roster, path: &str, ids: &[i64]) -> Result<(), String> {
+fn check_bots(roster: &vorkspace_core::bot::Roster, ids: &[i64]) -> Result<(), String> {
     if roster.bots.iter().any(|bot| {
-        bot.projects.iter().any(|p| within(p, path))
-            || bot.session_id.is_some_and(|id| ids.contains(&id))
+        bot.session_id.is_some_and(|id| ids.contains(&id))
             || bot
                 .launches
                 .iter()
                 .any(|launch| ids.contains(&launch.session_id))
     }) || roster.hidden_sessions.iter().any(|id| ids.contains(id))
     {
-        return Err("A Bot is associated with this project or its conversations; remove that association separately first.".into());
+        return Err("A Bot is associated with this project's conversations; remove that association separately first.".into());
     }
     Ok(())
 }
@@ -201,8 +200,8 @@ fn delete_saved(
             };
         }
     }
-    if let Err(error) = vorkspace_core::bot::Roster::load(store)
-        .and_then(|roster| check_bots(&roster, path, expected))
+    if let Err(error) =
+        vorkspace_core::bot::Roster::load(store).and_then(|roster| check_bots(&roster, expected))
     {
         return DeleteResult {
             deleted,
@@ -332,7 +331,7 @@ impl Shell {
             );
         }
         if let Some(bots) = &self.bots {
-            check_bots(&bots.read(cx).roster, path, ids)?;
+            check_bots(&bots.read(cx).roster, ids)?;
         }
         if ids.iter().any(|id| {
             self.deleting.contains(id)

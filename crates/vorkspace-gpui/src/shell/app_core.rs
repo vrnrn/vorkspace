@@ -231,6 +231,8 @@ impl AppCore {
                 );
             })
             .detach();
+            cx.observe(&bot_roster, |core, _, cx| core.share_projects_with_bots(cx))
+                .detach();
             AppCore {
                 store: store.clone(),
                 data_dir,
@@ -272,7 +274,35 @@ impl AppCore {
             }
         });
         cx.default_global::<Installed>().0.insert(key, core.clone());
+        core.update(cx, |core, cx| core.share_projects_with_bots(cx));
         core
+    }
+
+    /// Every placed Bot works on all the projects of its vorkspace, and on
+    /// none while it is listed in no vorkspace.
+    fn share_projects_with_bots(&mut self, cx: &mut Context<Self>) {
+        let projects = self
+            .seen_bots
+            .iter()
+            .map(|bot| {
+                let home = self.vorkspaces.iter().find(|def| def.bots.contains(bot));
+                // Match what the roster keeps, or the two would never agree.
+                let mut listed = HashSet::new();
+                let projects = home
+                    .into_iter()
+                    .flat_map(|def| &def.projects)
+                    .filter(|path| {
+                        !path.trim().is_empty()
+                            && listed.insert(vorkspace_core::files::path_key(path))
+                    })
+                    .cloned()
+                    .collect();
+                (bot.clone(), projects)
+            })
+            .collect();
+        self.bot_roster.update(cx, |roster, cx| {
+            roster.follow_vorkspace_projects(projects, cx);
+        });
     }
 
     fn reconcile_bots(&mut self, destination: &str, ids: &[String], cx: &mut Context<Self>) {
@@ -360,6 +390,7 @@ impl AppCore {
             seen_bots: self.seen_bots.clone(),
         });
         self.flush_settings(cx);
+        self.share_projects_with_bots(cx);
         cx.notify();
     }
 
