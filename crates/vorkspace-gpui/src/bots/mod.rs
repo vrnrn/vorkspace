@@ -188,9 +188,6 @@ pub(crate) struct Bots {
     habit_panel: Entity<habit_panel::HabitPanel>,
     open_islands: HashSet<String>,
     expanded_islands: HashMap<String, island::Section>,
-    /// Each Bot's latest-turn file changes, with the chat and row count they
-    /// were read from.
-    island_changes: HashMap<String, ((gpui::EntityId, usize), Vec<String>)>,
     route: Option<Route>,
     settings: Option<SettingsSection>,
     creation: Option<creation::Creation>,
@@ -457,7 +454,6 @@ impl Bots {
             habit_panel,
             open_islands: HashSet::new(),
             expanded_islands: HashMap::new(),
-            island_changes: HashMap::new(),
             team_histories: Default::default(),
             conversation_views: Default::default(),
             retired_teams: Default::default(),

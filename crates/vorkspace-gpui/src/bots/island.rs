@@ -55,7 +55,9 @@ impl Bots {
         let settings_id = bot.id.clone();
         let close_id = bot.id.clone();
         let expanded = self.expanded_islands.get(&bot.id).copied();
-        let changes = self.latest_changes(&bot.id, cx);
+        let changes = self.chats.get(&bot.id).map_or_else(Vec::new, |chat| {
+            chat.read(cx).transcript.read(cx).latest_turn_changes()
+        });
         let now = vorkspace_core::time::now_ms();
         let launches: Vec<_> = bot
             .launches
@@ -308,26 +310,6 @@ impl Bots {
             cx.stop_propagation();
         }))
         .into_any_element()
-    }
-
-    /// The files the Bot's visible chat changed in its latest turn. A turn only
-    /// adds rows, so the row count tells when the saved answer is stale.
-    fn latest_changes(&mut self, id: &str, cx: &App) -> Vec<String> {
-        let Some(chat) = self.chats.get(id) else {
-            self.island_changes.remove(id);
-            return Vec::new();
-        };
-        let transcript = chat.read(cx).transcript.read(cx);
-        let read = (chat.entity_id(), transcript.row_count());
-        match self.island_changes.get(id) {
-            Some((seen, changes)) if *seen == read => changes.clone(),
-            _ => {
-                let changes = transcript.latest_turn_changes();
-                self.island_changes
-                    .insert(id.into(), (read, changes.clone()));
-                changes
-            }
-        }
     }
 
     pub(super) fn island_lane(&mut self, bot: &Bot, cx: &mut Context<Self>) -> AnyElement {
